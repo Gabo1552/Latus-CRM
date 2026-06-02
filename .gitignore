@@ -83,3 +83,9 @@ android-sdk/frontend/node_modules/.cache/default-development/8.pack
 frontend/node_modules/.cache/default-development/8.pack
 frontend/node_modules/.cache/default-development/11.pack
 frontend/node_modules/.cache/default-development/1.pack
+.env
+.env.*
+*.env
+credentials.json
+*.key
+.credentials
