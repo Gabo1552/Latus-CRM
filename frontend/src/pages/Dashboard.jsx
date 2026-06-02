@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, Tooltip } from "recharts";
 import {
   Target, DollarSign, TrendingUp, MessageSquare, Bot, CheckSquare, ArrowUpRight,
+  AlertTriangle, ArrowRightLeft, AlarmClock, Mail,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import api from "@/lib/api";
@@ -22,6 +23,23 @@ function Metric({ icon: Icon, label, value, sub, testid }) {
   );
 }
 
+function AttnColumn({ icon: Icon, title, count, children, testid }) {
+  return (
+    <div className="p-4" data-testid={testid}>
+      <div className="flex items-center justify-between mb-2 px-2">
+        <div className="flex items-center gap-2">
+          <Icon className="h-3.5 w-3.5 text-[#52525B]" />
+          <span className="text-xs tracking-[0.12em] uppercase font-bold text-[#52525B]">{title}</span>
+        </div>
+        <span className="text-xs font-bold text-[#0A0A0A] bg-zinc-100 rounded-full px-2">{count}</span>
+      </div>
+      <div className="space-y-0.5">
+        {count === 0 ? <p className="text-sm text-zinc-400 px-2 py-3">Nothing pending</p> : children}
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const { data: m } = useQuery({ queryKey: ["metrics"], queryFn: () => api.get("/dashboard/metrics").then((r) => r.data) });
@@ -31,6 +49,9 @@ export default function Dashboard() {
     ? LEAD_STATUSES.map((s) => ({ name: s.label, value: m.leads_by_status[s.key] || 0, color: s.color }))
     : [];
 
+  const attn = m?.requires_attention || { open_handoffs: [], unread_conversations: [], overdue_tasks: [] };
+  const attnTotal = attn.open_handoffs.length + attn.unread_conversations.length + attn.overdue_tasks.length;
+
   return (
     <AppLayout title="Dashboard">
       <div className="p-6 md:p-8 space-y-6 animate-in fade-in duration-300">
@@ -39,6 +60,54 @@ export default function Dashboard() {
           <Metric icon={Target} label="Active Leads" value={m?.total_leads ?? "—"} sub={`${m?.total_contacts ?? 0} contacts`} testid="metric-leads" />
           <Metric icon={TrendingUp} label="Conversion" value={`${m?.conversion_rate ?? 0}%`} sub="won / closed" testid="metric-conversion" />
           <Metric icon={MessageSquare} label="Open Chats" value={m?.open_conversations ?? "—"} sub={`${m?.pending_conversations ?? 0} pending`} testid="metric-chats" />
+        </div>
+
+        {/* Requires attention */}
+        <div className="bg-white border border-zinc-200 rounded-sm" data-testid="requires-attention">
+          <div className="flex items-center gap-2 px-5 py-4 border-b border-zinc-200">
+            <AlertTriangle className="h-4 w-4 text-[#FF4500]" />
+            <h3 className="text-lg font-bold tracking-tight text-[#0A0A0A]">Requires Attention</h3>
+            <span className="text-xs font-bold text-white bg-[#FF4500] rounded-full px-2 py-0.5">{attnTotal}</span>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-3 divide-y lg:divide-y-0 lg:divide-x divide-zinc-100">
+            {/* Handoffs */}
+            <AttnColumn icon={ArrowRightLeft} title="Open Handoffs" count={attn.open_handoffs.length} testid="attn-handoffs">
+              {attn.open_handoffs.slice(0, 4).map((c) => (
+                <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-handoff-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-zinc-50 text-left transition-colors">
+                  <Avatar src={c.contact_avatar} name={c.contact_name} size={28} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-[#0A0A0A] truncate">{c.contact_name}</p>
+                    <p className="text-xs text-[#52525B] truncate">{c.last_message}</p>
+                  </div>
+                </button>
+              ))}
+            </AttnColumn>
+            {/* Unread */}
+            <AttnColumn icon={Mail} title="Unread Chats" count={attn.unread_conversations.length} testid="attn-unread">
+              {attn.unread_conversations.slice(0, 4).map((c) => (
+                <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-unread-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-zinc-50 text-left transition-colors">
+                  <Avatar src={c.contact_avatar} name={c.contact_name} size={28} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-[#0A0A0A] truncate">{c.contact_name}</p>
+                    <p className="text-xs text-[#52525B] truncate">{c.last_message}</p>
+                  </div>
+                  <span className="bg-[#FF4500] text-white text-[10px] font-bold rounded-full h-4 min-w-4 px-1 flex items-center justify-center shrink-0">{c.unread}</span>
+                </button>
+              ))}
+            </AttnColumn>
+            {/* Overdue tasks */}
+            <AttnColumn icon={AlarmClock} title="Overdue Tasks" count={attn.overdue_tasks.length} testid="attn-overdue">
+              {attn.overdue_tasks.slice(0, 4).map((t) => (
+                <button key={t.id} onClick={() => navigate("/tasks")} data-testid={`attn-overdue-${t.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-zinc-50 text-left transition-colors">
+                  <span className="h-2 w-2 rounded-full bg-[#DC2626] shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-[#0A0A0A] truncate">{t.title}</p>
+                    <p className="text-xs text-[#DC2626] truncate">Due {t.due_date}</p>
+                  </div>
+                </button>
+              ))}
+            </AttnColumn>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

@@ -208,6 +208,23 @@ class Tag(BaseModel):
     name: str
     color: str = "#FF4500"
 
+
+NOTIF_TYPES = ["new_message", "handoff_required", "overdue_task", "task_due_soon", "lead_no_response"]
+
+
+class Notification(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("notif"))
+    type: str
+    title: str
+    body: str = ""
+    related_entity_type: Optional[str] = None  # conversation | lead | task
+    related_entity_id: Optional[str] = None
+    assigned_user_id: str
+    is_read: bool = False
+    created_at: str = Field(default_factory=now_iso)
+    read_at: Optional[str] = None
+    priority: str = "medium"
+
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
@@ -449,6 +466,69 @@ async def create_note(payload: NoteCreate, user: User = Depends(get_current_user
     return note
 
 # ---------------------------------------------------------------------------
+# Notifications (helpers + endpoints)
+# ---------------------------------------------------------------------------
+
+async def _make_notification(ntype, title, body, entity_type, entity_id, user_id, priority="medium"):
+    if not user_id:
+        return
+    existing = await db.notifications.find_one({
+        "type": ntype, "related_entity_id": entity_id,
+        "assigned_user_id": user_id, "is_read": False,
+    })
+    if existing:
+        return
+    notif = Notification(
+        type=ntype, title=title, body=body or "",
+        related_entity_type=entity_type, related_entity_id=entity_id,
+        assigned_user_id=user_id, priority=priority,
+    )
+    await db.notifications.insert_one(notif.model_dump())
+
+
+async def _notify_target(assigned_to, ntype, title, body, entity_type, entity_id, priority="medium"):
+    """Notify the assigned user, or fall back to all admins + supervisors."""
+    if assigned_to:
+        await _make_notification(ntype, title, body, entity_type, entity_id, assigned_to, priority)
+    else:
+        leaders = await db.users.find({"role": {"$in": ["admin", "supervisor"]}}, {"_id": 0}).to_list(100)
+        for u in leaders:
+            await _make_notification(ntype, title, body, entity_type, entity_id, u["user_id"], priority)
+
+
+@api_router.get("/notifications")
+async def list_notifications(user: User = Depends(get_current_user), unread_only: bool = False):
+    q = {"assigned_user_id": user.user_id}
+    if unread_only:
+        q["is_read"] = False
+    docs = await db.notifications.find(q, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return docs
+
+
+@api_router.get("/notifications/unread-count")
+async def notifications_unread_count(user: User = Depends(get_current_user)):
+    count = await db.notifications.count_documents({"assigned_user_id": user.user_id, "is_read": False})
+    return {"count": count}
+
+
+@api_router.patch("/notifications/{notif_id}/read")
+async def mark_notification_read(notif_id: str, user: User = Depends(get_current_user)):
+    await db.notifications.update_one(
+        {"id": notif_id, "assigned_user_id": user.user_id},
+        {"$set": {"is_read": True, "read_at": now_iso()}},
+    )
+    return {"ok": True}
+
+
+@api_router.post("/notifications/read-all")
+async def mark_all_notifications_read(user: User = Depends(get_current_user)):
+    await db.notifications.update_many(
+        {"assigned_user_id": user.user_id, "is_read": False},
+        {"$set": {"is_read": True, "read_at": now_iso()}},
+    )
+    return {"ok": True}
+
+# ---------------------------------------------------------------------------
 # Conversations & Messages
 # ---------------------------------------------------------------------------
 
@@ -491,17 +571,54 @@ async def send_message(conv_id: str, payload: MessageCreate, user: User = Depend
     conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0})
+    sender_name = user.name if payload.sender_type == "agent" else (
+        contact["name"] if (payload.sender_type == "contact" and contact) else "Bot"
+    )
     msg = Message(
         conversation_id=conv_id,
         sender_type=payload.sender_type,
-        sender_name=user.name if payload.sender_type == "agent" else "Bot",
+        sender_name=sender_name,
         body=payload.body,
     )
     await db.messages.insert_one(msg.model_dump())
+    set_fields = {"last_message": payload.body, "last_message_at": now_iso()}
+    if payload.sender_type == "contact":
+        await db.conversations.update_one({"id": conv_id}, {"$inc": {"unread": 1}, "$set": set_fields})
+        cname = contact["name"] if contact else "Customer"
+        await _notify_target(
+            conv.get("assigned_to"), "new_message",
+            f"New message from {cname}", payload.body[:120],
+            "conversation", conv_id, conv.get("priority", "medium"),
+        )
+    else:
+        await db.conversations.update_one({"id": conv_id}, {"$set": set_fields})
+    return msg
+
+
+@api_router.post("/conversations/{conv_id}/simulate-inbound")
+async def simulate_inbound(conv_id: str, user: User = Depends(get_current_user)):
+    """Demo helper: simulate a customer (WhatsApp) message arriving."""
+    conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0})
+    samples = [
+        "Hi, just following up on this — any update?",
+        "Can you share the pricing again please?",
+        "Are you available for a quick call today?",
+        "Thanks! When can you ship the order?",
+        "I have a question about the proposal.",
+    ]
+    body = samples[len(conv.get("last_message", "")) % len(samples)]
+    msg = Message(conversation_id=conv_id, sender_type="contact",
+                  sender_name=contact["name"] if contact else "Customer", body=body)
+    await db.messages.insert_one(msg.model_dump())
     await db.conversations.update_one(
-        {"id": conv_id},
-        {"$set": {"last_message": payload.body, "last_message_at": now_iso()}},
-    )
+        {"id": conv_id}, {"$inc": {"unread": 1}, "$set": {"last_message": body, "last_message_at": now_iso()}})
+    cname = contact["name"] if contact else "Customer"
+    await _notify_target(conv.get("assigned_to"), "new_message",
+                         f"New message from {cname}", body[:120], "conversation", conv_id, conv.get("priority", "medium"))
     return msg
 
 
@@ -518,6 +635,16 @@ async def update_conversation(conv_id: str, payload: ConversationUpdate, user: U
             "actor": user.name,
             "created_at": now_iso(),
         })
+        if not update["bot_enabled"]:
+            conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+            contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0}) if conv else None
+            cname = contact["name"] if contact else "a customer"
+            await _notify_target(
+                conv.get("assigned_to") if conv else None, "handoff_required",
+                f"Handoff required: {cname}",
+                "Bot disabled — a human agent needs to take over this chat.",
+                "conversation", conv_id, "high",
+            )
     doc = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
     doc["contact"] = await db.contacts.find_one({"id": doc["contact_id"]}, {"_id": 0})
     return doc
@@ -587,6 +714,7 @@ async def dashboard_metrics(user: User = Depends(get_current_user)):
     leads = await db.leads.find({}, {"_id": 0}).to_list(2000)
     convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
     tasks = await db.tasks.find({}, {"_id": 0}).to_list(2000)
+    contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(2000)}
 
     by_status = {s: 0 for s in LEAD_STATUSES}
     value_by_status = {s: 0.0 for s in LEAD_STATUSES}
@@ -611,9 +739,50 @@ async def dashboard_metrics(user: User = Depends(get_current_user)):
     human_handled = len([c for c in convs if not c.get("bot_enabled", True)])
     open_tasks = len([t for t in tasks if t.get("status") != "done"])
 
+    # --- Detect overdue / due-soon tasks and generate notifications ---
+    now = datetime.now(timezone.utc)
+    soon = now + timedelta(hours=24)
+    overdue_tasks = []
+    for t in tasks:
+        if t.get("status") == "done" or not t.get("due_date"):
+            continue
+        raw = t["due_date"]
+        try:
+            due = datetime.fromisoformat(raw if "T" in raw else raw + "T23:59:59")
+        except Exception:
+            continue
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        lead = next((l for l in leads if l["id"] == t.get("lead_id")), None)
+        info = {**t, "lead": lead}
+        if due < now:
+            overdue_tasks.append(info)
+            await _notify_target(t.get("assigned_to"), "overdue_task", f"Overdue: {t['title']}",
+                                 "This task is past its due date.", "task", t["id"], "high")
+        elif due <= soon:
+            await _notify_target(t.get("assigned_to"), "task_due_soon", f"Due soon: {t['title']}",
+                                 "This task is due within 24 hours.", "task", t["id"], "medium")
+
+    def conv_brief(c):
+        ct = contacts.get(c["contact_id"], {})
+        return {
+            "id": c["id"], "contact_name": ct.get("name"), "contact_avatar": ct.get("avatar"),
+            "last_message": c.get("last_message"), "status": c.get("status"),
+            "priority": c.get("priority"), "unread": c.get("unread", 0),
+            "bot_enabled": c.get("bot_enabled", True), "assigned_to": c.get("assigned_to"),
+        }
+
+    open_handoffs = [conv_brief(c) for c in convs if not c.get("bot_enabled", True) and c.get("status") != "resolved"]
+    unread_conversations = [conv_brief(c) for c in convs if c.get("unread", 0) > 0]
+    overdue_brief = [{
+        "id": t["id"], "title": t["title"], "due_date": t.get("due_date"),
+        "priority": t.get("priority"), "assigned_to": t.get("assigned_to"),
+        "lead_title": (t.get("lead") or {}).get("title"),
+    } for t in overdue_tasks]
+
     return {
         "total_leads": len(leads),
-        "total_contacts": await db.contacts.count_documents({}),
+        "total_contacts": len(contacts),
         "pipeline_value": pipeline_value,
         "won_value": won_value,
         "conversion_rate": conv_rate,
@@ -623,6 +792,11 @@ async def dashboard_metrics(user: User = Depends(get_current_user)):
         "open_tasks": open_tasks,
         "leads_by_status": by_status,
         "value_by_status": value_by_status,
+        "requires_attention": {
+            "open_handoffs": open_handoffs,
+            "unread_conversations": unread_conversations,
+            "overdue_tasks": overdue_brief,
+        },
     }
 
 # ---------------------------------------------------------------------------
@@ -695,6 +869,7 @@ async def ai_suggest(conv_id: str, user: User = Depends(get_current_user)):
 @api_router.post("/seed")
 async def reseed(admin: User = Depends(require_admin)):
     await _seed(force=True)
+    await backfill_notifications()
     return {"ok": True}
 
 
@@ -703,7 +878,7 @@ async def _seed(force: bool = False):
     if flag and not force:
         return
     if force:
-        for coll in ["contacts", "leads", "conversations", "messages", "tasks", "notes", "tags", "bot_events"]:
+        for coll in ["contacts", "leads", "conversations", "messages", "tasks", "notes", "tags", "bot_events", "notifications"]:
             await db.__getattr__(coll).delete_many({})
         await db.users.delete_many({"is_demo": True})
 
@@ -796,6 +971,9 @@ async def _seed(force: bool = False):
         })
         status, prio, bot, lead_status, value, last_msg, msgs = conv_seed[i]
         assigned = agent_ids[i % len(agent_ids)]
+        # Leave a couple conversations unassigned so they notify admins + supervisors
+        if i in (4, 5):
+            assigned = None
         lid = new_id("lead")
         await db.leads.insert_one({
             "id": lid, "contact_id": cid, "title": f"{company} wholesale order",
@@ -836,6 +1014,12 @@ async def _seed(force: bool = False):
         "lead_id": None, "due_date": (datetime.now(timezone.utc) + timedelta(days=2)).date().isoformat(),
         "status": "todo", "priority": "medium", "assigned_to": "user_demo_sup", "created_at": now_iso(),
     })
+    # Unassigned overdue task -> surfaces to admins/supervisors
+    await db.tasks.insert_one({
+        "id": new_id("task"), "title": "Follow up on unanswered quote", "description": "Quote sent days ago with no reply — chase it.",
+        "lead_id": None, "due_date": (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat(),
+        "status": "todo", "priority": "high", "assigned_to": None, "created_at": now_iso(),
+    })
 
     await db.settings.update_one({"key": "seeded"}, {"$set": {"key": "seeded", "at": now_iso()}}, upsert=True)
 
@@ -843,7 +1027,26 @@ async def _seed(force: bool = False):
 @app.on_event("startup")
 async def on_startup():
     await _seed(force=False)
+    await backfill_notifications()
     logger.info("FlowDesk CRM started")
+
+
+async def backfill_notifications():
+    """Idempotently create notifications for existing handoff / unread conversations."""
+    convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
+    contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(2000)}
+    for c in convs:
+        cname = contacts.get(c["contact_id"], {}).get("name", "a customer")
+        if not c.get("bot_enabled", True) and c.get("status") != "resolved":
+            await _notify_target(c.get("assigned_to"), "handoff_required",
+                                 f"Handoff required: {cname}",
+                                 "Bot disabled — a human agent needs to take over this chat.",
+                                 "conversation", c["id"], "high")
+        if c.get("unread", 0) > 0:
+            await _notify_target(c.get("assigned_to"), "new_message",
+                                 f"Unread messages from {cname}",
+                                 c.get("last_message", "")[:120],
+                                 "conversation", c["id"], c.get("priority", "medium"))
 
 
 app.include_router(api_router)

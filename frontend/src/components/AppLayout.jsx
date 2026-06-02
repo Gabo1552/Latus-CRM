@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { initials } from "@/lib/constants";
+import NotificationBell from "@/components/NotificationBell";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
@@ -88,7 +89,10 @@ export default function AppLayout({ children, title, actions }) {
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-16 bg-white border-b border-zinc-200 flex items-center justify-between px-6 shrink-0">
           <h1 className="text-xl font-bold tracking-tight text-[#0A0A0A]" data-testid="page-title">{title}</h1>
-          <div className="flex items-center gap-3">{actions}</div>
+          <div className="flex items-center gap-3">
+            {actions}
+            <NotificationBell />
+          </div>
         </header>
         <main className="flex-1 overflow-auto">{children}</main>
       </div>

@@ -20,6 +20,10 @@ export default function Inbox() {
   const qc = useQueryClient();
   const location = useLocation();
   const [activeId, setActiveId] = useState(location.state?.convId || null);
+
+  useEffect(() => {
+    if (location.state?.convId) setActiveId(location.state.convId);
+  }, [location.state]);
   const [filters, setFilters] = useState({ status: "all", priority: "all" });
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState("");
@@ -64,6 +68,8 @@ export default function Inbox() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["conversation", activeId] });
       qc.invalidateQueries({ queryKey: ["conversations"] });
+      qc.invalidateQueries({ queryKey: ["notifications"] });
+      qc.invalidateQueries({ queryKey: ["notif-count"] });
     },
   });
 
@@ -76,6 +82,17 @@ export default function Inbox() {
     mutationFn: () => api.post(`/conversations/${activeId}/ai-suggest`),
     onSuccess: (r) => setSuggestion(r.data.suggestion),
     onError: () => toast.error("AI suggestion unavailable"),
+  });
+
+  const simulateInbound = useMutation({
+    mutationFn: () => api.post(`/conversations/${activeId}/simulate-inbound`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["conversation", activeId] });
+      qc.invalidateQueries({ queryKey: ["conversations"] });
+      qc.invalidateQueries({ queryKey: ["notifications"] });
+      qc.invalidateQueries({ queryKey: ["notif-count"] });
+      toast.success("Inbound customer message received");
+    },
   });
 
   const filtered = convs.filter((c) => !search || c.contact?.name?.toLowerCase().includes(search.toLowerCase()));
@@ -153,6 +170,15 @@ export default function Inbox() {
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
+                  <button
+                    data-testid="simulate-inbound-button"
+                    onClick={() => simulateInbound.mutate()}
+                    disabled={simulateInbound.isPending}
+                    className="text-xs font-semibold text-[#52525B] hover:text-[#FF4500] border border-zinc-200 rounded-sm px-2.5 py-1.5 transition-colors"
+                    title="Simulate an inbound WhatsApp message from the customer"
+                  >
+                    + Customer reply
+                  </button>
                   <div className={`flex items-center gap-2 px-3 py-1.5 rounded-sm border ${active.bot_enabled ? "border-zinc-200 bg-zinc-50" : "border-[#FED7AA] bg-[#FFF7ED]"}`} data-testid="handoff-control">
                     <ArrowRightLeft className="h-3.5 w-3.5 text-[#FF4500]" />
                     <span className="text-xs font-bold text-[#0A0A0A]">{active.bot_enabled ? "Bot active" : "Human only"}</span>

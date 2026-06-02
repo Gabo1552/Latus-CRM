@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Target, Search } from "lucide-react";
 import { toast } from "sonner";
@@ -17,10 +18,15 @@ import LeadDrawer from "@/components/LeadDrawer";
 
 export default function Leads() {
   const qc = useQueryClient();
+  const location = useLocation();
   const [filters, setFilters] = useState({ status: "all", priority: "all", assigned_to: "all" });
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
-  const [selected, setSelected] = useState(null);
+  const [selected, setSelected] = useState(location.state?.leadId || null);
+
+  useEffect(() => {
+    if (location.state?.leadId) setSelected(location.state.leadId);
+  }, [location.state]);
 
   const params = {};
   Object.entries(filters).forEach(([k, v]) => { if (v !== "all") params[k] = v; });
