@@ -529,6 +529,102 @@ async def mark_all_notifications_read(user: User = Depends(get_current_user)):
     return {"ok": True}
 
 # ---------------------------------------------------------------------------
+# Settings (lead_no_response automation)
+# ---------------------------------------------------------------------------
+
+DEFAULT_SETTINGS = {
+    "lead_no_response_enabled": True,
+    "lead_no_response_threshold_hours": 2,
+    "lead_no_response_business_hours_only": False,  # placeholder for future use
+}
+
+
+class SettingsUpdate(BaseModel):
+    lead_no_response_enabled: Optional[bool] = None
+    lead_no_response_threshold_hours: Optional[int] = None
+    lead_no_response_business_hours_only: Optional[bool] = None
+
+
+async def get_app_settings() -> dict:
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+    s = dict(DEFAULT_SETTINGS)
+    if doc:
+        for k in DEFAULT_SETTINGS:
+            if k in doc and doc[k] is not None:
+                s[k] = doc[k]
+    return s
+
+
+@api_router.get("/settings")
+async def read_settings(user: User = Depends(get_current_user)):
+    return await get_app_settings()
+
+
+@api_router.patch("/settings")
+async def update_settings(payload: SettingsUpdate, admin: User = Depends(require_admin)):
+    update = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if "lead_no_response_threshold_hours" in update:
+        update["lead_no_response_threshold_hours"] = max(1, int(update["lead_no_response_threshold_hours"]))
+    await db.settings.update_one({"key": "app"}, {"$set": {"key": "app", **update}}, upsert=True)
+    return await get_app_settings()
+
+
+async def scan_lead_no_response() -> List[dict]:
+    """Idempotently create lead_no_response notifications and return qualifying conversations."""
+    settings = await get_app_settings()
+    qualifying: List[dict] = []
+    if not settings.get("lead_no_response_enabled", True):
+        return qualifying
+    threshold = settings.get("lead_no_response_threshold_hours", 2)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=threshold)
+
+    convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
+    contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(2000)}
+    leads = {l["id"]: l for l in await db.leads.find({}, {"_id": 0}).to_list(2000)}
+
+    for c in convs:
+        # conversation must not be closed (resolved)
+        if c.get("status") == "resolved":
+            continue
+        # related lead must not be won/lost
+        lead = leads.get(c.get("lead_id"))
+        if lead and lead.get("status") in ("won", "lost"):
+            continue
+        # latest message must be from the customer (no bot/human response after)
+        last = await db.messages.find({"conversation_id": c["id"]}, {"_id": 0}).sort("created_at", -1).to_list(1)
+        if not last:
+            continue
+        msg = last[0]
+        if msg.get("sender_type") != "contact":
+            continue
+        # customer message must be older than threshold
+        try:
+            created = datetime.fromisoformat(msg["created_at"])
+        except Exception:
+            continue
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if created > cutoff:
+            continue
+
+        cname = contacts.get(c["contact_id"], {}).get("name", "un cliente")
+        qualifying.append(c)
+        # _make_notification dedups on unread same type+entity+user
+        await _notify_target(
+            c.get("assigned_to"), "lead_no_response",
+            f"Lead sin respuesta: {cname}",
+            f"El cliente escribió hace más de {threshold} h y aún no recibe respuesta.",
+            "conversation", c["id"], "high",
+        )
+    return qualifying
+
+
+@api_router.post("/automations/lead-no-response/scan")
+async def run_lead_no_response_scan(user: User = Depends(get_current_user)):
+    qualifying = await scan_lead_no_response()
+    return {"created_for": len(qualifying)}
+
+# ---------------------------------------------------------------------------
 # Conversations & Messages
 # ---------------------------------------------------------------------------
 
@@ -585,10 +681,10 @@ async def send_message(conv_id: str, payload: MessageCreate, user: User = Depend
     set_fields = {"last_message": payload.body, "last_message_at": now_iso()}
     if payload.sender_type == "contact":
         await db.conversations.update_one({"id": conv_id}, {"$inc": {"unread": 1}, "$set": set_fields})
-        cname = contact["name"] if contact else "Customer"
+        cname = contact["name"] if contact else "Cliente"
         await _notify_target(
             conv.get("assigned_to"), "new_message",
-            f"New message from {cname}", payload.body[:120],
+            f"Nuevo mensaje de {cname}", payload.body[:120],
             "conversation", conv_id, conv.get("priority", "medium"),
         )
     else:
@@ -604,21 +700,21 @@ async def simulate_inbound(conv_id: str, user: User = Depends(get_current_user))
         raise HTTPException(status_code=404, detail="Conversation not found")
     contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0})
     samples = [
-        "Hi, just following up on this — any update?",
-        "Can you share the pricing again please?",
-        "Are you available for a quick call today?",
-        "Thanks! When can you ship the order?",
-        "I have a question about the proposal.",
+        "Hola, te escribo para hacer seguimiento — ¿alguna novedad?",
+        "¿Me podés pasar de nuevo los precios, por favor?",
+        "¿Tenés disponibilidad para una llamada rápida hoy?",
+        "¡Gracias! ¿Cuándo pueden enviar el pedido?",
+        "Tengo una pregunta sobre la propuesta.",
     ]
     body = samples[len(conv.get("last_message", "")) % len(samples)]
     msg = Message(conversation_id=conv_id, sender_type="contact",
-                  sender_name=contact["name"] if contact else "Customer", body=body)
+                  sender_name=contact["name"] if contact else "Cliente", body=body)
     await db.messages.insert_one(msg.model_dump())
     await db.conversations.update_one(
         {"id": conv_id}, {"$inc": {"unread": 1}, "$set": {"last_message": body, "last_message_at": now_iso()}})
-    cname = contact["name"] if contact else "Customer"
+    cname = contact["name"] if contact else "Cliente"
     await _notify_target(conv.get("assigned_to"), "new_message",
-                         f"New message from {cname}", body[:120], "conversation", conv_id, conv.get("priority", "medium"))
+                         f"Nuevo mensaje de {cname}", body[:120], "conversation", conv_id, conv.get("priority", "medium"))
     return msg
 
 
@@ -641,8 +737,8 @@ async def update_conversation(conv_id: str, payload: ConversationUpdate, user: U
             cname = contact["name"] if contact else "a customer"
             await _notify_target(
                 conv.get("assigned_to") if conv else None, "handoff_required",
-                f"Handoff required: {cname}",
-                "Bot disabled — a human agent needs to take over this chat.",
+                f"Requiere atención humana: {cname}",
+                "El bot fue desactivado — un agente debe tomar control de este chat.",
                 "conversation", conv_id, "high",
             )
     doc = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
@@ -757,11 +853,11 @@ async def dashboard_metrics(user: User = Depends(get_current_user)):
         info = {**t, "lead": lead}
         if due < now:
             overdue_tasks.append(info)
-            await _notify_target(t.get("assigned_to"), "overdue_task", f"Overdue: {t['title']}",
-                                 "This task is past its due date.", "task", t["id"], "high")
+            await _notify_target(t.get("assigned_to"), "overdue_task", f"Tarea vencida: {t['title']}",
+                                 "Esta tarea pasó su fecha de vencimiento.", "task", t["id"], "high")
         elif due <= soon:
-            await _notify_target(t.get("assigned_to"), "task_due_soon", f"Due soon: {t['title']}",
-                                 "This task is due within 24 hours.", "task", t["id"], "medium")
+            await _notify_target(t.get("assigned_to"), "task_due_soon", f"Tarea próxima a vencer: {t['title']}",
+                                 "Esta tarea vence en las próximas 24 horas.", "task", t["id"], "medium")
 
     def conv_brief(c):
         ct = contacts.get(c["contact_id"], {})
@@ -780,6 +876,10 @@ async def dashboard_metrics(user: User = Depends(get_current_user)):
         "lead_title": (t.get("lead") or {}).get("title"),
     } for t in overdue_tasks]
 
+    # lead_no_response automation: scan + collect qualifying conversations
+    no_response_convs = await scan_lead_no_response()
+    no_response = [conv_brief(c) for c in no_response_convs]
+
     return {
         "total_leads": len(leads),
         "total_contacts": len(contacts),
@@ -796,6 +896,7 @@ async def dashboard_metrics(user: User = Depends(get_current_user)):
             "open_handoffs": open_handoffs,
             "unread_conversations": unread_conversations,
             "overdue_tasks": overdue_brief,
+            "no_response": no_response,
         },
     }
 
@@ -807,7 +908,7 @@ async def _build_transcript(conv_id: str) -> str:
     msgs = await db.messages.find({"conversation_id": conv_id}, {"_id": 0}).sort("created_at", 1).to_list(1000)
     lines = []
     for m in msgs:
-        role = {"contact": "Customer", "bot": "Bot", "agent": "Agent"}.get(m["sender_type"], m["sender_type"])
+        role = {"contact": "Cliente", "bot": "Bot", "agent": "Agente"}.get(m["sender_type"], m["sender_type"])
         lines.append(f"{role}: {m['body']}")
     return "\n".join(lines)
 
@@ -830,17 +931,17 @@ async def ai_summary(conv_id: str, user: User = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Conversation not found")
     transcript = await _build_transcript(conv_id)
     if not transcript.strip():
-        return {"summary": "No messages yet to summarize."}
+        return {"summary": "Aún no hay mensajes para resumir."}
     try:
         summary = await _llm(
-            "You are a sales assistant for a WhatsApp CRM. Summarize conversations crisply for a busy sales agent.",
-            f"Summarize this WhatsApp sales conversation in 3-4 short bullet points covering the customer's intent, "
-            f"key needs, objections, and recommended next step. Be concise.\n\n{transcript}",
+            "Sos un asistente de ventas para un CRM de WhatsApp. Resumís conversaciones de forma clara y breve para un agente de ventas ocupado. Respondé SIEMPRE en español.",
+            f"Resumí esta conversación de ventas de WhatsApp en 3-4 viñetas cortas cubriendo la intención del cliente, "
+            f"sus necesidades clave, objeciones y el próximo paso recomendado. Sé conciso y respondé en español.\n\n{transcript}",
         )
         return {"summary": summary.strip()}
     except Exception as e:
         logger.error(f"AI summary error: {e}")
-        raise HTTPException(status_code=502, detail="AI service unavailable")
+        raise HTTPException(status_code=502, detail="Servicio de IA no disponible")
 
 
 @api_router.post("/conversations/{conv_id}/ai-suggest")
@@ -850,17 +951,17 @@ async def ai_suggest(conv_id: str, user: User = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Conversation not found")
     transcript = await _build_transcript(conv_id)
     if not transcript.strip():
-        return {"suggestion": "Hi! Thanks for reaching out. How can I help you today?"}
+        return {"suggestion": "¡Hola! Gracias por escribir. ¿En qué puedo ayudarte hoy?"}
     try:
         suggestion = await _llm(
-            "You are a friendly, professional WhatsApp sales agent. Write natural, concise replies that move the deal forward.",
-            f"Based on this WhatsApp conversation, write the single best next reply the agent should send to the customer. "
-            f"Return ONLY the message text, no quotes or preamble. Keep it warm and under 50 words.\n\n{transcript}",
+            "Sos un agente de ventas de WhatsApp amable y profesional. Escribís respuestas naturales y concisas que hacen avanzar la venta. Respondé SIEMPRE en español.",
+            f"En base a esta conversación de WhatsApp, escribí la mejor próxima respuesta que el agente debería enviar al cliente. "
+            f"Devolvé SOLO el texto del mensaje, sin comillas ni preámbulo. Que sea cálido y de menos de 50 palabras, en español.\n\n{transcript}",
         )
         return {"suggestion": suggestion.strip()}
     except Exception as e:
         logger.error(f"AI suggest error: {e}")
-        raise HTTPException(status_code=502, detail="AI service unavailable")
+        raise HTTPException(status_code=502, detail="Servicio de IA no disponible")
 
 # ---------------------------------------------------------------------------
 # Seed
@@ -897,10 +998,10 @@ async def _seed(force: bool = False):
     agent_ids = ["user_demo_a1", "user_demo_a2", "user_demo_sup"]
 
     tags = [
-        {"id": "tag_hot", "name": "Hot Lead", "color": "#DC2626"},
+        {"id": "tag_hot", "name": "Lead caliente", "color": "#DC2626"},
         {"id": "tag_vip", "name": "VIP", "color": "#FF4500"},
-        {"id": "tag_demo", "name": "Demo Booked", "color": "#064E3B"},
-        {"id": "tag_followup", "name": "Follow Up", "color": "#EAB308"},
+        {"id": "tag_demo", "name": "Demo agendada", "color": "#064E3B"},
+        {"id": "tag_followup", "name": "Seguimiento", "color": "#EAB308"},
     ]
     await db.tags.insert_many(tags)
 
@@ -916,50 +1017,50 @@ async def _seed(force: bool = False):
     ]
     conv_seed = [
         # (status, priority, bot_enabled, lead_status, value, last_msg, messages[(type,body)])
-        ("open", "high", False, "qualified", 12000, "Sounds great, can you send the proposal?", [
-            ("contact", "Hi, I saw your ad on Instagram. Do you ship wholesale to the US?"),
-            ("bot", "Hello! Yes we do ship wholesale across the US. How many units are you looking for?"),
-            ("contact", "Around 500 units to start, maybe more next quarter."),
-            ("bot", "Great! For 500+ units we offer tiered pricing. Let me connect you with a specialist."),
-            ("agent", "Hi Carlos, Leo here from sales. For 500 units our price is $24/unit with free freight."),
-            ("contact", "Sounds great, can you send the proposal?"),
+        ("open", "high", False, "qualified", 12000, "Perfecto, ¿me podés enviar la propuesta?", [
+            ("contact", "Hola, vi su anuncio en Instagram. ¿Envían al por mayor a EE. UU.?"),
+            ("bot", "¡Hola! Sí, hacemos envíos mayoristas a todo EE. UU. ¿Cuántas unidades buscás?"),
+            ("contact", "Unas 500 unidades para empezar, quizá más el próximo trimestre."),
+            ("bot", "¡Genial! Para 500+ unidades tenemos precios por volumen. Te conecto con un especialista."),
+            ("agent", "Hola Carlos, soy Leo de ventas. Para 500 unidades el precio es USD 24/unidad con envío gratis."),
+            ("contact", "Perfecto, ¿me podés enviar la propuesta?"),
         ]),
-        ("pending", "medium", True, "contacted", 4500, "Let me check with my team and revert.", [
-            ("contact", "Do you have the spring collection in stock?"),
-            ("bot", "Yes! The spring collection is in stock. Would you like a catalog?"),
-            ("contact", "Yes please."),
-            ("bot", "Sent to your email. Pricing starts at $18/unit for orders over 100."),
-            ("contact", "Let me check with my team and revert."),
+        ("pending", "medium", True, "contacted", 4500, "Lo consulto con mi equipo y te aviso.", [
+            ("contact", "¿Tienen la colección de primavera en stock?"),
+            ("bot", "¡Sí! La colección de primavera está disponible. ¿Querés un catálogo?"),
+            ("contact", "Sí, por favor."),
+            ("bot", "Te lo envié por correo. Los precios arrancan en USD 18/unidad para pedidos de más de 100."),
+            ("contact", "Lo consulto con mi equipo y te aviso."),
         ]),
-        ("open", "high", False, "proposal", 28000, "The proposal looks good. Discount on annual?", [
-            ("contact", "We're comparing 3 vendors. What makes you different?"),
-            ("agent", "Hi Aisha, great question. We offer 48h dispatch and a dedicated account manager."),
-            ("contact", "The proposal looks good. Discount on annual?"),
+        ("open", "high", False, "proposal", 28000, "La propuesta se ve bien. ¿Hay descuento anual?", [
+            ("contact", "Estamos comparando 3 proveedores. ¿Qué los diferencia?"),
+            ("agent", "Hola Aisha, excelente pregunta. Ofrecemos despacho en 48 h y un ejecutivo de cuenta dedicado."),
+            ("contact", "La propuesta se ve bien. ¿Hay descuento anual?"),
         ]),
-        ("resolved", "low", True, "won", 9000, "Payment done, thank you!", [
-            ("contact", "Ready to place the order."),
-            ("bot", "Wonderful! Sending you the payment link now."),
-            ("contact", "Payment done, thank you!"),
+        ("resolved", "low", True, "won", 9000, "¡Pago realizado, gracias!", [
+            ("contact", "Listo para hacer el pedido."),
+            ("bot", "¡Excelente! Te envío el enlace de pago ahora."),
+            ("contact", "¡Pago realizado, gracias!"),
         ]),
-        ("open", "medium", True, "new", 0, "Hi, what are your prices?", [
-            ("contact", "Hi, what are your prices?"),
-            ("bot", "Hi Elena! Our catalog starts at $15/unit. What product line interests you?"),
+        ("open", "medium", True, "new", 0, "Hola, ¿cuáles son sus precios?", [
+            ("contact", "Hola, ¿cuáles son sus precios?"),
+            ("bot", "¡Hola Elena! Nuestro catálogo arranca en USD 15/unidad. ¿Qué línea te interesa?"),
         ]),
-        ("pending", "high", False, "qualified", 16500, "Can we hop on a quick call tomorrow?", [
-            ("contact", "I need 1000 units urgently for an event."),
-            ("bot", "I can help with bulk urgent orders. Connecting you to a specialist."),
-            ("agent", "Hi Marcus, Priya here. We can expedite 1000 units within 5 days."),
-            ("contact", "Can we hop on a quick call tomorrow?"),
+        ("pending", "high", False, "qualified", 16500, "¿Podemos coordinar una llamada rápida mañana?", [
+            ("contact", "Necesito 1000 unidades con urgencia para un evento."),
+            ("bot", "Puedo ayudarte con pedidos urgentes por volumen. Te conecto con un especialista."),
+            ("agent", "Hola Marcus, soy Priya. Podemos despachar 1000 unidades en 5 días."),
+            ("contact", "¿Podemos coordinar una llamada rápida mañana?"),
         ]),
-        ("open", "low", True, "contacted", 3200, "Thanks, I'll think about it.", [
-            ("contact", "Do you offer samples?"),
-            ("bot", "Yes, samples are $5 each, refundable on your first order."),
-            ("contact", "Thanks, I'll think about it."),
+        ("open", "low", True, "contacted", 3200, "Gracias, lo voy a pensar.", [
+            ("contact", "¿Ofrecen muestras?"),
+            ("bot", "Sí, las muestras cuestan USD 5 cada una, reembolsables en tu primer pedido."),
+            ("contact", "Gracias, lo voy a pensar."),
         ]),
-        ("open", "medium", False, "lost", 5000, "We went with another supplier, sorry.", [
-            ("contact", "What's your MOQ?"),
-            ("agent", "Hi Fatima, our MOQ is 200 units."),
-            ("contact", "We went with another supplier, sorry."),
+        ("open", "medium", False, "lost", 5000, "Elegimos otro proveedor, disculpá.", [
+            ("contact", "¿Cuál es su pedido mínimo?"),
+            ("agent", "Hola Fatima, nuestro mínimo es de 200 unidades."),
+            ("contact", "Elegimos otro proveedor, disculpá."),
         ]),
     ]
 
@@ -976,7 +1077,7 @@ async def _seed(force: bool = False):
             assigned = None
         lid = new_id("lead")
         await db.leads.insert_one({
-            "id": lid, "contact_id": cid, "title": f"{company} wholesale order",
+            "id": lid, "contact_id": cid, "title": f"Pedido mayorista · {company}",
             "status": lead_status, "priority": prio, "value": value, "assigned_to": assigned,
             "source": "WhatsApp", "tags": [tags[i % len(tags)]["name"]],
             "created_at": now_iso(), "updated_at": now_iso(),
@@ -987,9 +1088,10 @@ async def _seed(force: bool = False):
             "bot_enabled": bot, "assigned_to": assigned, "last_message": last_msg,
             "last_message_at": now_iso(), "unread": 2 if status == "open" else 0, "created_at": now_iso(),
         })
-        base = datetime.now(timezone.utc) - timedelta(minutes=len(msgs) * 7)
+        # Backdate messages ~3h so unanswered customer chats trigger lead_no_response
+        base = datetime.now(timezone.utc) - timedelta(hours=3)
         for j, (stype, body) in enumerate(msgs):
-            sname = {"contact": cname, "bot": "Bot", "agent": "Sales Agent"}[stype]
+            sname = {"contact": cname, "bot": "Bot", "agent": "Agente de ventas"}[stype]
             await db.messages.insert_one({
                 "id": new_id("msg"), "conversation_id": conv_id, "sender_type": stype,
                 "sender_name": sname, "body": body,
@@ -998,25 +1100,25 @@ async def _seed(force: bool = False):
         if i % 2 == 0:
             await db.notes.insert_one({
                 "id": new_id("note"), "lead_id": lid,
-                "body": "Customer is price sensitive but high volume. Push annual contract.",
+                "body": "Cliente sensible al precio pero de alto volumen. Empujar contrato anual.",
                 "author_id": "user_demo_sup", "author_name": "Maya Sorensen", "created_at": now_iso(),
             })
         if lead_status in ("qualified", "proposal"):
             await db.tasks.insert_one({
-                "id": new_id("task"), "title": f"Send proposal to {cname}",
-                "description": "Prepare tiered pricing PDF and email it.", "lead_id": lid,
+                "id": new_id("task"), "title": f"Enviar propuesta a {cname}",
+                "description": "Preparar el PDF de precios por volumen y enviarlo por correo.", "lead_id": lid,
                 "due_date": (datetime.now(timezone.utc) + timedelta(days=i % 3 + 1)).date().isoformat(),
                 "status": "todo", "priority": prio, "assigned_to": assigned, "created_at": now_iso(),
             })
 
     await db.tasks.insert_one({
-        "id": new_id("task"), "title": "Weekly pipeline review", "description": "Review all open deals with the team.",
+        "id": new_id("task"), "title": "Revisión semanal del pipeline", "description": "Revisar todas las oportunidades abiertas con el equipo.",
         "lead_id": None, "due_date": (datetime.now(timezone.utc) + timedelta(days=2)).date().isoformat(),
         "status": "todo", "priority": "medium", "assigned_to": "user_demo_sup", "created_at": now_iso(),
     })
     # Unassigned overdue task -> surfaces to admins/supervisors
     await db.tasks.insert_one({
-        "id": new_id("task"), "title": "Follow up on unanswered quote", "description": "Quote sent days ago with no reply — chase it.",
+        "id": new_id("task"), "title": "Dar seguimiento a cotización sin respuesta", "description": "Cotización enviada hace días sin respuesta — contactar al cliente.",
         "lead_id": None, "due_date": (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat(),
         "status": "todo", "priority": "high", "assigned_to": None, "created_at": now_iso(),
     })
@@ -1036,15 +1138,15 @@ async def backfill_notifications():
     convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
     contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(2000)}
     for c in convs:
-        cname = contacts.get(c["contact_id"], {}).get("name", "a customer")
+        cname = contacts.get(c["contact_id"], {}).get("name", "un cliente")
         if not c.get("bot_enabled", True) and c.get("status") != "resolved":
             await _notify_target(c.get("assigned_to"), "handoff_required",
-                                 f"Handoff required: {cname}",
-                                 "Bot disabled — a human agent needs to take over this chat.",
+                                 f"Requiere atención humana: {cname}",
+                                 "El bot fue desactivado — un agente debe tomar control de este chat.",
                                  "conversation", c["id"], "high")
         if c.get("unread", 0) > 0:
             await _notify_target(c.get("assigned_to"), "new_message",
-                                 f"Unread messages from {cname}",
+                                 f"Mensajes sin leer de {cname}",
                                  c.get("last_message", "")[:120],
                                  "conversation", c["id"], c.get("priority", "medium"))
 

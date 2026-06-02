@@ -38,7 +38,7 @@ export default function Leads() {
   const { data: users = [] } = useQuery({ queryKey: ["users"], queryFn: () => api.get("/users").then((r) => r.data) });
   const { data: contacts = [] } = useQuery({ queryKey: ["contacts"], queryFn: () => api.get("/contacts").then((r) => r.data) });
 
-  const userName = (id) => users.find((u) => u.user_id === id)?.name || "Unassigned";
+  const userName = (id) => users.find((u) => u.user_id === id)?.name || "Sin asignar";
 
   const filtered = leads.filter((l) =>
     !search || l.title.toLowerCase().includes(search.toLowerCase()) || l.contact?.name?.toLowerCase().includes(search.toLowerCase())
@@ -51,9 +51,9 @@ export default function Leads() {
       qc.invalidateQueries({ queryKey: ["leads"] });
       setOpen(false);
       setForm({ contact_id: "", title: "", status: "new", priority: "medium", value: "", assigned_to: "" });
-      toast.success("Lead created");
+      toast.success("Lead creado");
     },
-    onError: () => toast.error("Could not create lead"),
+    onError: () => toast.error("No se pudo crear el lead"),
   });
 
   return (
@@ -63,33 +63,33 @@ export default function Leads() {
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button data-testid="new-lead-button" className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm font-semibold">
-              <Plus className="h-4 w-4 mr-1" /> New Lead
+              <Plus className="h-4 w-4 mr-1" /> Nuevo lead
             </Button>
           </DialogTrigger>
           <DialogContent className="rounded-sm">
-            <DialogHeader><DialogTitle className="font-heading">Create Lead</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle className="font-heading">Crear lead</DialogTitle></DialogHeader>
             <div className="space-y-4 py-2">
               <div>
-                <Label className="text-xs font-semibold">Contact</Label>
+                <Label className="text-xs font-semibold">Contacto</Label>
                 <Select value={form.contact_id} onValueChange={(v) => setForm({ ...form, contact_id: v })}>
-                  <SelectTrigger data-testid="lead-contact-select" className="rounded-sm mt-1"><SelectValue placeholder="Select contact" /></SelectTrigger>
+                  <SelectTrigger data-testid="lead-contact-select" className="rounded-sm mt-1"><SelectValue placeholder="Seleccioná un contacto" /></SelectTrigger>
                   <SelectContent>{contacts.map((c) => <SelectItem key={c.id} value={c.id}>{c.name} · {c.company}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div>
-                <Label className="text-xs font-semibold">Title</Label>
-                <Input data-testid="lead-title-input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Wholesale order" className="rounded-sm mt-1" />
+                <Label className="text-xs font-semibold">Título</Label>
+                <Input data-testid="lead-title-input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Ej. Pedido mayorista" className="rounded-sm mt-1" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label className="text-xs font-semibold">Status</Label>
+                  <Label className="text-xs font-semibold">Estado</Label>
                   <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
                     <SelectTrigger className="rounded-sm mt-1"><SelectValue /></SelectTrigger>
                     <SelectContent>{LEAD_STATUSES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div>
-                  <Label className="text-xs font-semibold">Priority</Label>
+                  <Label className="text-xs font-semibold">Prioridad</Label>
                   <Select value={form.priority} onValueChange={(v) => setForm({ ...form, priority: v })}>
                     <SelectTrigger className="rounded-sm mt-1"><SelectValue /></SelectTrigger>
                     <SelectContent>{PRIORITIES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}</SelectContent>
@@ -98,13 +98,13 @@ export default function Leads() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label className="text-xs font-semibold">Deal Value ($)</Label>
+                  <Label className="text-xs font-semibold">Valor ($)</Label>
                   <Input data-testid="lead-value-input" type="number" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} placeholder="0" className="rounded-sm mt-1" />
                 </div>
                 <div>
-                  <Label className="text-xs font-semibold">Assign to</Label>
+                  <Label className="text-xs font-semibold">Asignar a</Label>
                   <Select value={form.assigned_to} onValueChange={(v) => setForm({ ...form, assigned_to: v })}>
-                    <SelectTrigger className="rounded-sm mt-1"><SelectValue placeholder="Agent" /></SelectTrigger>
+                    <SelectTrigger className="rounded-sm mt-1"><SelectValue placeholder="Agente" /></SelectTrigger>
                     <SelectContent>{users.map((u) => <SelectItem key={u.user_id} value={u.user_id}>{u.name}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
@@ -112,7 +112,7 @@ export default function Leads() {
             </div>
             <DialogFooter>
               <Button data-testid="submit-lead-button" disabled={!form.contact_id || !form.title || createLead.isPending} onClick={() => createLead.mutate()} className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm w-full font-semibold">
-                Create Lead
+                Crear lead
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -124,14 +124,14 @@ export default function Leads() {
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-[200px] max-w-xs">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
-            <Input data-testid="leads-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search leads…" className="pl-9 rounded-sm bg-white" />
+            <Input data-testid="leads-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar leads…" className="pl-9 rounded-sm bg-white" />
           </div>
-          <FilterSelect testid="filter-status" value={filters.status} onChange={(v) => setFilters({ ...filters, status: v })} placeholder="All Statuses" options={LEAD_STATUSES} />
-          <FilterSelect testid="filter-priority" value={filters.priority} onChange={(v) => setFilters({ ...filters, priority: v })} placeholder="All Priorities" options={PRIORITIES} />
+          <FilterSelect testid="filter-status" value={filters.status} onChange={(v) => setFilters({ ...filters, status: v })} placeholder="Todos los estados" options={LEAD_STATUSES} />
+          <FilterSelect testid="filter-priority" value={filters.priority} onChange={(v) => setFilters({ ...filters, priority: v })} placeholder="Todas las prioridades" options={PRIORITIES} />
           <Select value={filters.assigned_to} onValueChange={(v) => setFilters({ ...filters, assigned_to: v })}>
-            <SelectTrigger data-testid="filter-assigned" className="w-44 rounded-sm bg-white"><SelectValue placeholder="All Agents" /></SelectTrigger>
+            <SelectTrigger data-testid="filter-assigned" className="w-44 rounded-sm bg-white"><SelectValue placeholder="Todos los agentes" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Agents</SelectItem>
+              <SelectItem value="all">Todos los agentes</SelectItem>
               {users.map((u) => <SelectItem key={u.user_id} value={u.user_id}>{u.name}</SelectItem>)}
             </SelectContent>
           </Select>
@@ -140,12 +140,12 @@ export default function Leads() {
         {/* Table */}
         <div className="bg-white border border-zinc-200 rounded-sm overflow-hidden">
           {filtered.length === 0 ? (
-            <EmptyState icon={Target} title="No leads found" subtitle="Adjust filters or create a new lead to get started." />
+            <EmptyState icon={Target} title="No se encontraron leads" subtitle="Ajustá los filtros o creá un nuevo lead para empezar." />
           ) : (
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-zinc-200 bg-zinc-50">
-                  {["Lead", "Status", "Priority", "Value", "Owner"].map((h) => (
+                  {["Lead", "Estado", "Prioridad", "Valor", "Responsable"].map((h) => (
                     <th key={h} className="text-left px-5 py-3 text-xs tracking-[0.1em] uppercase font-bold text-[#52525B]">{h}</th>
                   ))}
                 </tr>

@@ -6,20 +6,20 @@ import api from "@/lib/api";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 const TYPE_META = {
-  new_message: { icon: MessageSquare, color: "#FF4500", label: "New message" },
-  handoff_required: { icon: ArrowRightLeft, color: "#DC2626", label: "Handoff required" },
-  overdue_task: { icon: AlarmClock, color: "#DC2626", label: "Overdue task" },
-  task_due_soon: { icon: Clock, color: "#EAB308", label: "Due soon" },
-  lead_no_response: { icon: UserX, color: "#7C3AED", label: "No response" },
+  new_message: { icon: MessageSquare, color: "#FF4500", label: "Nuevo mensaje" },
+  handoff_required: { icon: ArrowRightLeft, color: "#DC2626", label: "Requiere atención humana" },
+  overdue_task: { icon: AlarmClock, color: "#DC2626", label: "Tarea vencida" },
+  task_due_soon: { icon: Clock, color: "#EAB308", label: "Tarea próxima a vencer" },
+  lead_no_response: { icon: UserX, color: "#7C3AED", label: "Lead sin respuesta" },
 };
 
 function timeAgo(iso) {
   if (!iso) return "";
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
+  if (s < 60) return "ahora";
+  if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
+  if (s < 86400) return `hace ${Math.floor(s / 3600)} h`;
+  return `hace ${Math.floor(s / 86400)} d`;
 }
 
 export default function NotificationBell() {
@@ -77,10 +77,10 @@ export default function NotificationBell() {
       </PopoverTrigger>
       <PopoverContent align="end" className="w-96 p-0 rounded-sm" data-testid="notification-dropdown">
         <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200">
-          <p className="font-bold text-[#0A0A0A]">Notifications</p>
+          <p className="font-bold text-[#0A0A0A]">Notificaciones</p>
           {unread > 0 && (
             <button data-testid="mark-all-read" onClick={() => markAll.mutate()} className="flex items-center gap-1 text-xs font-semibold text-[#FF4500] hover:underline">
-              <CheckCheck className="h-3.5 w-3.5" /> Mark all read
+              <CheckCheck className="h-3.5 w-3.5" /> Marcar todo como leído
             </button>
           )}
         </div>
@@ -88,7 +88,7 @@ export default function NotificationBell() {
           {notifs.length === 0 ? (
             <div className="py-12 text-center">
               <Bell className="h-7 w-7 text-zinc-300 mx-auto mb-2" />
-              <p className="text-sm text-[#52525B]">You're all caught up</p>
+              <p className="text-sm text-[#52525B]">Estás al día</p>
             </div>
           ) : (
             notifs.map((n) => {

@@ -26,9 +26,9 @@ export default function Contacts() {
       qc.invalidateQueries({ queryKey: ["contacts"] });
       setOpen(false);
       setForm({ name: "", phone: "", email: "", company: "" });
-      toast.success("Contact added");
+      toast.success("Contacto agregado");
     },
-    onError: () => toast.error("Could not add contact"),
+    onError: () => toast.error("No se pudo agregar el contacto"),
   });
 
   const filtered = contacts.filter((c) =>
@@ -37,24 +37,24 @@ export default function Contacts() {
 
   return (
     <AppLayout
-      title="Contacts"
+      title="Contactos"
       actions={
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button data-testid="new-contact-button" className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm font-semibold">
-              <Plus className="h-4 w-4 mr-1" /> New Contact
+              <Plus className="h-4 w-4 mr-1" /> Nuevo contacto
             </Button>
           </DialogTrigger>
           <DialogContent className="rounded-sm">
-            <DialogHeader><DialogTitle className="font-heading">Add Contact</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle className="font-heading">Agregar contacto</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
-              <div><Label className="text-xs font-semibold">Name</Label><Input data-testid="contact-name-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-sm mt-1" /></div>
-              <div><Label className="text-xs font-semibold">WhatsApp Phone</Label><Input data-testid="contact-phone-input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+1 555 000 0000" className="rounded-sm mt-1" /></div>
+              <div><Label className="text-xs font-semibold">Nombre</Label><Input data-testid="contact-name-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-sm mt-1" /></div>
+              <div><Label className="text-xs font-semibold">Teléfono de WhatsApp</Label><Input data-testid="contact-phone-input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+54 11 0000 0000" className="rounded-sm mt-1" /></div>
               <div><Label className="text-xs font-semibold">Email</Label><Input data-testid="contact-email-input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="rounded-sm mt-1" /></div>
-              <div><Label className="text-xs font-semibold">Company</Label><Input data-testid="contact-company-input" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} className="rounded-sm mt-1" /></div>
+              <div><Label className="text-xs font-semibold">Empresa</Label><Input data-testid="contact-company-input" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} className="rounded-sm mt-1" /></div>
             </div>
             <DialogFooter>
-              <Button data-testid="submit-contact-button" disabled={!form.name || !form.phone || create.isPending} onClick={() => create.mutate()} className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm w-full font-semibold">Add Contact</Button>
+              <Button data-testid="submit-contact-button" disabled={!form.name || !form.phone || create.isPending} onClick={() => create.mutate()} className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm w-full font-semibold">Agregar contacto</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -63,11 +63,11 @@ export default function Contacts() {
       <div className="p-6 md:p-8 space-y-5 animate-in fade-in duration-300">
         <div className="relative max-w-xs">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
-          <Input data-testid="contacts-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search contacts…" className="pl-9 rounded-sm bg-white" />
+          <Input data-testid="contacts-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar contactos…" className="pl-9 rounded-sm bg-white" />
         </div>
 
         {filtered.length === 0 ? (
-          <div className="bg-white border border-zinc-200 rounded-sm"><EmptyState icon={Users} title="No contacts" subtitle="Every WhatsApp contact lives here." /></div>
+          <div className="bg-white border border-zinc-200 rounded-sm"><EmptyState icon={Users} title="Sin contactos" subtitle="Cada contacto de WhatsApp vive acá." /></div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {filtered.map((c) => (

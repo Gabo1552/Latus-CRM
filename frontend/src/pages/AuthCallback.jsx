@@ -32,7 +32,7 @@ export default function AuthCallback() {
     <div className="min-h-screen flex items-center justify-center bg-[#F9F9F7]">
       <div className="flex flex-col items-center gap-4" data-testid="auth-callback-loading">
         <div className="h-10 w-10 border-2 border-[#FF4500] border-t-transparent rounded-full animate-spin" />
-        <p className="text-sm text-[#52525B] font-medium">Signing you in…</p>
+        <p className="text-sm text-[#52525B] font-medium">Iniciando sesión…</p>
       </div>
     </div>
   );

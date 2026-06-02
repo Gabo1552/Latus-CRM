@@ -76,12 +76,12 @@ export default function Inbox() {
   const genSummary = useMutation({
     mutationFn: () => api.post(`/conversations/${activeId}/ai-summary`),
     onSuccess: (r) => setSummary(r.data.summary),
-    onError: () => toast.error("AI summary unavailable"),
+    onError: () => toast.error("Resumen de IA no disponible"),
   });
   const genSuggest = useMutation({
     mutationFn: () => api.post(`/conversations/${activeId}/ai-suggest`),
     onSuccess: (r) => setSuggestion(r.data.suggestion),
-    onError: () => toast.error("AI suggestion unavailable"),
+    onError: () => toast.error("Sugerencia de IA no disponible"),
   });
 
   const simulateInbound = useMutation({
@@ -91,34 +91,34 @@ export default function Inbox() {
       qc.invalidateQueries({ queryKey: ["conversations"] });
       qc.invalidateQueries({ queryKey: ["notifications"] });
       qc.invalidateQueries({ queryKey: ["notif-count"] });
-      toast.success("Inbound customer message received");
+      toast.success("Mensaje del cliente recibido");
     },
   });
 
   const filtered = convs.filter((c) => !search || c.contact?.name?.toLowerCase().includes(search.toLowerCase()));
 
   return (
-    <AppLayout title="Inbox">
+    <AppLayout title="Bandeja">
       <div className="flex h-[calc(100vh-4rem)] w-full overflow-hidden bg-white">
         {/* Left: conversation list */}
         <div className="w-80 border-r border-zinc-200 flex flex-col bg-zinc-50 shrink-0">
           <div className="p-3 space-y-2 border-b border-zinc-200">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
-              <Input data-testid="inbox-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search chats…" className="pl-9 rounded-sm bg-white h-9" />
+              <Input data-testid="inbox-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar chats…" className="pl-9 rounded-sm bg-white h-9" />
             </div>
             <div className="flex gap-2">
               <Select value={filters.status} onValueChange={(v) => setFilters({ ...filters, status: v })}>
-                <SelectTrigger data-testid="inbox-filter-status" className="rounded-sm bg-white h-8 text-xs"><SelectValue placeholder="Status" /></SelectTrigger>
+                <SelectTrigger data-testid="inbox-filter-status" className="rounded-sm bg-white h-8 text-xs"><SelectValue placeholder="Estado" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="all">Todos los estados</SelectItem>
                   {CONV_STATUSES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Select value={filters.priority} onValueChange={(v) => setFilters({ ...filters, priority: v })}>
-                <SelectTrigger data-testid="inbox-filter-priority" className="rounded-sm bg-white h-8 text-xs"><SelectValue placeholder="Priority" /></SelectTrigger>
+                <SelectTrigger data-testid="inbox-filter-priority" className="rounded-sm bg-white h-8 text-xs"><SelectValue placeholder="Prioridad" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Priority</SelectItem>
+                  <SelectItem value="all">Todas las prioridades</SelectItem>
                   {PRIORITIES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
                 </SelectContent>
               </Select>
@@ -141,7 +141,7 @@ export default function Inbox() {
                   <p className="text-xs text-[#52525B] truncate mt-0.5">{c.last_message}</p>
                   <div className="flex items-center gap-1.5 mt-1.5">
                     {!c.bot_enabled
-                      ? <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#FF4500] bg-[#FFF7ED] border border-[#FED7AA] rounded-full px-1.5 py-px"><UserIcon className="h-2.5 w-2.5" />HUMAN</span>
+                      ? <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#FF4500] bg-[#FFF7ED] border border-[#FED7AA] rounded-full px-1.5 py-px"><UserIcon className="h-2.5 w-2.5" />HUMANO</span>
                       : <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#52525B] bg-zinc-100 rounded-full px-1.5 py-px"><Bot className="h-2.5 w-2.5" />BOT</span>}
                     <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: statusMeta(PRIORITIES, c.priority).color }} />
                   </div>
@@ -156,7 +156,7 @@ export default function Inbox() {
           {!active ? (
             <div className="flex-1 flex flex-col items-center justify-center text-zinc-400">
               <MessageSquare className="h-10 w-10 mb-3" />
-              <p className="text-sm">Select a conversation</p>
+              <p className="text-sm">Seleccioná una conversación</p>
             </div>
           ) : (
             <>
@@ -175,17 +175,17 @@ export default function Inbox() {
                     onClick={() => simulateInbound.mutate()}
                     disabled={simulateInbound.isPending}
                     className="text-xs font-semibold text-[#52525B] hover:text-[#FF4500] border border-zinc-200 rounded-sm px-2.5 py-1.5 transition-colors"
-                    title="Simulate an inbound WhatsApp message from the customer"
+                    title="Simular un mensaje entrante de WhatsApp del cliente"
                   >
-                    + Customer reply
+                    + Respuesta del cliente
                   </button>
-                  <div className={`flex items-center gap-2 px-3 py-1.5 rounded-sm border ${active.bot_enabled ? "border-zinc-200 bg-zinc-50" : "border-[#FED7AA] bg-[#FFF7ED]"}`} data-testid="handoff-control">
+                  <div className={`flex items-center gap-2 px-3 py-1.5 rounded-sm border ${active.bot_enabled ? "border-zinc-200 bg-zinc-50" : "border-[#FED7AA] bg-[#FFF7ED]"}`} data-testid="handoff-control" title="Tomar control / Devolver al bot">
                     <ArrowRightLeft className="h-3.5 w-3.5 text-[#FF4500]" />
-                    <span className="text-xs font-bold text-[#0A0A0A]">{active.bot_enabled ? "Bot active" : "Human only"}</span>
+                    <span className="text-xs font-bold text-[#0A0A0A]">{active.bot_enabled ? "Bot activo" : "Solo humano"}</span>
                     <Switch
                       data-testid="bot-toggle"
                       checked={active.bot_enabled}
-                      onCheckedChange={(v) => { patchConv.mutate({ bot_enabled: v }); toast.success(v ? "Bot re-enabled" : "Handed off to human"); }}
+                      onCheckedChange={(v) => { patchConv.mutate({ bot_enabled: v }); toast.success(v ? "Bot reactivado" : "Traspasado a un agente"); }}
                       className="data-[state=checked]:bg-zinc-400 data-[state=unchecked]:bg-[#FF4500]"
                     />
                   </div>
@@ -222,7 +222,7 @@ export default function Inbox() {
               {/* composer */}
               <div className="border-t border-zinc-200 p-3 shrink-0">
                 {!active.bot_enabled && (
-                  <p className="text-[11px] font-semibold text-[#FF4500] mb-2 flex items-center gap-1"><UserIcon className="h-3 w-3" /> Human handoff active — you are replying as agent</p>
+                  <p className="text-[11px] font-semibold text-[#FF4500] mb-2 flex items-center gap-1"><UserIcon className="h-3 w-3" /> Traspaso a humano activo — estás respondiendo como agente</p>
                 )}
                 <div className="flex items-end gap-2">
                   <Textarea
@@ -230,7 +230,7 @@ export default function Inbox() {
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (draft.trim()) sendMsg.mutate(); } }}
-                    placeholder="Type a reply…"
+                    placeholder="Escribí una respuesta…"
                     className="rounded-sm resize-none min-h-[44px] max-h-32"
                   />
                   <Button data-testid="send-message-button" disabled={!draft.trim() || sendMsg.isPending} onClick={() => sendMsg.mutate()} className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm h-11 px-4">
@@ -246,7 +246,7 @@ export default function Inbox() {
         {active && (
           <div className="w-80 border-l border-zinc-200 flex flex-col bg-zinc-50 shrink-0 overflow-auto">
             <div className="p-4 border-b border-zinc-200">
-              <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#52525B] mb-3">Contact</p>
+              <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#52525B] mb-3">Contacto</p>
               <div className="flex items-center gap-3 mb-3">
                 <Avatar src={active.contact?.avatar} name={active.contact?.name} size={44} />
                 <div className="min-w-0">
@@ -262,10 +262,10 @@ export default function Inbox() {
 
             {active.lead && (
               <div className="p-4 border-b border-zinc-200">
-                <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#52525B] mb-3">Linked Lead</p>
+                <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#52525B] mb-3">Lead vinculado</p>
                 <p className="font-semibold text-[#0A0A0A] text-sm">{active.lead.title}</p>
                 <div className="flex items-center justify-between mt-2">
-                  <StatusBadge list={[{ key: active.lead.status, label: active.lead.status, color: "#FF4500", bg: "#FFF7ED" }]} value={active.lead.status} />
+                  <StatusBadge list={LEAD_STATUSES} value={active.lead.status} />
                   <span className="font-extrabold tracking-tighter text-[#0A0A0A]">{money(active.lead.value)}</span>
                 </div>
               </div>
@@ -274,18 +274,18 @@ export default function Inbox() {
             {/* AI Summary */}
             <div className="p-4 border-b border-zinc-200">
               <div className="flex items-center justify-between mb-3">
-                <p className="flex items-center gap-1.5 text-xs tracking-[0.15em] uppercase font-bold text-[#FF4500]"><Sparkles className="h-3.5 w-3.5" /> AI Summary</p>
+                <p className="flex items-center gap-1.5 text-xs tracking-[0.15em] uppercase font-bold text-[#FF4500]"><Sparkles className="h-3.5 w-3.5" /> Resumen de IA</p>
                 <button data-testid="ai-summary-button" onClick={() => genSummary.mutate()} disabled={genSummary.isPending} className="text-xs font-semibold text-[#FF4500] flex items-center gap-1">
-                  {genSummary.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Generate
+                  {genSummary.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Generar
                 </button>
               </div>
               <div className="border border-[#FED7AA] bg-[#FFF7ED] rounded-sm p-3 min-h-[60px]" data-testid="ai-summary-output">
                 {genSummary.isPending ? (
-                  <p className="text-sm text-[#52525B] animate-pulse">Analyzing conversation…</p>
+                  <p className="text-sm text-[#52525B] animate-pulse">Analizando la conversación…</p>
                 ) : summary ? (
                   <p className="text-sm text-[#0A0A0A] whitespace-pre-wrap">{summary}</p>
                 ) : (
-                  <p className="text-sm text-[#52525B]">Click generate for an AI recap of this chat.</p>
+                  <p className="text-sm text-[#52525B]">Generá un resumen de este chat con IA.</p>
                 )}
               </div>
             </div>
@@ -293,24 +293,24 @@ export default function Inbox() {
             {/* AI Suggested reply */}
             <div className="p-4">
               <div className="flex items-center justify-between mb-3">
-                <p className="flex items-center gap-1.5 text-xs tracking-[0.15em] uppercase font-bold text-[#FF4500]"><Zap className="h-3.5 w-3.5" /> Suggested Reply</p>
+                <p className="flex items-center gap-1.5 text-xs tracking-[0.15em] uppercase font-bold text-[#FF4500]"><Zap className="h-3.5 w-3.5" /> Respuesta sugerida</p>
                 <button data-testid="ai-suggest-button" onClick={() => genSuggest.mutate()} disabled={genSuggest.isPending} className="text-xs font-semibold text-[#FF4500] flex items-center gap-1">
-                  {genSuggest.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Generate
+                  {genSuggest.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Generar
                 </button>
               </div>
               <div className="border border-[#FED7AA] bg-[#FFF7ED] rounded-sm p-3 min-h-[60px]" data-testid="ai-suggest-output">
                 {genSuggest.isPending ? (
-                  <p className="text-sm text-[#52525B] animate-pulse">Drafting reply…</p>
+                  <p className="text-sm text-[#52525B] animate-pulse">Redactando respuesta…</p>
                 ) : suggestion ? (
                   <>
                     <p className="text-sm text-[#0A0A0A]">{suggestion}</p>
                     <div className="flex gap-2 mt-3">
-                      <Button data-testid="use-suggestion-button" size="sm" onClick={() => setDraft(suggestion)} className="bg-[#0A0A0A] hover:bg-[#FF4500] rounded-sm h-7 text-xs flex-1">Use reply</Button>
-                      <Button size="sm" variant="outline" onClick={() => { navigator.clipboard.writeText(suggestion); toast.success("Copied"); }} className="rounded-sm h-7 px-2"><Copy className="h-3 w-3" /></Button>
+                      <Button data-testid="use-suggestion-button" size="sm" onClick={() => setDraft(suggestion)} className="bg-[#0A0A0A] hover:bg-[#FF4500] rounded-sm h-7 text-xs flex-1">Usar respuesta</Button>
+                      <Button size="sm" variant="outline" onClick={() => { navigator.clipboard.writeText(suggestion); toast.success("Copiado"); }} className="rounded-sm h-7 px-2"><Copy className="h-3 w-3" /></Button>
                     </div>
                   </>
                 ) : (
-                  <p className="text-sm text-[#52525B]">Get an AI-drafted next reply for the agent.</p>
+                  <p className="text-sm text-[#52525B]">Obtené una respuesta sugerida por IA para el agente.</p>
                 )}
               </div>
             </div>

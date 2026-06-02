@@ -4,16 +4,16 @@ import {
   CheckSquare, Shield, LogOut, MessageSquareText,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { initials } from "@/lib/constants";
+import { initials, roleLabel } from "@/lib/constants";
 import NotificationBell from "@/components/NotificationBell";
 
 const NAV = [
-  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
-  { to: "/inbox", label: "Inbox", icon: MessageSquare, testid: "nav-inbox" },
+  { to: "/dashboard", label: "Panel principal", icon: LayoutDashboard, testid: "nav-dashboard" },
+  { to: "/inbox", label: "Bandeja", icon: MessageSquare, testid: "nav-inbox" },
   { to: "/leads", label: "Leads", icon: Target, testid: "nav-leads" },
   { to: "/pipeline", label: "Pipeline", icon: KanbanSquare, testid: "nav-pipeline" },
-  { to: "/contacts", label: "Contacts", icon: Users, testid: "nav-contacts" },
-  { to: "/tasks", label: "Tasks", icon: CheckSquare, testid: "nav-tasks" },
+  { to: "/contacts", label: "Contactos", icon: Users, testid: "nav-contacts" },
+  { to: "/tasks", label: "Tareas", icon: CheckSquare, testid: "nav-tasks" },
 ];
 
 export default function AppLayout({ children, title, actions }) {
@@ -22,7 +22,7 @@ export default function AppLayout({ children, title, actions }) {
 
   const nav = [...NAV];
   if (user?.role === "admin") {
-    nav.push({ to: "/admin", label: "Admin", icon: Shield, testid: "nav-admin" });
+    nav.push({ to: "/admin", label: "Administración", icon: Shield, testid: "nav-admin" });
   }
 
   return (
@@ -33,7 +33,7 @@ export default function AppLayout({ children, title, actions }) {
           <div className="h-8 w-8 bg-[#FF4500] flex items-center justify-center rounded-sm">
             <MessageSquareText className="h-4.5 w-4.5 text-white" strokeWidth={2.5} />
           </div>
-          <span className="text-white font-extrabold text-lg tracking-tighter">FlowDesk</span>
+          <span className="text-white font-extrabold text-lg tracking-tighter">Latus CRM</span>
         </div>
 
         <nav className="flex-1 px-3 py-5 space-y-1">
@@ -71,7 +71,7 @@ export default function AppLayout({ children, title, actions }) {
             )}
             <div className="flex-1 min-w-0">
               <p className="text-white text-sm font-semibold truncate">{user?.name}</p>
-              <p className="text-zinc-500 text-xs capitalize">{user?.role?.replace("_", " ")}</p>
+              <p className="text-zinc-500 text-xs">{roleLabel(user?.role)}</p>
             </div>
           </button>
           <button
@@ -80,7 +80,7 @@ export default function AppLayout({ children, title, actions }) {
             className="mt-1 w-full flex items-center gap-3 px-2 py-2 rounded-sm text-zinc-400 hover:text-white hover:bg-zinc-900 text-sm font-medium transition-colors"
           >
             <LogOut className="h-[18px] w-[18px]" />
-            Sign out
+            Cerrar sesión
           </button>
         </div>
       </aside>

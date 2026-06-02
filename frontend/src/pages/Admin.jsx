@@ -1,11 +1,14 @@
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Shield, RefreshCw } from "lucide-react";
+import { Shield, RefreshCw, Clock, Save } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import AppLayout from "@/components/AppLayout";
 import { ROLES } from "@/lib/constants";
 import { Avatar } from "@/components/Bits";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
@@ -20,24 +23,47 @@ export default function Admin() {
   const qc = useQueryClient();
   const { user: me } = useAuth();
   const { data: users = [] } = useQuery({ queryKey: ["users"], queryFn: () => api.get("/users").then((r) => r.data) });
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => api.get("/settings").then((r) => r.data) });
+
+  const [threshold, setThreshold] = useState(2);
+  const [enabled, setEnabled] = useState(true);
+  const [businessHours, setBusinessHours] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      setThreshold(settings.lead_no_response_threshold_hours);
+      setEnabled(settings.lead_no_response_enabled);
+      setBusinessHours(settings.lead_no_response_business_hours_only);
+    }
+  }, [settings]);
 
   const update = useMutation({
     mutationFn: ({ id, body }) => api.patch(`/users/${id}`, body),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["users"] }); toast.success("User updated"); },
-    onError: () => toast.error("Update failed"),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["users"] }); toast.success("Usuario actualizado"); },
+    onError: () => toast.error("No se pudo actualizar"),
+  });
+
+  const saveSettings = useMutation({
+    mutationFn: () => api.patch("/settings", {
+      lead_no_response_enabled: enabled,
+      lead_no_response_threshold_hours: Number(threshold),
+      lead_no_response_business_hours_only: businessHours,
+    }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast.success("Configuración guardada"); },
+    onError: () => toast.error("No se pudo guardar"),
   });
 
   const reseed = useMutation({
     mutationFn: () => api.post("/seed"),
-    onSuccess: () => { qc.invalidateQueries(); toast.success("Demo data regenerated"); },
+    onSuccess: () => { qc.invalidateQueries(); toast.success("Datos demo regenerados"); },
   });
 
   return (
     <AppLayout
-      title="Admin · Team & Roles"
+      title="Administración · Equipo y roles"
       actions={
         <Button data-testid="reseed-button" onClick={() => reseed.mutate()} disabled={reseed.isPending} variant="outline" className="rounded-sm font-semibold">
-          <RefreshCw className={`h-4 w-4 mr-1 ${reseed.isPending ? "animate-spin" : ""}`} /> Regenerate Demo Data
+          <RefreshCw className={`h-4 w-4 mr-1 ${reseed.isPending ? "animate-spin" : ""}`} /> Regenerar datos demo
         </Button>
       }
     >
@@ -45,8 +71,36 @@ export default function Admin() {
         <div className="flex items-center gap-3 bg-[#0A0A0A] text-white rounded-sm p-5">
           <Shield className="h-5 w-5 text-[#FF4500]" />
           <div>
-            <p className="font-bold">Role-based access control</p>
-            <p className="text-sm text-zinc-400">Admins manage roles. Supervisors oversee the team. Sales agents handle leads & chats.</p>
+            <p className="font-bold">Control de acceso por roles</p>
+            <p className="text-sm text-zinc-400">Los administradores gestionan roles. Los supervisores supervisan al equipo. Los agentes de ventas atienden leads y chats.</p>
+          </div>
+        </div>
+
+        {/* Automatización: Lead sin respuesta */}
+        <div className="bg-white border border-zinc-200 rounded-sm p-5" data-testid="lead-no-response-settings">
+          <div className="flex items-center gap-2 mb-1">
+            <Clock className="h-4 w-4 text-[#FF4500]" />
+            <h3 className="text-lg font-bold tracking-tight text-[#0A0A0A]">Automatización · Lead sin respuesta</h3>
+          </div>
+          <p className="text-sm text-[#52525B] mb-4">Generá una alerta cuando un cliente escribe y no recibe respuesta dentro del tiempo configurado.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 items-end">
+            <div className="flex items-center justify-between sm:flex-col sm:items-start gap-2">
+              <Label className="text-xs font-semibold">Activado</Label>
+              <Switch data-testid="lnr-enabled-switch" checked={enabled} onCheckedChange={setEnabled} className="data-[state=checked]:bg-[#FF4500]" />
+            </div>
+            <div>
+              <Label className="text-xs font-semibold">Umbral (horas)</Label>
+              <Input data-testid="lnr-threshold-input" type="number" min={1} value={threshold} onChange={(e) => setThreshold(e.target.value)} className="rounded-sm mt-1" />
+            </div>
+            <div className="flex items-center justify-between sm:flex-col sm:items-start gap-2">
+              <Label className="text-xs font-semibold">Solo horario laboral</Label>
+              <Switch data-testid="lnr-business-hours-switch" checked={businessHours} onCheckedChange={setBusinessHours} className="data-[state=checked]:bg-[#FF4500]" />
+            </div>
+          </div>
+          <div className="mt-4">
+            <Button data-testid="save-settings-button" onClick={() => saveSettings.mutate()} disabled={saveSettings.isPending} className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm font-semibold">
+              <Save className="h-4 w-4 mr-1" /> Guardar configuración
+            </Button>
           </div>
         </div>
 
@@ -54,7 +108,7 @@ export default function Admin() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-zinc-200 bg-zinc-50">
-                {["Member", "Email", "Role", "Active"].map((h) => (
+                {["Miembro", "Email", "Rol", "Activo"].map((h) => (
                   <th key={h} className="text-left px-5 py-3 text-xs tracking-[0.1em] uppercase font-bold text-[#52525B]">{h}</th>
                 ))}
               </tr>
@@ -68,7 +122,7 @@ export default function Admin() {
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
                         <Avatar src={u.picture} name={u.name} size={32} />
-                        <span className="font-semibold text-[#0A0A0A]">{u.name}{isSelf && <span className="ml-2 text-xs text-[#FF4500]">(you)</span>}</span>
+                        <span className="font-semibold text-[#0A0A0A]">{u.name}{isSelf && <span className="ml-2 text-xs text-[#FF4500]">(vos)</span>}</span>
                       </div>
                     </td>
                     <td className="px-5 py-3.5 text-[#52525B]">{u.email}</td>

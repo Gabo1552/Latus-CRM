@@ -2,12 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, Tooltip } from "recharts";
 import {
   Target, DollarSign, TrendingUp, MessageSquare, Bot, CheckSquare, ArrowUpRight,
-  AlertTriangle, ArrowRightLeft, AlarmClock, Mail,
+  AlertTriangle, ArrowRightLeft, AlarmClock, Mail, UserX,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import api from "@/lib/api";
 import AppLayout from "@/components/AppLayout";
-import { LEAD_STATUSES, money, statusMeta } from "@/lib/constants";
+import { LEAD_STATUSES, CONV_STATUSES, money, statusMeta } from "@/lib/constants";
 import { StatusBadge, Avatar } from "@/components/Bits";
 
 function Metric({ icon: Icon, label, value, sub, testid }) {
@@ -34,7 +34,7 @@ function AttnColumn({ icon: Icon, title, count, children, testid }) {
         <span className="text-xs font-bold text-[#0A0A0A] bg-zinc-100 rounded-full px-2">{count}</span>
       </div>
       <div className="space-y-0.5">
-        {count === 0 ? <p className="text-sm text-zinc-400 px-2 py-3">Nothing pending</p> : children}
+        {count === 0 ? <p className="text-sm text-zinc-400 px-2 py-3">Sin pendientes</p> : children}
       </div>
     </div>
   );
@@ -49,29 +49,29 @@ export default function Dashboard() {
     ? LEAD_STATUSES.map((s) => ({ name: s.label, value: m.leads_by_status[s.key] || 0, color: s.color }))
     : [];
 
-  const attn = m?.requires_attention || { open_handoffs: [], unread_conversations: [], overdue_tasks: [] };
-  const attnTotal = attn.open_handoffs.length + attn.unread_conversations.length + attn.overdue_tasks.length;
+  const attn = m?.requires_attention || { open_handoffs: [], unread_conversations: [], overdue_tasks: [], no_response: [] };
+  const attnTotal = attn.open_handoffs.length + attn.unread_conversations.length + attn.overdue_tasks.length + (attn.no_response?.length || 0);
 
   return (
-    <AppLayout title="Dashboard">
+    <AppLayout title="Panel principal">
       <div className="p-6 md:p-8 space-y-6 animate-in fade-in duration-300">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Metric icon={DollarSign} label="Pipeline Value" value={money(m?.pipeline_value)} sub={`${money(m?.won_value)} won`} testid="metric-pipeline" />
-          <Metric icon={Target} label="Active Leads" value={m?.total_leads ?? "—"} sub={`${m?.total_contacts ?? 0} contacts`} testid="metric-leads" />
-          <Metric icon={TrendingUp} label="Conversion" value={`${m?.conversion_rate ?? 0}%`} sub="won / closed" testid="metric-conversion" />
-          <Metric icon={MessageSquare} label="Open Chats" value={m?.open_conversations ?? "—"} sub={`${m?.pending_conversations ?? 0} pending`} testid="metric-chats" />
+          <Metric icon={DollarSign} label="Valor del pipeline" value={money(m?.pipeline_value)} sub={`${money(m?.won_value)} ganado`} testid="metric-pipeline" />
+          <Metric icon={Target} label="Leads activos" value={m?.total_leads ?? "—"} sub={`${m?.total_contacts ?? 0} contactos`} testid="metric-leads" />
+          <Metric icon={TrendingUp} label="Conversión" value={`${m?.conversion_rate ?? 0}%`} sub="ganados / cerrados" testid="metric-conversion" />
+          <Metric icon={MessageSquare} label="Chats abiertos" value={m?.open_conversations ?? "—"} sub={`${m?.pending_conversations ?? 0} pendientes`} testid="metric-chats" />
         </div>
 
         {/* Requires attention */}
         <div className="bg-white border border-zinc-200 rounded-sm" data-testid="requires-attention">
           <div className="flex items-center gap-2 px-5 py-4 border-b border-zinc-200">
             <AlertTriangle className="h-4 w-4 text-[#FF4500]" />
-            <h3 className="text-lg font-bold tracking-tight text-[#0A0A0A]">Requires Attention</h3>
+            <h3 className="text-lg font-bold tracking-tight text-[#0A0A0A]">Requiere atención</h3>
             <span className="text-xs font-bold text-white bg-[#FF4500] rounded-full px-2 py-0.5">{attnTotal}</span>
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-3 divide-y lg:divide-y-0 lg:divide-x divide-zinc-100">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-zinc-100">
             {/* Handoffs */}
-            <AttnColumn icon={ArrowRightLeft} title="Open Handoffs" count={attn.open_handoffs.length} testid="attn-handoffs">
+            <AttnColumn icon={ArrowRightLeft} title="Atención humana" count={attn.open_handoffs.length} testid="attn-handoffs">
               {attn.open_handoffs.slice(0, 4).map((c) => (
                 <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-handoff-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-zinc-50 text-left transition-colors">
                   <Avatar src={c.contact_avatar} name={c.contact_name} size={28} />
@@ -83,7 +83,7 @@ export default function Dashboard() {
               ))}
             </AttnColumn>
             {/* Unread */}
-            <AttnColumn icon={Mail} title="Unread Chats" count={attn.unread_conversations.length} testid="attn-unread">
+            <AttnColumn icon={Mail} title="Chats sin leer" count={attn.unread_conversations.length} testid="attn-unread">
               {attn.unread_conversations.slice(0, 4).map((c) => (
                 <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-unread-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-zinc-50 text-left transition-colors">
                   <Avatar src={c.contact_avatar} name={c.contact_name} size={28} />
@@ -95,14 +95,26 @@ export default function Dashboard() {
                 </button>
               ))}
             </AttnColumn>
+            {/* Lead sin respuesta */}
+            <AttnColumn icon={UserX} title="Lead sin respuesta" count={attn.no_response?.length || 0} testid="attn-no-response">
+              {(attn.no_response || []).slice(0, 4).map((c) => (
+                <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-no-response-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-zinc-50 text-left transition-colors">
+                  <Avatar src={c.contact_avatar} name={c.contact_name} size={28} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-[#0A0A0A] truncate">{c.contact_name}</p>
+                    <p className="text-xs text-[#7C3AED] truncate">{c.last_message}</p>
+                  </div>
+                </button>
+              ))}
+            </AttnColumn>
             {/* Overdue tasks */}
-            <AttnColumn icon={AlarmClock} title="Overdue Tasks" count={attn.overdue_tasks.length} testid="attn-overdue">
+            <AttnColumn icon={AlarmClock} title="Tareas vencidas" count={attn.overdue_tasks.length} testid="attn-overdue">
               {attn.overdue_tasks.slice(0, 4).map((t) => (
                 <button key={t.id} onClick={() => navigate("/tasks")} data-testid={`attn-overdue-${t.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-zinc-50 text-left transition-colors">
                   <span className="h-2 w-2 rounded-full bg-[#DC2626] shrink-0" />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-[#0A0A0A] truncate">{t.title}</p>
-                    <p className="text-xs text-[#DC2626] truncate">Due {t.due_date}</p>
+                    <p className="text-xs text-[#DC2626] truncate">Vence {t.due_date}</p>
                   </div>
                 </button>
               ))}
@@ -115,8 +127,8 @@ export default function Dashboard() {
           <div className="lg:col-span-2 bg-white border border-zinc-200 rounded-sm p-6">
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h3 className="text-lg font-bold tracking-tight text-[#0A0A0A]">Leads by Stage</h3>
-                <p className="text-sm text-[#52525B]">Distribution across the funnel</p>
+                <h3 className="text-lg font-bold tracking-tight text-[#0A0A0A]">Leads por etapa</h3>
+                <p className="text-sm text-[#52525B]">Distribución en el embudo</p>
               </div>
               <button onClick={() => navigate("/pipeline")} className="text-sm font-semibold text-[#FF4500] flex items-center gap-1 hover:gap-2 transition-all" data-testid="view-pipeline-link">
                 Pipeline <ArrowUpRight className="h-4 w-4" />
@@ -138,15 +150,15 @@ export default function Dashboard() {
           <div className="space-y-4">
             <div className="bg-[#0A0A0A] rounded-sm p-6 text-white">
               <Bot className="h-5 w-5 text-[#FF4500] mb-3" />
-              <p className="text-xs tracking-[0.15em] uppercase font-bold text-zinc-400">Human Handled</p>
+              <p className="text-xs tracking-[0.15em] uppercase font-bold text-zinc-400">Atendido por humano</p>
               <p className="text-3xl font-extrabold tracking-tighter mt-1">{m?.human_handled ?? "—"}</p>
-              <p className="text-xs text-zinc-500 mt-1">conversations off bot</p>
+              <p className="text-xs text-zinc-500 mt-1">conversaciones fuera del bot</p>
             </div>
             <div className="bg-white border border-zinc-200 rounded-sm p-6">
               <CheckSquare className="h-5 w-5 text-[#FF4500] mb-3" />
-              <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#52525B]">Open Tasks</p>
+              <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#52525B]">Tareas abiertas</p>
               <p className="text-3xl font-extrabold tracking-tighter mt-1 text-[#0A0A0A]">{m?.open_tasks ?? "—"}</p>
-              <button onClick={() => navigate("/tasks")} className="text-xs font-semibold text-[#FF4500] mt-2" data-testid="view-tasks-link">View tasks →</button>
+              <button onClick={() => navigate("/tasks")} className="text-xs font-semibold text-[#FF4500] mt-2" data-testid="view-tasks-link">Ver tareas →</button>
             </div>
           </div>
         </div>
@@ -154,9 +166,9 @@ export default function Dashboard() {
         {/* Recent conversations */}
         <div className="bg-white border border-zinc-200 rounded-sm">
           <div className="flex items-center justify-between p-5 border-b border-zinc-200">
-            <h3 className="text-lg font-bold tracking-tight text-[#0A0A0A]">Recent Conversations</h3>
+            <h3 className="text-lg font-bold tracking-tight text-[#0A0A0A]">Conversaciones recientes</h3>
             <button onClick={() => navigate("/inbox")} className="text-sm font-semibold text-[#FF4500] flex items-center gap-1" data-testid="view-inbox-link">
-              Open inbox <ArrowUpRight className="h-4 w-4" />
+              Abrir bandeja <ArrowUpRight className="h-4 w-4" />
             </button>
           </div>
           <div className="divide-y divide-zinc-100">
@@ -174,9 +186,9 @@ export default function Dashboard() {
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {!c.bot_enabled && (
-                    <span className="text-xs font-bold text-[#FF4500] bg-[#FFF7ED] border border-[#FED7AA] rounded-full px-2 py-0.5">HUMAN</span>
+                    <span className="text-xs font-bold text-[#FF4500] bg-[#FFF7ED] border border-[#FED7AA] rounded-full px-2 py-0.5">HUMANO</span>
                   )}
-                  <StatusBadge list={[{ key: "open", label: "Open", color: "#064E3B", bg: "#ECFDF5" }, { key: "pending", label: "Pending", color: "#EAB308", bg: "#FEFCE8" }, { key: "resolved", label: "Resolved", color: "#52525B", bg: "#F4F4F5" }]} value={c.status} />
+                  <StatusBadge list={CONV_STATUSES} value={c.status} />
                 </div>
               </button>
             ))}

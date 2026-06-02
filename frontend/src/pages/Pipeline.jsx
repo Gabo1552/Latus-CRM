@@ -16,7 +16,7 @@ export default function Pipeline() {
 
   const move = useMutation({
     mutationFn: ({ id, status }) => api.patch(`/leads/${id}`, { status }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["leads"] }); toast.success("Stage updated"); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["leads"] }); toast.success("Etapa actualizada"); },
   });
 
   const onDrop = (status) => {
