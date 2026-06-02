@@ -1,0 +1,102 @@
+{
+  "project_name": "Sales CRM - WhatsApp Conversational Interface",
+  "theme": "light",
+  "archetype": "Archetype 4 (Swiss & High-Contrast) + Energetic Sales Accent",
+  "emotional_tone": "Focused, precise, energetic. A high-performance command center for sales velocity.",
+  "colors": {
+    "background": "#F9F9F7",
+    "surface": "#FFFFFF",
+    "surface_secondary": "#F4F4F5",
+    "primary": "#FF4500",
+    "primary_hover": "#E63E00",
+    "text_main": "#0A0A0A",
+    "text_muted": "#52525B",
+    "border": "#E4E4E7",
+    "success": "#064E3B",
+    "warning": "#EAB308",
+    "danger": "#DC2626",
+    "sidebar_bg": "#0A0A0A",
+    "sidebar_text": "#FFFFFF",
+    "ai_surface": "#FFF7ED",
+    "ai_border": "#FED7AA"
+  },
+  "typography": {
+    "heading_font": "Manrope",
+    "body_font": "IBM Plex Sans",
+    "hierarchy": {
+      "h1": "text-4xl tracking-tighter font-extrabold text-[#0A0A0A]",
+      "h2": "text-2xl tracking-tight font-bold text-[#0A0A0A]",
+      "h3": "text-xl tracking-tight font-semibold text-[#0A0A0A]",
+      "h4": "text-lg font-semibold text-[#0A0A0A]",
+      "body": "text-sm leading-relaxed text-[#52525B]",
+      "overline": "text-xs tracking-[0.2em] uppercase font-bold text-[#52525B]"
+    }
+  },
+  "spacing_and_layout": {
+    "container_padding": "p-6 md:p-8",
+    "dashboard_grid": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6",
+    "card_padding": "p-5",
+    "border_radius": "rounded-sm",
+    "surface_style": "Grid Borders: Flat surfaces, sharp 1px borders, no shadows. Emphasize data clarity.",
+    "inbox_layout": "flex h-[calc(100vh-64px)] w-full overflow-hidden bg-white border-t border-zinc-200",
+    "inbox_panels": {
+      "left_list": "w-80 border-r border-zinc-200 flex flex-col bg-zinc-50",
+      "middle_thread": "flex-1 flex flex-col bg-white",
+      "right_ai_context": "w-80 border-l border-zinc-200 flex flex-col bg-zinc-50"
+    },
+    "kanban_layout": "flex gap-4 overflow-x-auto pb-6 h-full items-start"
+  },
+  "components_strategy": {
+    "buttons": "rounded-sm font-semibold px-4 py-2 transition-transform hover:-translate-y-[1px] active:translate-y-0",
+    "cards": "bg-white border border-zinc-200 rounded-sm shadow-none transition-colors hover:border-zinc-300",
+    "inputs": "rounded-sm border border-zinc-300 focus:border-[#FF4500] focus:ring-1 focus:ring-[#FF4500] bg-white",
+    "badges": "rounded-full px-2.5 py-0.5 text-xs font-semibold border",
+    "ai_panel": "border border-[#FED7AA] bg-[#FFF7ED] rounded-sm p-4 relative",
+    "shadcn_overrides": {
+      "tabs": "Override h-9 to h-auto. Use underline style instead of pill style for a more Swiss, editorial look.",
+      "dialog": "Remove rounded-lg, use rounded-sm. No soft backdrop blur, use a solid bg-black/40 overlay.",
+      "avatar": "Use square avatars with rounded-sm corners instead of full circles to match the Swiss Grid aesthetic."
+    }
+  },
+  "motion": {
+    "hover": "transition-all duration-200 ease-out",
+    "page_transition": "animate-in fade-in duration-300",
+    "list_stagger": "animate-in slide-in-from-bottom-2 fade-in duration-300"
+  },
+  "media": {
+    "login_background": {
+      "url": "https://images.unsplash.com/photo-1707324148764-99647364afa3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzh8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGdlb21ldHJpYyUyMG9yYW5nZSUyMG1vbm9jaHJvbWUlMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc4MDQ0MDIyNHww&ixlib=rb-4.1.0&q=85",
+      "description": "Abstract wavy orange texture for auth page side panel"
+    },
+    "avatars": [
+      {
+        "url": "https://images.unsplash.com/photo-1560250097-0b93528c311a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDR8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBidXNpbmVzcyUyMHBvcnRyYWl0fGVufDB8fHx8MTc4MDQxNjA0OXww&ixlib=rb-4.1.0&q=85",
+        "description": "Professional male avatar for sales agent"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDR8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBidXNpbmVzcyUyMHBvcnRyYWl0fGVufDB8fHx8MTc4MDQxNjA0OXww&ixlib=rb-4.1.0&q=85",
+        "description": "Professional female avatar for leads"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDR8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBidXNpbmVzcyUyMHBvcnRyYWl0fGVufDB8fHx8MTc4MDQxNjA0OXww&ixlib=rb-4.1.0&q=85",
+        "description": "Professional female avatar for admin"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Build standard React (.js/.jsx) with Tailwind. Do not use TypeScript.",
+    "Strictly follow the High-Contrast Swiss aesthetic. Do not use generic blue defaults. Primary action color must be #FF4500 (Electric Orange).",
+    "Use pure HTML/Tailwind to build the macro grid layouts. Only use Shadcn for interactive logic (Dialogs, Dropdowns, Datepickers).",
+    "All interactive elements MUST include a data-testid attribute (e.g., data-testid='login-button').",
+    "Use 'lucide-react' for all icons. Ensure they are sized appropriately.",
+    "The left-side main app navigation should be highly contrasting: Dark background (#0A0A0A) with white text/icons.",
+    "For the WhatsApp-style inbox, implement a 3-column layout: Left (Contacts/Chats), Middle (Chat Thread), Right (Lead Info & AI Summary). The middle chat thread must use distinct visual bubbles for Bot vs Human.",
+    "AI functionality (Summaries and Suggested Replies) should be visually distinct. Use the ai_surface color (#FFF7ED) and an icon to indicate machine-generated assistance.",
+    "Kanban board should use the bento-grid approach. Columns should have a light zinc background, cards should be solid white with a 1px border.",
+    "Ensure 'Bot to Human' handoff toggle is prominent in the conversation header."
+  ],
+  "accessibility": {
+    "contrast": "Ensure text over Electric Orange buttons is white. Body text on white backgrounds should be text-[#52525B] or darker.",
+    "focus": "All focusable elements must have focus:ring-2 focus:ring-[#FF4500] focus:outline-none focus:ring-offset-1."
+  }
+}
