@@ -8,7 +8,7 @@ import {
 import { toast } from "sonner";
 import api from "@/lib/api";
 import AppLayout from "@/components/AppLayout";
-import { CONV_STATUSES, PRIORITIES, money, statusMeta } from "@/lib/constants";
+import { CONV_STATUSES, PRIORITIES, LEAD_STATUSES, money, statusMeta } from "@/lib/constants";
 import { StatusBadge, Avatar } from "@/components/Bits";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

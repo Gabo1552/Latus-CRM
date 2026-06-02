@@ -33,6 +33,13 @@ Full-stack CRM web app for managing WhatsApp sales conversations: auth, dashboar
 - **In-app Notifications (2026-06-02)**: notifications model + types (new_message, handoff_required, overdue_task, task_due_soon, lead_no_response); header bell with unread count + dropdown; click-to-navigate (conversation/lead/task) + mark read; mark-all-read; new_message on inbound (assigned user or admins/supervisors fallback); handoff_required on bot off; dashboard generates overdue/due-soon task notifs idempotently; conversation unread counters; dashboard "Requires Attention" section (handoffs/unread/overdue); simulate-inbound demo endpoint+button.
 - Tested: 27/27 backend pass (incl. 10 notification tests), all frontend flows pass (iteration_1 & iteration_2).
 
+## Lead-no-response automation + Español + rebrand (2026-06-02)
+- Renombrado a **Latus CRM**; UI 100% en español (nav, badges, notificaciones, dashboard, admin, inbox, prompts de IA en español).
+- Nuevo tipo `lead_no_response`: settings (`lead_no_response_enabled`, `lead_no_response_threshold_hours` default 2, `lead_no_response_business_hours_only` placeholder) vía GET/PATCH `/api/settings` (PATCH solo admin).
+- `scan_lead_no_response()` idempotente: notifica cuando el último mensaje es del cliente, sin respuesta de bot/humano, conversación no resuelta, lead no ganado/perdido, y supera el umbral; asigna al responsable o admins/supervisores. Corre en el dashboard y vía POST `/api/automations/lead-no-response/scan`.
+- Dashboard "Requiere atención" ahora incluye columna "Lead sin respuesta". Panel admin con tarjeta de configuración del umbral.
+- Tests backend: `/app/backend/tests/test_lead_no_response.py` (17 casos, 16/16 efectivos pass) cubriendo los 6 escenarios requeridos. iteration_3.json.
+
 ## Backlog / Next
 - P1: Real WhatsApp webhook ingestion (`/api/webhooks/whatsapp`) — backend already structured for it (messages/conversations model ready).
 - P1: AI streaming (SSE) for summary/suggested reply.
