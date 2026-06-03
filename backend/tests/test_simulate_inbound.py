@@ -108,12 +108,18 @@ class _Coll:
         self.unique_indexes: list[str] = []
 
     def find(self, query=None, projection=None):
-        return _Cursor([d for d in self.docs if _query_matches(d, query or {})])
+        docs = [d for d in self.docs if _query_matches(d, query or {})]
+        if projection and projection.get("_id") == 0:
+            docs = [{k: v for k, v in d.items() if k != "_id"} for d in docs]
+        return _Cursor(docs)
 
     async def find_one(self, query, projection=None, sort=None):
         for d in self.docs:
             if _query_matches(d, query):
-                return dict(d)
+                out = dict(d)
+                if projection and projection.get("_id") == 0:
+                    out.pop("_id", None)
+                return out
         return None
 
     async def insert_one(self, doc):
@@ -164,7 +170,8 @@ class _FakeDB:
         for name in ("users", "user_sessions", "contacts", "leads",
                      "conversations", "messages", "notifications", "settings",
                      "wa_status", "whatsapp_events", "app_secrets", "tasks",
-                     "notes", "bot_events", "bot_settings"):
+                     "notes", "bot_events", "bot_settings", "ai_usage_logs",
+                     "pricing_config"):
             setattr(self, name, _Coll(name))
 
 

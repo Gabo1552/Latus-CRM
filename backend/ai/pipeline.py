@@ -60,7 +60,7 @@ async def _load_bot_settings(db) -> dict:
     return {**DEFAULT_BOT_SETTINGS, **doc}
 
 
-async def regenerate_summary(db, conv_id: str) -> dict:
+async def regenerate_summary(db, conv_id: str, *, user_id: str | None = None) -> dict:
     msgs = await db.messages.find({"conversation_id": conv_id}, {"_id": 0}) \
         .sort("created_at", -1).to_list(20)
     msgs.reverse()
@@ -71,6 +71,9 @@ async def regenerate_summary(db, conv_id: str) -> dict:
             system_prompt=build_summary_only_prompt(),
             user_messages_block=block or "(sin mensajes)",
             model="gpt-4o-mini",
+            purpose="summary_regen",
+            conversation_id=conv_id,
+            user_id=user_id,
         )
     except LLMUnavailable as e:
         return {"summary": "", "error": str(e)}
@@ -83,7 +86,7 @@ async def regenerate_summary(db, conv_id: str) -> dict:
     return {"summary": summary, "last_summary_at": _now_iso()}
 
 
-async def suggest_reply(db, conv_id: str) -> dict:
+async def suggest_reply(db, conv_id: str, *, user_id: str | None = None) -> dict:
     conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
     if not conv: return {"draft": "", "confidence": 0.0, "error": "conv not found"}
     settings = await _load_bot_settings(db)
@@ -102,7 +105,10 @@ async def suggest_reply(db, conv_id: str) -> dict:
     try:
         parsed, _ = await call_llm_json(db=db, system_prompt=sp,
                                         user_messages_block=block,
-                                        model=settings["model"])
+                                        model=settings["model"],
+                                        purpose="suggest_reply",
+                                        conversation_id=conv_id,
+                                        user_id=user_id)
     except LLMUnavailable as e:
         return {"draft": "", "confidence": 0.0, "error": str(e)}
     return {"draft": (parsed.get("reply") or "").strip(),
@@ -187,7 +193,10 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         try:
             parsed, raw = await call_llm_json(db=db, system_prompt=sp,
                                               user_messages_block=block or "(sin mensajes)",
-                                              model=model_override)
+                                              model=model_override,
+                                              purpose="bot_pipeline",
+                                              conversation_id=conv_id,
+                                              message_id=triggered_by_message_id)
         except LLMUnavailable as e:
             return await _finish(db, event, decision="no_action",
                                  reason=f"LLM no disponible: {e}",

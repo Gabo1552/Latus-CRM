@@ -507,6 +507,7 @@ def mask_key(plain: str | None) -> str:
 # Local re-export, useful for the test endpoint
 async def test_provider_connectivity(db) -> dict:
     """Issue a single 'echo' prompt and return diagnostic info."""
+    from .usage import call_with_logging
     try:
         provider = await get_provider(db)
     except LLMUnavailable as e:
@@ -515,7 +516,9 @@ async def test_provider_connectivity(db) -> dict:
               "sin texto extra ni code fences.")
     user = "Responde en JSON: {\"ok\": true, \"echo\": \"latus\"}"
     try:
-        res = await provider.chat(system_prompt=system, user_block=user)
+        res = await call_with_logging(db, provider, system_prompt=system,
+                                      user_block=user,
+                                      purpose="connection_test")
     except LLMUnavailable as e:
         return {"ok": False, "error": str(e), "latency_ms": 0,
                 "model": provider.model, "provider": provider.name}

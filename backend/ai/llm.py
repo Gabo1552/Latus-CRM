@@ -1,8 +1,8 @@
 """Backwards-compatible LLM JSON helper.
 
-Routes through the configurable multi-provider client in :mod:`providers`. The
-public API (``call_llm_json``, ``LLMUnavailable``) is kept identical so the
-existing pipeline and tests don't need to change.
+Routes through the configurable multi-provider client in :mod:`providers`
+with usage logging via :mod:`usage`. The public API (``call_llm_json``,
+``LLMUnavailable``) is kept so the existing pipeline doesn't need to change.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from .providers import LLMUnavailable, get_provider  # re-exported
+from .usage import call_with_logging
 
 logger = logging.getLogger(__name__)
 
@@ -23,15 +24,22 @@ async def call_llm_json(
     system_prompt: str,
     user_messages_block: str,
     model: str | None = None,
+    purpose: str = "bot_pipeline",
+    conversation_id: str | None = None,
+    message_id: str | None = None,
+    user_id: str | None = None,
 ) -> tuple[dict[str, Any], str]:
-    """Call the configured LLM and return ``(parsed_json, raw_text)``.
-
-    ``model`` overrides the configured one (used when bot_settings.model is
-    pinned per-conversation).
-    """
+    """Call the configured LLM, log usage, and return ``(parsed_json, raw_text)``."""
     provider = await get_provider(db, override_model=model)
-    res = await provider.chat(system_prompt=system_prompt,
-                              user_block=user_messages_block)
+    res = await call_with_logging(
+        db, provider,
+        system_prompt=system_prompt,
+        user_block=user_messages_block,
+        purpose=purpose,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        user_id=user_id,
+    )
     return _parse_json_response(res.content), (res.content or "")[:8000]
 
 

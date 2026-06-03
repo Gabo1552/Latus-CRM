@@ -1920,6 +1920,180 @@ async def admin_test_ai_provider(admin: User = Depends(require_admin)):
     return await ai_providers.test_provider_connectivity(db)
 
 
+# ---------------------------------------------------------------------------
+# AI usage logs + pricing (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def _date_bounds(from_str: str | None, to_str: str | None) -> tuple[str, str]:
+    """Return (from_iso, to_iso) covering an inclusive day range. Defaults: month-to-date."""
+    today = datetime.now(timezone.utc).date()
+    try:
+        d_to = datetime.strptime(to_str, "%Y-%m-%d").date() if to_str else today
+    except Exception:
+        raise HTTPException(400, "Parámetro 'to' inválido (YYYY-MM-DD)")
+    try:
+        d_from = datetime.strptime(from_str, "%Y-%m-%d").date() if from_str \
+            else d_to.replace(day=1)
+    except Exception:
+        raise HTTPException(400, "Parámetro 'from' inválido (YYYY-MM-DD)")
+    if d_from > d_to:
+        raise HTTPException(400, "'from' no puede ser mayor que 'to'")
+    f = datetime.combine(d_from, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+    t = datetime.combine(d_to,   datetime.max.time(), tzinfo=timezone.utc).isoformat()
+    return f, t
+
+
+def _build_usage_filter(from_iso: str, to_iso: str, model: str | None,
+                       status: str | None, conversation_id: str | None = None) -> dict:
+    q: dict = {"created_at": {"$gte": from_iso, "$lte": to_iso}}
+    if model:           q["model"] = model
+    if status:          q["status"] = status
+    if conversation_id: q["conversation_id"] = conversation_id
+    return q
+
+
+@api_router.get("/admin/ai-usage/summary")
+async def admin_ai_usage_summary(
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
+    model: str | None = None,
+    status: str | None = None,
+    admin: User = Depends(require_admin),
+):
+    f, t = _date_bounds(from_, to)
+    q = _build_usage_filter(f, t, model, status)
+    logs = await db.ai_usage_logs.find(q, {"_id": 0}).to_list(50_000)
+    total_calls = len(logs)
+    success_calls = sum(1 for l in logs if l.get("status") == "success")
+    error_calls = total_calls - success_calls
+    total_tokens = sum(int(l.get("total_tokens") or 0) for l in logs)
+    total_cost = round(sum(float(l.get("estimated_cost_usd") or 0.0) for l in logs), 6)
+
+    by_model: dict[str, dict] = {}
+    by_day: dict[str, dict] = {}
+    by_conv: dict[str, dict] = {}
+    for l in logs:
+        m = l.get("model") or "unknown"
+        bm = by_model.setdefault(m, {"model": m, "calls": 0, "tokens": 0, "cost_usd": 0.0})
+        bm["calls"] += 1
+        bm["tokens"] += int(l.get("total_tokens") or 0)
+        bm["cost_usd"] = round(bm["cost_usd"] + float(l.get("estimated_cost_usd") or 0.0), 6)
+
+        d = (l.get("created_at") or "")[:10]
+        bd = by_day.setdefault(d, {"date": d, "calls": 0, "tokens": 0, "cost_usd": 0.0})
+        bd["calls"] += 1
+        bd["tokens"] += int(l.get("total_tokens") or 0)
+        bd["cost_usd"] = round(bd["cost_usd"] + float(l.get("estimated_cost_usd") or 0.0), 6)
+
+        cid = l.get("conversation_id")
+        if cid:
+            bc = by_conv.setdefault(cid, {"conversation_id": cid, "calls": 0, "cost_usd": 0.0})
+            bc["calls"] += 1
+            bc["cost_usd"] = round(bc["cost_usd"] + float(l.get("estimated_cost_usd") or 0.0), 6)
+
+    top_conversations = sorted(by_conv.values(), key=lambda x: x["cost_usd"], reverse=True)[:10]
+    return {
+        "from": f[:10], "to": t[:10],
+        "total_calls": total_calls,
+        "success_calls": success_calls,
+        "error_calls": error_calls,
+        "total_tokens": total_tokens,
+        "total_cost_usd": total_cost,
+        "by_model": sorted(by_model.values(), key=lambda x: x["cost_usd"], reverse=True),
+        "by_day": sorted(by_day.values(), key=lambda x: x["date"]),
+        "top_conversations": top_conversations,
+    }
+
+
+@api_router.get("/admin/ai-usage/logs")
+async def admin_ai_usage_logs(
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
+    model: str | None = None,
+    status: str | None = None,
+    conversation_id: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    admin: User = Depends(require_admin),
+):
+    f, t = _date_bounds(from_, to)
+    q = _build_usage_filter(f, t, model, status, conversation_id)
+    total = await db.ai_usage_logs.count_documents(q)
+    items = await db.ai_usage_logs.find(q, {"_id": 0}) \
+        .sort("created_at", -1).to_list(offset + limit)
+    return {"items": items[offset:offset + limit], "total": total,
+            "limit": limit, "offset": offset}
+
+
+@api_router.get("/admin/ai-usage/quick")
+async def admin_ai_usage_quick(admin: User = Depends(require_admin)):
+    today = datetime.now(timezone.utc).date()
+    today_iso_f = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+    month_iso_f = datetime.combine(today.replace(day=1), datetime.min.time(),
+                                   tzinfo=timezone.utc).isoformat()
+
+    async def _agg(query):
+        items = await db.ai_usage_logs.find(query, {"_id": 0}).to_list(50_000)
+        return {
+            "calls": len(items),
+            "tokens": sum(int(i.get("total_tokens") or 0) for i in items),
+            "cost_usd": round(sum(float(i.get("estimated_cost_usd") or 0.0) for i in items), 6),
+        }
+
+    today_stats   = await _agg({"created_at": {"$gte": today_iso_f}})
+    month_stats   = await _agg({"created_at": {"$gte": month_iso_f}})
+    all_stats     = await _agg({})
+
+    by_model: dict[str, int] = {}
+    all_logs = await db.ai_usage_logs.find({}, {"_id": 0, "model": 1}).to_list(50_000)
+    for l in all_logs:
+        m = l.get("model") or "unknown"
+        by_model[m] = by_model.get(m, 0) + 1
+    top_model = max(by_model.items(), key=lambda kv: kv[1]) if by_model else None
+    total_calls_all = sum(by_model.values()) or 1
+    top_model_payload = (
+        {"model": top_model[0],
+         "share_pct": round(top_model[1] * 100.0 / total_calls_all, 1)}
+        if top_model else {"model": None, "share_pct": 0.0}
+    )
+    return {"today": today_stats, "this_month": month_stats,
+            "all_time": all_stats, "top_model": top_model_payload}
+
+
+@api_router.get("/admin/ai-pricing")
+async def admin_ai_pricing_get(admin: User = Depends(require_admin)):
+    from ai import usage as ai_usage
+    pricing = await ai_usage.load_pricing(db)
+    return {"models": pricing, "defaults": ai_usage.DEFAULT_PRICING}
+
+
+class AIPriceItem(BaseModel):
+    model: str
+    input_per_million: float
+    output_per_million: float
+
+
+@api_router.put("/admin/ai-pricing")
+async def admin_ai_pricing_put(item: AIPriceItem,
+                               admin: User = Depends(require_admin)):
+    from ai import usage as ai_usage
+    try:
+        result = await ai_usage.save_pricing(db, item.model, item.input_per_million,
+                                             item.output_per_million,
+                                             user_id=admin.user_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"models": result, "defaults": ai_usage.DEFAULT_PRICING}
+
+
+@api_router.post("/admin/ai-pricing/reset")
+async def admin_ai_pricing_reset(admin: User = Depends(require_admin)):
+    from ai import usage as ai_usage
+    result = await ai_usage.reset_pricing(db, user_id=admin.user_id)
+    return {"models": result, "defaults": ai_usage.DEFAULT_PRICING}
+
+
 async def _can_use_bot_for_conv(conv: dict, user: User) -> bool:
     if user.role == "viewer":
         return False
@@ -1956,7 +2130,7 @@ async def bot_summary_regen(conv_id: str, user: User = Depends(get_current_user)
         raise HTTPException(404, "Conversation not found")
     if not await _can_use_bot_for_conv(conv, user):
         raise HTTPException(403, "Sin permisos")
-    return await regenerate_summary(db, conv_id)
+    return await regenerate_summary(db, conv_id, user_id=user.user_id)
 
 
 @api_router.post("/conversations/{conv_id}/bot/reactivate")
@@ -1981,7 +2155,7 @@ async def bot_suggest_reply(conv_id: str, user: User = Depends(get_current_user)
         raise HTTPException(404, "Conversation not found")
     if not await _can_use_bot_for_conv(conv, user):
         raise HTTPException(403, "Sin permisos")
-    return await suggest_reply(db, conv_id)
+    return await suggest_reply(db, conv_id, user_id=user.user_id)
 
 
 @api_router.patch("/conversations/{conv_id}")
@@ -2535,6 +2709,11 @@ async def _ensure_indexes() -> None:
             "triggered_by_message_id", unique=True, sparse=True,
             name="ux_bot_events_trigger",
         )
+        await db.ai_usage_logs.create_index([("created_at", -1), ("status", 1)],
+                                            name="ix_ai_usage_dt_status")
+        await db.ai_usage_logs.create_index("model", name="ix_ai_usage_model")
+        await db.ai_usage_logs.create_index("conversation_id",
+                                            sparse=True, name="ix_ai_usage_conv")
     except Exception as e:  # pragma: no cover - best-effort
         logger.warning("ensure_indexes failed: %s", e)
 

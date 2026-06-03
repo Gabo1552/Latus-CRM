@@ -124,7 +124,8 @@ def _llm_factory(*, decision="reply_with_bot", confidence=0.85, reply="¡Hola An
                  lead_status=None, bot_status=None, evidence="",
                  human_reason=None):
     """Returns an async fake for call_llm_json."""
-    async def fake(*, system_prompt, user_messages_block, model="gpt-4o-mini", db=None):
+    async def fake(*, system_prompt, user_messages_block, model="gpt-4o-mini",
+                   db=None, **_kw):
         parsed = {
             "intent": intent, "confidence": confidence, "decision": decision,
             "reply": reply, "human_required_reason": human_reason,
