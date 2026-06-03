@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import {
   Users as UsersIcon, MessageSquareText, Plus, MoreHorizontal, Search,
   Copy, RefreshCw, CheckCircle2, AlertTriangle, KeyRound, Trash2, Eye, EyeOff,
+  Bot, Sparkles, Lightbulb,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import { useAuth } from "@/context/AuthContext";
@@ -15,6 +16,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -832,6 +834,290 @@ function WhatsAppTab() {
 
 
 // =============================================================================
+// BOT IA TAB
+// =============================================================================
+function BotIATab() {
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ["admin-bot-settings"],
+    queryFn: () => api.get("/admin/bot-settings").then((r) => r.data),
+  });
+
+  const [draft, setDraft] = useState(null);
+  useEffect(() => { if (q.data && draft === null) setDraft({ ...q.data }); }, [q.data, draft]);
+
+  const save = useMutation({
+    mutationFn: (payload) => api.patch("/admin/bot-settings", payload),
+    onSuccess: (r) => {
+      setDraft({ ...r.data });
+      qc.invalidateQueries({ queryKey: ["admin-bot-settings"] });
+      toast.success("Cambios guardados");
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "No se pudieron guardar los cambios"),
+  });
+
+  if (q.isPending || !draft) return <div className="text-[#52525B]">Cargando…</div>;
+
+  const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
+  const faqs = Array.isArray(draft.faqs) ? draft.faqs : [];
+  const thresh = Number(draft.confidence_threshold ?? 0.7);
+  const ctxMax = Number(draft.recent_messages_context_max ?? 12);
+  const threshInvalid = !(thresh >= 0 && thresh <= 1);
+  const ctxInvalid = !(ctxMax >= 3 && ctxMax <= 50);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(q.data);
+
+  const onSave = () => {
+    if (threshInvalid) {
+      toast.error("La confianza mínima debe estar entre 0 y 1");
+      return;
+    }
+    if (ctxInvalid) {
+      toast.error("Los mensajes de contexto deben estar entre 3 y 50");
+      return;
+    }
+    const payload = {
+      bot_enabled_default: !!draft.bot_enabled_default,
+      confidence_threshold: thresh,
+      recent_messages_context_max: ctxMax,
+      business_instructions: draft.business_instructions || "",
+      handoff_rules: draft.handoff_rules || "",
+      tone: draft.tone || "",
+      model: draft.model || "gpt-4o-mini",
+      faqs: faqs
+        .map((f) => ({ q: (f.q || "").trim(), a: (f.a || "").trim() }))
+        .filter((f) => f.q && f.a),
+    };
+    save.mutate(payload);
+  };
+
+  return (
+    <div className="space-y-6" data-testid="bot-ia-tab">
+      <div className="bg-white border border-zinc-200 rounded-sm p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <Bot className="h-5 w-5 text-[#FF4500]" />
+          <h2 className="text-xl font-bold tracking-tight text-[#0A0A0A]">Asistente de IA</h2>
+        </div>
+        <p className="text-sm text-[#52525B] mb-5">
+          Configurá cómo responde el bot a los mensajes entrantes de WhatsApp. Los cambios
+          impactan en todas las conversaciones nuevas y en las que tengan el bot habilitado.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {/* Default bot on/off */}
+          <div className="flex items-start justify-between gap-4 p-3 border border-zinc-200 rounded-sm">
+            <div>
+              <Label className="text-sm font-bold text-[#0A0A0A]">Bot habilitado por defecto</Label>
+              <p className="text-xs text-[#52525B] mt-0.5">
+                Si está activo, cada conversación nueva arranca con el bot encendido.
+              </p>
+            </div>
+            <Switch
+              data-testid="bot-setting-enabled-default"
+              checked={!!draft.bot_enabled_default}
+              onCheckedChange={(v) => set({ bot_enabled_default: v })}
+            />
+          </div>
+
+          {/* Model */}
+          <div className="p-3 border border-zinc-200 rounded-sm">
+            <Label className="text-sm font-bold text-[#0A0A0A]">Modelo</Label>
+            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+              El modelo de OpenAI que genera las respuestas.
+            </p>
+            <Select value={draft.model || "gpt-4o-mini"} onValueChange={(v) => set({ model: v })}>
+              <SelectTrigger data-testid="bot-setting-model" className="rounded-sm h-9 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="gpt-4o-mini">gpt-4o-mini (recomendado)</SelectItem>
+                <SelectItem value="gpt-4o">gpt-4o (más preciso, más caro)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Confidence threshold */}
+          <div className="p-3 border border-zinc-200 rounded-sm">
+            <div className="flex items-center justify-between mb-1">
+              <Label className="text-sm font-bold text-[#0A0A0A]">Confianza mínima</Label>
+              <span data-testid="bot-setting-threshold-value" className="text-sm font-mono font-bold text-[#FF4500]">
+                {thresh.toFixed(2)}
+              </span>
+            </div>
+            <p className="text-xs text-[#52525B] mb-2">
+              Si la respuesta del bot tiene una confianza menor, deriva a un humano.
+            </p>
+            <input
+              data-testid="bot-setting-threshold-slider"
+              type="range" min="0" max="1" step="0.05"
+              value={thresh}
+              onChange={(e) => set({ confidence_threshold: parseFloat(e.target.value) })}
+              className="w-full accent-[#FF4500]"
+            />
+            {threshInvalid && (
+              <p className="text-[11px] text-[#DC2626] mt-1">El valor debe estar entre 0 y 1.</p>
+            )}
+          </div>
+
+          {/* Context max */}
+          <div className="p-3 border border-zinc-200 rounded-sm">
+            <Label className="text-sm font-bold text-[#0A0A0A]">Mensajes recientes de contexto</Label>
+            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+              Cuántos mensajes previos del chat le pasamos al modelo (3 a 50).
+            </p>
+            <Input
+              data-testid="bot-setting-ctxmax"
+              type="number" min="3" max="50"
+              value={ctxMax}
+              onChange={(e) => set({ recent_messages_context_max: parseInt(e.target.value, 10) || 0 })}
+              className="rounded-sm h-9"
+            />
+            {ctxInvalid && (
+              <p className="text-[11px] text-[#DC2626] mt-1">Debe estar entre 3 y 50.</p>
+            )}
+          </div>
+
+          {/* Tone */}
+          <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
+            <Label className="text-sm font-bold text-[#0A0A0A]">Tono</Label>
+            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+              Una línea describiendo cómo querés que suene (ej.: profesional, cercano, conciso).
+            </p>
+            <Input
+              data-testid="bot-setting-tone"
+              value={draft.tone || ""}
+              onChange={(e) => set({ tone: e.target.value })}
+              className="rounded-sm h-9"
+              placeholder="profesional, cercano, conciso"
+            />
+          </div>
+
+          {/* Business instructions */}
+          <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
+            <Label className="text-sm font-bold text-[#0A0A0A]">Instrucciones del negocio</Label>
+            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+              Información que el bot puede usar: productos, precios, condiciones, políticas, horarios.
+              Esto se inyecta como sistema en cada llamada al modelo.
+            </p>
+            <Textarea
+              data-testid="bot-setting-instructions"
+              value={draft.business_instructions || ""}
+              onChange={(e) => set({ business_instructions: e.target.value })}
+              className="rounded-sm min-h-[140px] font-mono text-xs"
+              placeholder="Ej.: Vendemos planes mensuales desde $X. Envío gratis a CABA y GBA. Horario de atención humana: lun a vie 9–18hs..."
+            />
+          </div>
+
+          {/* Handoff rules */}
+          <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
+            <Label className="text-sm font-bold text-[#0A0A0A]">Reglas de derivación a humano</Label>
+            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+              Cuándo el bot debe pasar el chat a un agente humano.
+            </p>
+            <Textarea
+              data-testid="bot-setting-handoff"
+              value={draft.handoff_rules || ""}
+              onChange={(e) => set({ handoff_rules: e.target.value })}
+              className="rounded-sm min-h-[100px] text-xs"
+              placeholder="Ej.: 1) cliente pide hablar con humano; 2) cliente comparte DNI/CBU/tarjeta; ..."
+            />
+          </div>
+
+          {/* FAQs */}
+          <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
+            <div className="flex items-center justify-between mb-1">
+              <Label className="text-sm font-bold text-[#0A0A0A] flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5 text-[#FF4500]" /> Preguntas frecuentes (FAQ)
+              </Label>
+              <span className="text-xs text-[#52525B]">{faqs.length} item(s)</span>
+            </div>
+            <p className="text-xs text-[#52525B] mb-2">
+              Cada par P/R se pasa al modelo para responder con precisión.
+            </p>
+            <div className="space-y-2">
+              {faqs.map((f, i) => (
+                <div key={i} className="flex items-start gap-2" data-testid={`faq-row-${i}`}>
+                  <Input
+                    data-testid={`faq-q-${i}`}
+                    placeholder="Pregunta del cliente"
+                    value={f.q || ""}
+                    onChange={(e) => {
+                      const next = [...faqs]; next[i] = { ...next[i], q: e.target.value };
+                      set({ faqs: next });
+                    }}
+                    className="rounded-sm h-9 text-xs"
+                  />
+                  <Input
+                    data-testid={`faq-a-${i}`}
+                    placeholder="Respuesta a usar"
+                    value={f.a || ""}
+                    onChange={(e) => {
+                      const next = [...faqs]; next[i] = { ...next[i], a: e.target.value };
+                      set({ faqs: next });
+                    }}
+                    className="rounded-sm h-9 text-xs"
+                  />
+                  <Button
+                    data-testid={`faq-remove-${i}`}
+                    variant="outline"
+                    onClick={() => set({ faqs: faqs.filter((_, j) => j !== i) })}
+                    className="rounded-sm h-9 px-2"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+            <Button
+              data-testid="faq-add"
+              variant="outline"
+              onClick={() => set({ faqs: [...faqs, { q: "", a: "" }] })}
+              className="rounded-sm mt-2 h-8 text-xs"
+            >
+              <Plus className="h-3.5 w-3.5 mr-1" /> Agregar pregunta
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 mt-6 pt-4 border-t border-zinc-200">
+          <Button
+            data-testid="bot-settings-reset"
+            variant="outline"
+            onClick={() => setDraft({ ...q.data })}
+            disabled={!dirty}
+            className="rounded-sm"
+          >
+            Descartar cambios
+          </Button>
+          <Button
+            data-testid="bot-settings-save"
+            onClick={onSave}
+            disabled={!dirty || save.isPending || threshInvalid || ctxInvalid}
+            className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm"
+          >
+            {save.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+            Guardar cambios
+          </Button>
+        </div>
+      </div>
+
+      <details className="bg-zinc-50 border border-zinc-200 rounded-sm px-4 py-3" data-testid="bot-help-details">
+        <summary className="cursor-pointer text-sm font-bold text-[#0A0A0A] flex items-center gap-2">
+          <Lightbulb className="h-3.5 w-3.5 text-[#FF4500]" /> Cómo funciona el bot
+        </summary>
+        <ul className="list-disc pl-5 space-y-1 mt-3 text-xs text-[#52525B]">
+          <li>Cada mensaje entrante del cliente en WhatsApp dispara una llamada al modelo configurado en <b>EMERGENT_LLM_KEY</b>.</li>
+          <li>El bot decide si responder, derivar a humano, actualizar estado del lead, o no hacer nada.</li>
+          <li>Si detecta DNI/CBU/tarjeta o si el cliente pide hablar con un humano, deriva sin contestar.</li>
+          <li>Si la confianza es menor al umbral configurado, deriva a humano.</li>
+          <li>Cada conversación tiene su <b>resumen</b> y <b>intención</b> detectada visibles en la Bandeja.</li>
+        </ul>
+      </details>
+    </div>
+  );
+}
+
+
+// =============================================================================
 // Page shell
 // =============================================================================
 export default function Configuracion() {
@@ -901,9 +1187,21 @@ export default function Configuracion() {
           >
             <MessageSquareText className="h-4 w-4 inline mr-1.5" /> WhatsApp
           </button>
+          <button
+            data-testid="tab-bot-ia"
+            onClick={() => setTab("bot")}
+            className={`px-4 py-2.5 -mb-px text-sm font-bold border-b-2 transition-colors ${
+              tab === "bot"
+                ? "border-[#FF4500] text-[#0A0A0A]"
+                : "border-transparent text-[#52525B] hover:text-[#0A0A0A]"
+            }`}
+          >
+            <Bot className="h-4 w-4 inline mr-1.5" /> Bot IA
+          </button>
         </div>
         {tab === "users" && <UsersTab me={user} />}
         {tab === "whatsapp" && <WhatsAppTab />}
+        {tab === "bot" && <BotIATab />}
       </div>
     </AppLayout>
   );

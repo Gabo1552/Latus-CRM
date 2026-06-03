@@ -2476,6 +2476,10 @@ async def _ensure_indexes() -> None:
         await db.contacts.create_index(
             "whatsapp_id", sparse=True, name="ix_contacts_whatsapp_id",
         )
+        await db.bot_events.create_index(
+            "triggered_by_message_id", unique=True, sparse=True,
+            name="ux_bot_events_trigger",
+        )
     except Exception as e:  # pragma: no cover - best-effort
         logger.warning("ensure_indexes failed: %s", e)
 

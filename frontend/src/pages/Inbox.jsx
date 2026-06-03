@@ -3,8 +3,10 @@ import { useLocation } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Send, Bot, User as UserIcon, Sparkles, Search, Phone, Building2,
-  MessageSquare, Zap, Copy, RefreshCw, ArrowRightLeft,
+  MessageSquare, Zap, Copy, RefreshCw, ArrowRightLeft, AlertOctagon,
+  ChevronRight, Lightbulb,
 } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import AppLayout from "@/components/AppLayout";
@@ -19,6 +21,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 export default function Inbox() {
   const qc = useQueryClient();
   const location = useLocation();
+  const { user } = useAuth();
+  const readOnly = user?.role === "viewer";
   const [activeId, setActiveId] = useState(location.state?.convId || null);
 
   useEffect(() => {
@@ -27,8 +31,8 @@ export default function Inbox() {
   const [filters, setFilters] = useState({ status: "all", priority: "all" });
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState("");
-  const [summary, setSummary] = useState("");
-  const [suggestion, setSuggestion] = useState("");
+  const [suggestionDraft, setSuggestionDraft] = useState("");
+  const [suggestionMeta, setSuggestionMeta] = useState(null); // {confidence, intent}
   const scrollRef = useRef(null);
 
   const params = {};
@@ -49,7 +53,7 @@ export default function Inbox() {
     enabled: !!activeId,
   });
 
-  useEffect(() => { setSummary(""); setSuggestion(""); }, [activeId]);
+  useEffect(() => { setSuggestionDraft(""); setSuggestionMeta(null); }, [activeId]);
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [active?.messages?.length]);
@@ -92,15 +96,43 @@ export default function Inbox() {
     },
   });
 
-  const genSummary = useMutation({
-    mutationFn: () => api.post(`/conversations/${activeId}/ai-summary`),
-    onSuccess: (r) => setSummary(r.data.summary),
-    onError: () => toast.error("Resumen de IA no disponible"),
+  // New AI bot endpoints (replace legacy ai-summary/ai-suggest UI). The legacy
+  // backend endpoints stay intact for backwards compatibility — TODO: deprecate.
+  const regenSummary = useMutation({
+    mutationFn: () => api.post(`/conversations/${activeId}/summary/regenerate`),
+    onSuccess: (r) => {
+      qc.invalidateQueries({ queryKey: ["conversation", activeId] });
+      qc.invalidateQueries({ queryKey: ["conversations"] });
+      if (r.data?.error) toast.error(`Resumen no disponible: ${r.data.error}`);
+      else toast.success("Resumen regenerado");
+    },
+    onError: () => toast.error("No se pudo regenerar el resumen"),
   });
-  const genSuggest = useMutation({
-    mutationFn: () => api.post(`/conversations/${activeId}/ai-suggest`),
-    onSuccess: (r) => setSuggestion(r.data.suggestion),
-    onError: () => toast.error("Sugerencia de IA no disponible"),
+  const suggestReply = useMutation({
+    mutationFn: () => api.post(`/conversations/${activeId}/bot/suggest-reply`),
+    onSuccess: (r) => {
+      if (r.data?.error) {
+        toast.error(`Sugerencia no disponible: ${r.data.error}`);
+        setSuggestionDraft("");
+        setSuggestionMeta(null);
+        return;
+      }
+      setSuggestionDraft(r.data?.draft || "");
+      setSuggestionMeta({
+        confidence: r.data?.confidence ?? 0,
+        intent: r.data?.intent || "",
+      });
+    },
+    onError: () => toast.error("No se pudo generar la sugerencia"),
+  });
+  const reactivateBot = useMutation({
+    mutationFn: () => api.post(`/conversations/${activeId}/bot/reactivate`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["conversation", activeId] });
+      qc.invalidateQueries({ queryKey: ["conversations"] });
+      toast.success("Bot reactivado");
+    },
+    onError: () => toast.error("No se pudo reactivar el bot"),
   });
 
   const simulateInbound = useMutation({
@@ -211,6 +243,7 @@ export default function Inbox() {
                     <Switch
                       data-testid="bot-toggle"
                       checked={active.bot_enabled}
+                      disabled={readOnly}
                       onCheckedChange={(v) => { patchConv.mutate({ bot_enabled: v }); toast.success(v ? "Bot reactivado" : "Traspasado a un agente"); }}
                       className="data-[state=checked]:bg-zinc-400 data-[state=unchecked]:bg-[#FF4500]"
                     />
@@ -241,7 +274,7 @@ export default function Inbox() {
                         : isBot ? "bg-zinc-100 border border-zinc-200"
                         : "bg-[#FF4500] text-white"}`}>
                         {!isCustomer && (
-                          <div className={`flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mb-0.5 ${isBot ? "text-[#52525B]" : "text-orange-100"}`}>
+                          <div className={`flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mb-0.5 ${isBot ? "text-[#FF4500]" : "text-orange-100"}`}>
                             {isBot ? <><Bot className="h-2.5 w-2.5" />Bot</> : <><UserIcon className="h-2.5 w-2.5" />{m.sender_name}</>}
                           </div>
                         )}
@@ -252,7 +285,7 @@ export default function Inbox() {
                             className={`text-[10px] font-semibold mt-1 text-right ${
                               ds === "failed"
                                 ? "text-yellow-200"
-                                : isBot ? "text-[#52525B]" : "text-orange-100"
+                                : isBot ? "text-[#FF4500]" : "text-orange-100"
                             }`}
                           >
                             {dsLabel}
@@ -279,13 +312,14 @@ export default function Inbox() {
                     data-testid="message-input"
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (draft.trim() && !(active.channel === "whatsapp" && waStatus && !waStatus.configured)) sendMsg.mutate(); } }}
-                    placeholder={active.channel === "whatsapp" && waStatus?.configured ? "Escribí una respuesta de WhatsApp…" : "Escribí una respuesta…"}
+                    disabled={readOnly}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!readOnly && draft.trim() && !(active.channel === "whatsapp" && waStatus && !waStatus.configured)) sendMsg.mutate(); } }}
+                    placeholder={readOnly ? "Modo solo lectura" : (active.channel === "whatsapp" && waStatus?.configured ? "Escribí una respuesta de WhatsApp…" : "Escribí una respuesta…")}
                     className="rounded-sm resize-none min-h-[44px] max-h-32"
                   />
                   <Button
                     data-testid="send-message-button"
-                    disabled={!draft.trim() || sendMsg.isPending || (active.channel === "whatsapp" && waStatus && !waStatus.configured)}
+                    disabled={readOnly || !draft.trim() || sendMsg.isPending || (active.channel === "whatsapp" && waStatus && !waStatus.configured)}
                     onClick={() => sendMsg.mutate()}
                     className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm h-11 px-4"
                   >
@@ -326,52 +360,214 @@ export default function Inbox() {
               </div>
             )}
 
-            {/* AI Summary */}
-            <div className="p-4 border-b border-zinc-200">
-              <div className="flex items-center justify-between mb-3">
-                <p className="flex items-center gap-1.5 text-xs tracking-[0.15em] uppercase font-bold text-[#FF4500]"><Sparkles className="h-3.5 w-3.5" /> Resumen de IA</p>
-                <button data-testid="ai-summary-button" onClick={() => genSummary.mutate()} disabled={genSummary.isPending} className="text-xs font-semibold text-[#FF4500] flex items-center gap-1">
-                  {genSummary.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Generar
-                </button>
-              </div>
-              <div className="border border-[#FED7AA] bg-[#FFF7ED] rounded-sm p-3 min-h-[60px]" data-testid="ai-summary-output">
-                {genSummary.isPending ? (
-                  <p className="text-sm text-[#52525B] animate-pulse">Analizando la conversación…</p>
-                ) : summary ? (
-                  <p className="text-sm text-[#0A0A0A] whitespace-pre-wrap">{summary}</p>
-                ) : (
-                  <p className="text-sm text-[#52525B]">Generá un resumen de este chat con IA.</p>
-                )}
-              </div>
-            </div>
-
-            {/* AI Suggested reply */}
-            <div className="p-4">
-              <div className="flex items-center justify-between mb-3">
-                <p className="flex items-center gap-1.5 text-xs tracking-[0.15em] uppercase font-bold text-[#FF4500]"><Zap className="h-3.5 w-3.5" /> Respuesta sugerida</p>
-                <button data-testid="ai-suggest-button" onClick={() => genSuggest.mutate()} disabled={genSuggest.isPending} className="text-xs font-semibold text-[#FF4500] flex items-center gap-1">
-                  {genSuggest.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Generar
-                </button>
-              </div>
-              <div className="border border-[#FED7AA] bg-[#FFF7ED] rounded-sm p-3 min-h-[60px]" data-testid="ai-suggest-output">
-                {genSuggest.isPending ? (
-                  <p className="text-sm text-[#52525B] animate-pulse">Redactando respuesta…</p>
-                ) : suggestion ? (
-                  <>
-                    <p className="text-sm text-[#0A0A0A]">{suggestion}</p>
-                    <div className="flex gap-2 mt-3">
-                      <Button data-testid="use-suggestion-button" size="sm" onClick={() => setDraft(suggestion)} className="bg-[#0A0A0A] hover:bg-[#FF4500] rounded-sm h-7 text-xs flex-1">Usar respuesta</Button>
-                      <Button size="sm" variant="outline" onClick={() => { navigator.clipboard.writeText(suggestion); toast.success("Copiado"); }} className="rounded-sm h-7 px-2"><Copy className="h-3 w-3" /></Button>
-                    </div>
-                  </>
-                ) : (
-                  <p className="text-sm text-[#52525B]">Obtené una respuesta sugerida por IA para el agente.</p>
-                )}
-              </div>
-            </div>
+            {/* AI Bot panel */}
+            <BotPanel
+              conv={active}
+              readOnly={readOnly}
+              regenSummary={regenSummary}
+              suggestReply={suggestReply}
+              reactivateBot={reactivateBot}
+              suggestionDraft={suggestionDraft}
+              setSuggestionDraft={setSuggestionDraft}
+              suggestionMeta={suggestionMeta}
+              clearSuggestion={() => { setSuggestionDraft(""); setSuggestionMeta(null); }}
+              onUseDraft={(text) => { setDraft(text); toast.success("Sugerencia copiada al composer"); }}
+            />
           </div>
         )}
       </div>
     </AppLayout>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Right-sidebar Bot IA panel
+// ---------------------------------------------------------------------------
+const BOT_STATUS_META = {
+  bot_activo:        { label: "Bot activo",         color: "#16A34A", bg: "#DCFCE7", border: "#86EFAC" },
+  esperando_cliente: { label: "Esperando cliente",  color: "#1D4ED8", bg: "#DBEAFE", border: "#93C5FD" },
+  requiere_humano:   { label: "Requiere humano",    color: "#FF4500", bg: "#FFF7ED", border: "#FED7AA" },
+  en_atencion_humana:{ label: "En atención humana", color: "#7C3AED", bg: "#EDE9FE", border: "#C4B5FD" },
+  cerrada:           { label: "Cerrada",            color: "#52525B", bg: "#F4F4F5", border: "#D4D4D8" },
+};
+
+function BotStatusPill({ status }) {
+  const m = BOT_STATUS_META[status] || BOT_STATUS_META.bot_activo;
+  return (
+    <span
+      data-testid={`bot-status-pill-${status || "bot_activo"}`}
+      className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide px-2 py-1 rounded-sm border"
+      style={{ color: m.color, background: m.bg, borderColor: m.border }}
+    >
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: m.color }} />
+      {m.label}
+    </span>
+  );
+}
+
+function BotPanel({
+  conv, readOnly, regenSummary, suggestReply, reactivateBot,
+  suggestionDraft, setSuggestionDraft, suggestionMeta, clearSuggestion, onUseDraft,
+}) {
+  const summary = conv?.summary || "";
+  const botStatus = conv?.bot_status || (conv?.bot_enabled ? "bot_activo" : "en_atencion_humana");
+  const intent = conv?.detected_intent || "";
+  const confidence = conv?.confidence;
+  const reason = (conv?.human_required_reason || "").trim();
+  const nba = (conv?.next_best_action || "").trim();
+  const confidencePct = typeof confidence === "number" && confidence > 0
+    ? `${Math.round(confidence * 100)}%`
+    : null;
+
+  return (
+    <div data-testid="bot-panel" className="p-4 border-b border-zinc-200 space-y-4">
+      <p className="flex items-center gap-1.5 text-xs tracking-[0.15em] uppercase font-bold text-[#FF4500]">
+        <Sparkles className="h-3.5 w-3.5" /> Asistente IA
+      </p>
+
+      {/* Bot status */}
+      <div>
+        <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#52525B] mb-1.5">Estado del bot</p>
+        <div className="flex items-center justify-between gap-2">
+          <BotStatusPill status={botStatus} />
+          {!conv?.bot_enabled && (
+            <Button
+              data-testid="bot-reactivate-button"
+              size="sm"
+              disabled={readOnly || reactivateBot.isPending}
+              onClick={() => reactivateBot.mutate()}
+              className="bg-[#0A0A0A] hover:bg-[#FF4500] rounded-sm h-7 text-xs"
+            >
+              {reactivateBot.isPending ? <RefreshCw className="h-3 w-3 animate-spin mr-1" /> : <Bot className="h-3 w-3 mr-1" />}
+              Reactivar bot
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Intent */}
+      {(intent || confidencePct) && (
+        <div>
+          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#52525B] mb-1.5">Intención detectada</p>
+          <div className="flex items-center justify-between gap-2" data-testid="bot-intent-block">
+            <span className="text-sm font-semibold text-[#0A0A0A]">{intent || "—"}</span>
+            {confidencePct && (
+              <span data-testid="bot-confidence-value" className="text-xs font-bold text-[#52525B] bg-zinc-100 border border-zinc-200 rounded-sm px-1.5 py-0.5">
+                {confidencePct}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Handoff reason — only when present */}
+      {reason && (
+        <div data-testid="bot-handoff-reason" className="border border-[#FED7AA] bg-[#FFF7ED] rounded-sm p-2.5">
+          <p className="flex items-center gap-1 text-[10px] font-bold tracking-[0.12em] uppercase text-[#FF4500] mb-1">
+            <AlertOctagon className="h-3 w-3" /> Motivo de derivación
+          </p>
+          <p className="text-xs text-[#0A0A0A]">{reason}</p>
+        </div>
+      )}
+
+      {/* Next best action */}
+      {nba && (
+        <div data-testid="bot-next-action">
+          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#52525B] mb-1">Próxima acción sugerida</p>
+          <p className="text-xs text-[#0A0A0A] flex items-start gap-1.5">
+            <ChevronRight className="h-3.5 w-3.5 text-[#FF4500] mt-0.5 shrink-0" /> {nba}
+          </p>
+        </div>
+      )}
+
+      {/* Summary */}
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#52525B]">Resumen</p>
+          <button
+            data-testid="bot-summary-regenerate"
+            onClick={() => regenSummary.mutate()}
+            disabled={readOnly || regenSummary.isPending}
+            className="text-[11px] font-semibold text-[#FF4500] flex items-center gap-1 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3 w-3 ${regenSummary.isPending ? "animate-spin" : ""}`} /> Regenerar
+          </button>
+        </div>
+        <div
+          data-testid="bot-summary-output"
+          className="border border-zinc-200 bg-white rounded-sm p-2.5 min-h-[60px] text-sm text-[#0A0A0A] whitespace-pre-wrap"
+        >
+          {regenSummary.isPending
+            ? <span className="text-[#52525B] animate-pulse">Analizando la conversación…</span>
+            : summary
+              ? summary
+              : <span className="text-[#52525B]">Aún no hay resumen. Tocá Regenerar para crearlo.</span>}
+        </div>
+        {conv?.last_summary_at && (
+          <p className="text-[10px] text-[#52525B] mt-1">Actualizado: {new Date(conv.last_summary_at).toLocaleString("es-AR")}</p>
+        )}
+      </div>
+
+      {/* Suggested reply */}
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <p className="flex items-center gap-1 text-[10px] font-bold tracking-[0.12em] uppercase text-[#52525B]">
+            <Lightbulb className="h-3 w-3 text-[#FF4500]" /> Sugerencia de respuesta
+          </p>
+          <button
+            data-testid="bot-suggest-button"
+            onClick={() => suggestReply.mutate()}
+            disabled={readOnly || suggestReply.isPending}
+            className="text-[11px] font-semibold text-[#FF4500] flex items-center gap-1 disabled:opacity-50"
+          >
+            {suggestReply.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+            Sugerir
+          </button>
+        </div>
+        {suggestionDraft ? (
+          <div className="border border-[#FED7AA] bg-[#FFF7ED] rounded-sm p-2.5">
+            <Textarea
+              data-testid="bot-suggestion-textarea"
+              value={suggestionDraft}
+              onChange={(e) => setSuggestionDraft(e.target.value)}
+              className="rounded-sm bg-white text-sm min-h-[80px] mb-2"
+              disabled={readOnly}
+            />
+            {suggestionMeta && (
+              <div className="flex items-center gap-2 text-[10px] text-[#52525B] mb-2">
+                {suggestionMeta.intent && <span>Intención: <b className="text-[#0A0A0A]">{suggestionMeta.intent}</b></span>}
+                {suggestionMeta.confidence > 0 && (
+                  <span>· Confianza: <b className="text-[#0A0A0A]">{Math.round(suggestionMeta.confidence * 100)}%</b></span>
+                )}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Button
+                data-testid="bot-suggestion-use"
+                size="sm"
+                disabled={readOnly || !suggestionDraft.trim()}
+                onClick={() => onUseDraft(suggestionDraft)}
+                className="bg-[#0A0A0A] hover:bg-[#FF4500] rounded-sm h-7 text-xs flex-1"
+              >
+                <Copy className="h-3 w-3 mr-1" /> Copiar al input
+              </Button>
+              <Button
+                data-testid="bot-suggestion-discard"
+                size="sm"
+                variant="outline"
+                onClick={clearSuggestion}
+                className="rounded-sm h-7 text-xs"
+              >
+                Descartar
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="border border-zinc-200 bg-zinc-50 rounded-sm p-2.5 text-xs text-[#52525B]">
+            Generá un borrador editable con la IA basado en el contexto actual.
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

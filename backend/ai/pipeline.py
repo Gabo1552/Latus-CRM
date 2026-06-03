@@ -279,7 +279,7 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                 admins = await db.users.find(
                     {"role": {"$in": ["admin", "supervisor"]}, "active": True,
                      "deleted_at": None}, {"_id": 0, "user_id": 1}).to_list(20)
-                targets = [a["user_id"] for a in admins]
+                targets = [a["user_id"] for a in admins] or [None]
             else:
                 targets = [target_uid]
             for uid in targets:

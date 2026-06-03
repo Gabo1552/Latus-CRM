@@ -1,0 +1,47 @@
+{
+  "summary": "Tested new AI Bot UI (Inbox 'Asistente IA' panel + Configuración 'Bot IA' tab) and new bot HTTP endpoints. 9/12 backend HTTP tests pass; pre-existing test_ai_bot.py pipeline tests still 10/10. Frontend: all required data-testids present and rendered, reactivate flow works end-to-end, Configuración Bot IA tab fully functional and 'Cambios guardados' toast confirmed. CRITICAL: POST /api/conversations/{id}/summary/regenerate and /bot/suggest-reply return 500 (not 200 graceful) due to AttributeError 'LlmChat' has no attribute 'with_max_tokens' in /app/backend/ai/llm.py:40 — pipeline only catches LLMUnavailable so this leaks. Also pre-existing regression: POST /api/conversations/{id}/messages returns 500 (ObjectId in response). Frontend ctxmax=2 client-side validation toast not shown (backend rejects with 400 but UI does not surface the specific message).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/conversations/{id}/summary/regenerate", "issue": "Returns 500 instead of graceful 200 when LLM unavailable. Root cause: /app/backend/ai/llm.py line 40 calls .with_max_tokens(900) on LlmChat, but emergentintegrations LlmChat does not expose that method -> AttributeError. Pipeline catches only LLMUnavailable so this AttributeError propagates to FastAPI as a 500.", "priority": "CRITICAL"},
+      {"endpoint": "POST /api/conversations/{id}/bot/suggest-reply", "issue": "Returns 500 — same root cause as above (LlmChat.with_max_tokens AttributeError in /app/backend/ai/llm.py).", "priority": "CRITICAL"},
+      {"endpoint": "POST /api/conversations/{id}/messages", "issue": "Returns 500 with valid payload {\"body\":\"x\",\"sender_type\":\"agent\"}. Root cause: in server.py send_message() msg_doc is mutated by Motor's insert_one to include an _id ObjectId, then returned directly -> FastAPI jsonable_encoder fails on ObjectId. Likely pre-existing but breaks the explicit regression requirement of this task.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "BotIATab ctxmax validation", "issue": "Setting bot-setting-ctxmax=2 and clicking Guardar does not surface the expected Spanish error toast 'Los mensajes de contexto deben estar entre 3 y 50'. Backend correctly returns 400 (verified separately) but the UI does not display that specific message text. Add client-side validation or surface backend detail in the toast.", "selector": "[data-testid='bot-setting-ctxmax']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "Asistente IA · Regenerar resumen / Sugerir respuesta", "issue": "Buttons fire correctly but backend returns 500 so the suggestion textarea never renders and the summary stays empty. UI does show a 'No se pudo regenerar el resumen' toast (graceful) but the textarea data-testid bot-suggestion-textarea is never produced because the 500 short-circuits the mutation. Once backend is fixed this should auto-resolve.", "affected_selectors": ["[data-testid='bot-summary-regenerate']", "[data-testid='bot-suggest-button']", "[data-testid='bot-suggestion-textarea']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_ai_bot_http.py",
+    "/app/backend/tests/test_ai_bot.py",
+    "/app/test_reports/pytest/pytest_ai_bot_http.xml"
+  ],
+  "action_items": [
+    "Fix /app/backend/ai/llm.py:40 — remove or guard the .with_max_tokens(900) call (emergentintegrations LlmChat builder no longer exposes it). Alternatively wrap the whole call_llm_json body so any unexpected exception is converted to LLMUnavailable so pipeline.regenerate_summary/suggest_reply return the graceful {summary:'',error:...} / {draft:'',error:...} payload required by the spec.",
+    "Fix POST /api/conversations/{id}/messages: do NOT return the raw msg_doc after insert_one (Motor mutates it to include ObjectId _id). Either pop '_id' before return or return msg.model_dump() instead.",
+    "Add client-side validation in BotIATab so ctxmax outside 3..50 shows the Spanish error toast 'Los mensajes de contexto deben estar entre 3 y 50' BEFORE calling PATCH (per spec)."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/ai/pipeline.py regenerate_summary + suggest_reply catch only LLMUnavailable. For robustness against future SDK shape changes, wrap call_llm_json with a broader try/except Exception and return the same graceful error payload — otherwise any SDK breakage 500s the API.",
+    "send_message() returns the in-place mutated insert_one document — same ObjectId leak pattern exists in any endpoint that returns a freshly inserted doc. Audit all insert_one + return msg_doc patterns.",
+    "server.py is now ~2609 lines (was 1066 in iteration_2). Strongly recommend splitting into routers/bot.py + routers/conversations.py + routers/admin.py before next feature.",
+    "Bot endpoints _can_use_bot_for_conv allows admin/supervisor on any conv, agent only if assigned. Good.",
+    "Frontend BotPanel correctly hides bot-reactivate-button when bot_enabled=true and shows it when false — verified by toggling bot off and clicking reactivate (toast 'Bot reactivado' + pill flips to bot_activo)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_ai_bot_http.py (new) — 12 HTTP-level tests covering /admin/bot-settings GET/PATCH, ctxmax/threshold/model validation, /bot/reactivate, /summary/regenerate, /bot/suggest-reply, plus 3 regression tests."
+  ],
+  "success_rate": {"backend": "75% (9/12 new HTTP tests pass; 3 failures are real bugs reported above)", "frontend": "92% (1 missing ctxmax client-side validation toast; everything else verified)"},
+  "test_credentials": "Bearer test_session_admin_persist (admin@latus.test). Cookie session_token=test_session_admin_persist on lead-scan-scheduler.preview.emergentagent.com (sameSite=None, secure).",
+  "seed_data_creation": "No new seed. Persisted bot-settings now have confidence_threshold=0.55 and recent_messages_context_max=12 (restored from test). Added one TEST_regression_msg attempt that 500'd so no message was actually written.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: pytest /app/backend/tests/test_ai_bot_http.py -v --tb=short. The three failing tests (test_summary_regenerate, test_suggest_reply, test_post_message) gate-keep the AI feature: summary/regen + suggest-reply both 500 because of LlmChat.with_max_tokens AttributeError in /app/backend/ai/llm.py line 40 (pipeline catches only LLMUnavailable). POST /messages 500 is ObjectId leak in server.py send_message (line 1703 returns mutated msg_doc). For the UI, after backend fix re-run the Playwright suite paying attention to [data-testid='bot-suggestion-textarea'] which should appear after clicking bot-suggest-button. Reactivate flow + Configuración Bot IA tab are fully functional already.",
+  "rca of the issue": "1) /app/backend/ai/llm.py line 40 chains .with_max_tokens(900) on the LlmChat builder. Current emergentintegrations build does not expose with_max_tokens (only with_model and the implicit session token). Result: AttributeError on every call. Both regenerate_summary and suggest_reply call call_llm_json directly and catch only LLMUnavailable, so the AttributeError bubbles up to FastAPI and the endpoint returns 500. Spec explicitly requires these endpoints to return 200 with a graceful payload (error: '...') when LLM is unavailable. Fix: either drop .with_max_tokens(900) (server.py default tokens are fine) OR wrap call_llm_json in a broad try/except Exception that maps to LLMUnavailable. 2) send_message in server.py returns msg_doc directly after insert_one — Motor mutates the dict to add an ObjectId _id, then FastAPI's jsonable_encoder fails with TypeError('ObjectId' object is not iterable). Fix: return msg.model_dump() or pop _id before returning. 3) Frontend BotIATab does not perform client-side validation for ctxmax range; the backend correctly returns 400 but the toast surfaced is generic ('No se pudo guardar' or similar), not the spec-required 'Los mensajes de contexto deben estar entre 3 y 50'."
+}
