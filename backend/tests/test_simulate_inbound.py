@@ -75,6 +75,22 @@ def _matches(doc, query):
                 return False
             elif "$nin" in v and doc.get(k) in v["$nin"]:
                 return False
+            elif "$regex" in v:
+                rx = v["$regex"]
+                fv = doc.get(k)
+                if isinstance(fv, list):
+                    if not any(rx.search(str(x)) for x in fv):
+                        return False
+                elif fv is None or not rx.search(str(fv)):
+                    return False
+            elif "$gte" in v or "$lte" in v or "$gt" in v or "$lt" in v:
+                fv = doc.get(k)
+                if fv is None:
+                    return False
+                if "$gte" in v and fv < v["$gte"]: return False
+                if "$lte" in v and fv > v["$lte"]: return False
+                if "$gt" in v and fv <= v["$gt"]: return False
+                if "$lt" in v and fv >= v["$lt"]: return False
         elif v is None and doc.get(k) is not None:
             return False
         elif v is not None and doc.get(k) != v:
@@ -84,7 +100,10 @@ def _matches(doc, query):
 
 def _query_matches(doc, query):
     if "$or" in query:
-        return any(_matches(doc, sub) for sub in query["$or"])
+        if not any(_matches(doc, sub) for sub in query["$or"]):
+            return False
+        rest = {k: v for k, v in query.items() if k != "$or"}
+        return _matches(doc, rest)
     return _matches(doc, query)
 
 
@@ -159,6 +178,19 @@ class _Coll:
         self.docs[:] = [d for d in self.docs if not _query_matches(d, query)]
     async def count_documents(self, query):
         return sum(1 for d in self.docs if _query_matches(d, query))
+    async def distinct(self, key, query=None):
+        seen = set()
+        out = []
+        for d in self.docs:
+            if not _query_matches(d, query or {}):
+                continue
+            v = d.get(key)
+            if v is None: continue
+            vs = v if isinstance(v, list) else [v]
+            for x in vs:
+                if x not in seen:
+                    seen.add(x); out.append(x)
+        return out
     async def create_index(self, key, **kw):
         if kw.get("unique"):
             self.unique_indexes.append(key if isinstance(key, str) else key[0][0])
@@ -171,7 +203,7 @@ class _FakeDB:
                      "conversations", "messages", "notifications", "settings",
                      "wa_status", "whatsapp_events", "app_secrets", "tasks",
                      "notes", "bot_events", "bot_settings", "ai_usage_logs",
-                     "pricing_config"):
+                     "pricing_config", "products"):
             setattr(self, name, _Coll(name))
 
 

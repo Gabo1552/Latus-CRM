@@ -13,6 +13,7 @@ import Tasks from "@/pages/Tasks";
 import Admin from "@/pages/Admin";
 import Configuracion from "@/pages/Configuracion";
 import ConsumoIA from "@/pages/ConsumoIA";
+import Catalogo from "@/pages/Catalogo";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -51,6 +52,7 @@ function AppRouter() {
       <Route path="/admin" element={<Protected><Admin /></Protected>} />
       <Route path="/configuracion" element={<Protected><Configuracion /></Protected>} />
       <Route path="/consumo-ia" element={<Protected><ConsumoIA /></Protected>} />
+      <Route path="/catalogo" element={<Protected><Catalogo /></Protected>} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );

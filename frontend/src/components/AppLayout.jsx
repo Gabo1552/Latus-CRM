@@ -1,7 +1,7 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, Target, MessageSquare, KanbanSquare,
-  CheckSquare, Shield, Settings, LogOut, MessageSquareText, DollarSign,
+  CheckSquare, Shield, Settings, LogOut, MessageSquareText, DollarSign, Package,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { initials, roleLabel } from "@/lib/constants";
@@ -21,6 +21,9 @@ export default function AppLayout({ children, title, actions }) {
   const navigate = useNavigate();
 
   const nav = [...NAV];
+  if (user?.role !== "viewer") {
+    nav.push({ to: "/catalogo", label: "Catálogo", icon: Package, testid: "nav-catalogo" });
+  }
   if (user?.role === "admin") {
     nav.push({ to: "/admin", label: "Administración", icon: Shield, testid: "nav-admin" });
     nav.push({ to: "/consumo-ia", label: "Consumo de IA", icon: DollarSign, testid: "nav-consumo-ia" });

@@ -2094,6 +2094,174 @@ async def admin_ai_pricing_reset(admin: User = Depends(require_admin)):
     return {"models": result, "defaults": ai_usage.DEFAULT_PRICING}
 
 
+# ---------------------------------------------------------------------------
+# Catalog (products) — Phase 3
+# ---------------------------------------------------------------------------
+
+
+async def require_catalog_writer(user: User = Depends(get_current_user)) -> User:
+    if user.role not in ("admin", "supervisor"):
+        raise HTTPException(403, "Permiso insuficiente")
+    return user
+
+
+@api_router.get("/catalog/products")
+async def catalog_list(
+    q: str | None = None,
+    category: str | None = None,
+    stock_status: str | None = None,
+    active: bool | None = None,
+    include_inactive: bool = False,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    sort: str = "name",
+    user: User = Depends(get_current_user),
+):
+    from catalog import build_listing_query
+    query = build_listing_query({
+        "q": q, "category": category, "stock_status": stock_status,
+        "active": active, "include_inactive": include_inactive,
+    })
+    valid_sorts = {"name", "-name", "price", "-price", "created_at", "-created_at"}
+    if sort not in valid_sorts:
+        raise HTTPException(400, "Parámetro 'sort' inválido")
+    field = sort.lstrip("-")
+    direction = -1 if sort.startswith("-") else 1
+    total = await db.products.count_documents(query)
+    items = await db.products.find(
+        query,
+        {"_id": 0, "deleted_at": 0},
+    ).sort(field, direction).to_list(offset + limit)
+    return {"items": items[offset:offset + limit], "total": total,
+            "limit": limit, "offset": offset}
+
+
+@api_router.get("/catalog/products/export-csv")
+async def catalog_export_csv(user: User = Depends(get_current_user)):
+    from catalog import export_csv
+    from datetime import datetime, timezone
+    items = await db.products.find(
+        {"deleted_at": None, "active": True}, {"_id": 0}).to_list(50_000)
+    blob = export_csv(items)
+    fname = f"catalogo_latus_{datetime.now(timezone.utc).strftime('%Y%m%d')}.csv"
+    return Response(content=blob, media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@api_router.post("/catalog/products/import-csv")
+async def catalog_import_csv(request: Request,
+                             user: User = Depends(require_catalog_writer)):
+    """Multipart upload: form field ``file`` (CSV) + optional ``update_existing``."""
+    from catalog import import_csv, MAX_CSV_BYTES
+    form = await request.form()
+    file_field = form.get("file")
+    if file_field is None or not hasattr(file_field, "read"):
+        raise HTTPException(400, "Archivo CSV requerido (campo 'file')")
+    content = await file_field.read()
+    if len(content) > MAX_CSV_BYTES:
+        raise HTTPException(413, "El archivo supera el tamaño máximo (5MB)")
+    update_existing = str(form.get("update_existing") or "").lower() in {"true", "1", "yes", "sí", "si"}
+    try:
+        result = await import_csv(db, content, update_existing=update_existing,
+                                  user_id=user.user_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return result
+
+
+@api_router.get("/catalog/products/{product_id}")
+async def catalog_get(product_id: str, user: User = Depends(get_current_user)):
+    p = await db.products.find_one(
+        {"product_id": product_id, "deleted_at": None},
+        {"_id": 0, "deleted_at": 0})
+    if not p:
+        raise HTTPException(404, "Producto no encontrado")
+    return p
+
+
+@api_router.post("/catalog/products")
+async def catalog_create(payload: dict = Body(...),
+                         user: User = Depends(require_catalog_writer)):
+    from catalog import create_product
+    try:
+        doc = await create_product(db, payload, user_id=user.user_id)
+    except ValueError as e:
+        msg = str(e)
+        code = 409 if "SKU" in msg else 400
+        raise HTTPException(code, msg)
+    return doc
+
+
+@api_router.put("/catalog/products/{product_id}")
+async def catalog_update(product_id: str, payload: dict = Body(...),
+                         user: User = Depends(require_catalog_writer)):
+    from catalog import update_product
+    try:
+        doc = await update_product(db, product_id, payload, user_id=user.user_id)
+    except ValueError as e:
+        msg = str(e)
+        code = 409 if "SKU" in msg else 400
+        raise HTTPException(code, msg)
+    if not doc:
+        raise HTTPException(404, "Producto no encontrado")
+    doc.pop("deleted_at", None)
+    return doc
+
+
+@api_router.delete("/catalog/products/{product_id}")
+async def catalog_delete(product_id: str,
+                         user: User = Depends(require_catalog_writer)):
+    from datetime import datetime, timezone
+    res = await db.products.update_one(
+        {"product_id": product_id, "deleted_at": None},
+        {"$set": {"deleted_at": datetime.now(timezone.utc).isoformat(),
+                  "updated_at": datetime.now(timezone.utc).isoformat(),
+                  "updated_by": user.user_id, "active": False}},
+    )
+    return {"ok": True}
+
+
+@api_router.post("/catalog/products/{product_id}/restore")
+async def catalog_restore(product_id: str,
+                          user: User = Depends(require_catalog_writer)):
+    from datetime import datetime, timezone
+    await db.products.update_one(
+        {"product_id": product_id},
+        {"$set": {"deleted_at": None, "active": True,
+                  "updated_at": datetime.now(timezone.utc).isoformat(),
+                  "updated_by": user.user_id}},
+    )
+    return {"ok": True}
+
+
+@api_router.get("/catalog/categories")
+async def catalog_categories(user: User = Depends(get_current_user)):
+    cats = await db.products.distinct("category", {"deleted_at": None,
+                                                   "category": {"$ne": None}})
+    return {"categories": sorted([c for c in cats if c])}
+
+
+@api_router.get("/catalog/stats")
+async def catalog_stats(user: User = Depends(get_current_user)):
+    base = {"deleted_at": None}
+    total = await db.products.count_documents(base)
+    active = await db.products.count_documents({**base, "active": True})
+    out_of_stock = await db.products.count_documents({**base, "stock_status": "sin_stock"})
+    cats: dict[str, int] = {}
+    for p in await db.products.find(base, {"_id": 0, "category": 1}).to_list(50_000):
+        c = p.get("category") or "(sin categoría)"
+        cats[c] = cats.get(c, 0) + 1
+    by_cat = sorted([{"name": k, "count": v} for k, v in cats.items()],
+                    key=lambda x: x["count"], reverse=True)
+    last = await db.products.find(base, {"_id": 0, "updated_at": 1}) \
+        .sort("updated_at", -1).to_list(1)
+    return {
+        "total": total, "active": active, "out_of_stock": out_of_stock,
+        "by_category": by_cat,
+        "last_updated": (last[0]["updated_at"] if last else None),
+    }
+
+
 async def _can_use_bot_for_conv(conv: dict, user: User) -> bool:
     if user.role == "viewer":
         return False
@@ -2714,6 +2882,11 @@ async def _ensure_indexes() -> None:
         await db.ai_usage_logs.create_index("model", name="ix_ai_usage_model")
         await db.ai_usage_logs.create_index("conversation_id",
                                             sparse=True, name="ix_ai_usage_conv")
+        await db.products.create_index("sku", unique=True, sparse=True,
+                                       name="ux_products_sku")
+        await db.products.create_index("name", name="ix_products_name")
+        await db.products.create_index("category", name="ix_products_category")
+        await db.products.create_index("tags", name="ix_products_tags")
     except Exception as e:  # pragma: no cover - best-effort
         logger.warning("ensure_indexes failed: %s", e)
 
