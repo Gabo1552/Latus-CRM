@@ -1786,7 +1786,147 @@ async def simulate_inbound(conv_id: str, user: User = Depends(get_current_user))
     ]
     body = samples[len(conv.get("last_message", "")) % len(samples)]
     msg_doc = await _handle_inbound_message(conv, body)
+    # Trigger bot pipeline in background (idempotent on external_message_id)
+    if msg_doc and (msg_doc.get("external_message_id") or msg_doc.get("id")):
+        from ai.pipeline import process_inbound as _bot_proc, conversation_bot_should_run as _should
+        fresh = await db.conversations.find_one({"id": conv_id}, {"_id": 0}) or conv
+        if _should(fresh):
+            asyncio.create_task(_bot_proc(
+                db, conv_id,
+                msg_doc.get("external_message_id") or msg_doc.get("id"),
+                wa_send=_bot_wa_send,
+            ))
     return msg_doc or {"ok": True, "deduped": True}
+
+
+async def _bot_wa_send(conv: dict, text: str) -> dict:
+    """Adapter used by the bot pipeline to send a WhatsApp message.
+
+    Falls back to a no-op if the channel is not whatsapp or config is missing
+    (so demo conversations still drive the rest of the pipeline).
+    """
+    if conv.get("channel") != "whatsapp":
+        return {"ok": True, "skipped": "non-whatsapp"}
+    cfg = await wa_config_effective(db)
+    if not cfg.is_configured:
+        raise RuntimeError("WhatsApp no configurado")
+    contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0}) or {}
+    wa_id = contact.get("whatsapp_id") or (contact.get("phone") or "").lstrip("+").replace(" ", "")
+    if not wa_id:
+        raise RuntimeError("Contacto sin teléfono WhatsApp")
+    return await send_text_message(cfg, wa_id, text)
+
+
+# ---------------------------------------------------------------------------
+# Bot IA — settings + per-conversation endpoints
+# ---------------------------------------------------------------------------
+
+class BotSettingsUpdate(BaseModel):
+    bot_enabled_default: Optional[bool] = None
+    confidence_threshold: Optional[float] = None
+    recent_messages_context_max: Optional[int] = None
+    business_instructions: Optional[str] = None
+    faqs: Optional[List[dict]] = None
+    handoff_rules: Optional[str] = None
+    tone: Optional[str] = None
+    model: Optional[str] = None
+
+
+_ALLOWED_BOT_MODELS = {"gpt-4o-mini", "gpt-4o"}
+
+
+@api_router.get("/admin/bot-settings")
+async def admin_get_bot_settings(admin: User = Depends(require_admin)):
+    from ai.pipeline import DEFAULT_BOT_SETTINGS
+    doc = await db.bot_settings.find_one({"_id": "default"}, {"_id": 0}) or {}
+    return {**DEFAULT_BOT_SETTINGS, **doc}
+
+
+@api_router.patch("/admin/bot-settings")
+async def admin_patch_bot_settings(payload: BotSettingsUpdate,
+                                   admin: User = Depends(require_admin)):
+    update = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if "confidence_threshold" in update:
+        v = float(update["confidence_threshold"])
+        if not (0.0 <= v <= 1.0):
+            raise HTTPException(400, "confidence_threshold debe estar entre 0 y 1")
+        update["confidence_threshold"] = v
+    if "recent_messages_context_max" in update:
+        v = int(update["recent_messages_context_max"])
+        if not (3 <= v <= 50):
+            raise HTTPException(400, "recent_messages_context_max debe estar entre 3 y 50")
+        update["recent_messages_context_max"] = v
+    if "model" in update and update["model"] not in _ALLOWED_BOT_MODELS:
+        raise HTTPException(400, f"model debe ser uno de {sorted(_ALLOWED_BOT_MODELS)}")
+    update["updated_at"] = now_iso()
+    update["updated_by"] = admin.user_id
+    await db.bot_settings.update_one({"_id": "default"},
+                                     {"$set": {"_id": "default", **update}}, upsert=True)
+    return await admin_get_bot_settings(admin)
+
+
+async def _can_use_bot_for_conv(conv: dict, user: User) -> bool:
+    if user.role == "viewer":
+        return False
+    if user.role in ("admin", "supervisor"):
+        return True
+    return conv.get("assigned_to") == user.user_id
+
+
+@api_router.post("/conversations/{conv_id}/bot/process")
+async def bot_process(conv_id: str, payload: dict | None = None,
+                      user: User = Depends(get_current_user)):
+    from ai.pipeline import process_inbound
+    conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+    if not conv:
+        raise HTTPException(404, "Conversation not found")
+    if not await _can_use_bot_for_conv(conv, user):
+        raise HTTPException(403, "Sin permisos")
+    last_in = await db.messages.find(
+        {"conversation_id": conv_id, "sender_type": "contact"}, {"_id": 0}
+    ).sort("created_at", -1).to_list(1)
+    if not last_in:
+        raise HTTPException(400, "No hay mensaje entrante para procesar")
+    mid = last_in[0].get("external_message_id") or last_in[0].get("id") or ""
+    force = bool((payload or {}).get("force"))
+    event = await process_inbound(db, conv_id, mid, force=force, wa_send=_bot_wa_send)
+    return event
+
+
+@api_router.post("/conversations/{conv_id}/summary/regenerate")
+async def bot_summary_regen(conv_id: str, user: User = Depends(get_current_user)):
+    from ai.pipeline import regenerate_summary
+    conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+    if not conv:
+        raise HTTPException(404, "Conversation not found")
+    if not await _can_use_bot_for_conv(conv, user):
+        raise HTTPException(403, "Sin permisos")
+    return await regenerate_summary(db, conv_id)
+
+
+@api_router.post("/conversations/{conv_id}/bot/reactivate")
+async def bot_reactivate(conv_id: str, user: User = Depends(get_current_user)):
+    conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+    if not conv:
+        raise HTTPException(404, "Conversation not found")
+    if not await _can_use_bot_for_conv(conv, user):
+        raise HTTPException(403, "Sin permisos")
+    await db.conversations.update_one({"id": conv_id}, {"$set": {
+        "bot_enabled": True, "bot_status": "bot_activo",
+        "human_required_reason": None,
+    }})
+    return await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+
+
+@api_router.post("/conversations/{conv_id}/bot/suggest-reply")
+async def bot_suggest_reply(conv_id: str, user: User = Depends(get_current_user)):
+    from ai.pipeline import suggest_reply
+    conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+    if not conv:
+        raise HTTPException(404, "Conversation not found")
+    if not await _can_use_bot_for_conv(conv, user):
+        raise HTTPException(403, "Sin permisos")
+    return await suggest_reply(db, conv_id)
 
 
 @api_router.patch("/conversations/{conv_id}")
