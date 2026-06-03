@@ -549,7 +549,9 @@ async def admin_list_users(
 ):
     query: dict[str, Any] = {}
     if not include_inactive:
-        query["deleted_at"] = {"$exists": False}
+        # Mongo: ``{field: None}`` matches docs where the field is null OR absent.
+        # Using ``{"$exists": False}`` would miss docs with ``deleted_at: null``.
+        query["deleted_at"] = None
     if role:
         query["role"] = role
     if is_active is not None:

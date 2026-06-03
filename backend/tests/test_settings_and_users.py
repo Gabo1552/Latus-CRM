@@ -280,6 +280,30 @@ class TestUsersCRUD:
         emails = {u["email"] for u in r.json()}
         assert "byebye@latus.test" in emails
 
+    def test_revived_user_with_deleted_at_null_appears_in_listing(self, srv):
+        """Regression: a doc revived in Mongo with ``deleted_at: null`` (instead of
+        unsetting the field) must show up in GET /api/admin/users."""
+        server, fake, client = srv
+        # Create + soft-delete
+        r = client.post("/api/admin/users", headers=_h(), json={
+            "email": "revived@latus.test", "name": "Rev",
+            "role": "agent", "auth_provider": "google",
+        })
+        uid = r.json()["user_id"]
+        client.delete(f"/api/admin/users/{uid}", headers=_h())
+        # Simulate manual revive: deleted_at literally set to null + active=true
+        for d in fake.users.docs:
+            if d["user_id"] == uid:
+                d["deleted_at"] = None
+                d["active"] = True
+        r = client.get("/api/admin/users", headers=_h())
+        assert r.status_code == 200
+        emails = {u["email"] for u in r.json()}
+        assert "revived@latus.test" in emails, (
+            f"revived user not visible. query results: {emails}. doc: "
+            f"{[d for d in fake.users.docs if d['user_id']==uid]}"
+        )
+
     def test_reset_password_returns_temp_once(self, srv):
         server, fake, client = srv
         client.post("/api/admin/users", headers=_h(), json={
