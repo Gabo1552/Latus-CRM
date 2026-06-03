@@ -50,6 +50,13 @@ Full-stack CRM web app for managing WhatsApp sales conversations: auth, dashboar
 - Frontend `/configuracion` Tab "Bot IA" (admin): toggle default, select modelo, slider de confianza con valor numérico, ctx_max con validación cliente (toast rojo en español + cancela PATCH), tono, instrucciones del negocio, reglas de derivación, editor FAQ add/remove (Pregunta/Respuesta). Botones Guardar/Descartar. Read-only para `viewer`.
 - Tests: `/app/backend/tests/test_ai_bot.py` 10/10 pass (idempotencia, low-confidence handoff con notificación broadcast, sensitive-data handoff, role gating, model whitelist, bot_settings GET/PATCH, etc.). Total suite 60/60 (excluyendo tests de integración pre-existentes que ya estaban rojos antes de esta feature). iteration_4.json verde tanto en backend HTTP como en flujos UI.
 
+## Fix regresión simulate-inbound + POST /messages (2026-06-03)
+- **Bug**: `POST /api/conversations/{id}/simulate-inbound` y `POST /api/conversations/{id}/messages` devolvían 500 con `ValueError: [TypeError("'ObjectId' object is not iterable")]` desde `fastapi.encoders.jsonable_encoder`. Causa raíz: Motor muta el dict de entrada de `insert_one` agregando `_id: ObjectId(...)`, y el endpoint devolvía ese mismo dict. FastAPI no sabe serializar `ObjectId`.
+- **Fix**: nuevo helper `_strip_oid(doc)` en `backend/server.py` (justo después de `new_id()`); aplicado en los 3 sitios afectados: `_handle_inbound_message` (línea ~1771), `send_message` (POST /messages, línea ~1703), y el WhatsApp outbound (línea ~1610). Idempotente y minimalista — no toca tests reales que no inyectan `_id`.
+- **Idempotencia bot**: `simulate-inbound` ahora genera siempre un `external_message_id = sim_<uuid16>` para que el lock de `bot_events.triggered_by_message_id` (índice único sparse) funcione correctamente y dos llamadas seguidas no disparen dos respuestas del bot.
+- **Tests**: nuevo archivo `backend/tests/test_simulate_inbound.py` con 8 casos que reproducen exactamente el bug (FakeDB que mutea con `ObjectId`-proxy en `insert_one`), validan response 200 + JSON serializable + dedup + last_message_at + notificación + idempotencia del bot. Total suite: **68/68 pass**.
+- **Verificación E2E**: flujo demo end-to-end probado en Inbox — el cliente simulado dispara una respuesta real del bot en español con `intent=seguimiento`, `confidence=0.8`, `bot_status=esperando_cliente`.
+
 ## Backlog / Next
 - P1: Real WhatsApp webhook ingestion (`/api/webhooks/whatsapp`) — backend already structured for it (messages/conversations model ready).
 - P1: AI streaming (SSE) for summary/suggested reply.

@@ -110,6 +110,16 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
+def _strip_oid(doc: dict | None) -> dict | None:
+    """Return ``doc`` without the Mongo-injected ``_id`` so the result is JSON
+    serializable by FastAPI. Motor mutates the dict on ``insert_one`` adding an
+    ``ObjectId`` which leaks ValueError(TypeError("'ObjectId' object is not
+    iterable")) downstream. Idempotent for docs that don't have ``_id``."""
+    if isinstance(doc, dict) and "_id" in doc:
+        doc = {k: v for k, v in doc.items() if k != "_id"}
+    return doc
+
+
 LEAD_STATUSES = ["new", "contacted", "qualified", "proposal", "won", "lost"]
 CONV_STATUSES = ["open", "pending", "resolved"]
 PRIORITIES = ["low", "medium", "high"]
@@ -1607,7 +1617,7 @@ async def send_whatsapp(conv_id: str, payload: WhatsAppSend, user: User = Depend
         {"$set": {"last_message": text, "last_message_at": now_iso(),
                   "channel": "whatsapp"}},
     )
-    return msg_doc
+    return _strip_oid(msg_doc)
 
 
 # ---- Admin status endpoint ------------------------------------------------
@@ -1700,7 +1710,7 @@ async def send_message(conv_id: str, payload: MessageCreate, user: User = Depend
         )
     else:
         await db.conversations.update_one({"id": conv_id}, {"$set": set_fields})
-    return msg_doc
+    return _strip_oid(msg_doc)
 
 
 # ---------------------------------------------------------------------------
@@ -1768,7 +1778,7 @@ async def _handle_inbound_message(
         f"Nuevo mensaje de {cname}", body[:120],
         "conversation", conv["id"], conv.get("priority", "medium"),
     )
-    return msg_doc
+    return _strip_oid(msg_doc)
 
 
 @api_router.post("/conversations/{conv_id}/simulate-inbound")
@@ -1785,15 +1795,16 @@ async def simulate_inbound(conv_id: str, user: User = Depends(get_current_user))
         "Tengo una pregunta sobre la propuesta.",
     ]
     body = samples[len(conv.get("last_message", "")) % len(samples)]
-    msg_doc = await _handle_inbound_message(conv, body)
+    sim_id = f"sim_{uuid.uuid4().hex[:16]}"
+    msg_doc = await _handle_inbound_message(conv, body, external_message_id=sim_id)
     # Trigger bot pipeline in background (idempotent on external_message_id)
-    if msg_doc and (msg_doc.get("external_message_id") or msg_doc.get("id")):
+    if msg_doc and msg_doc.get("external_message_id"):
         from ai.pipeline import process_inbound as _bot_proc, conversation_bot_should_run as _should
         fresh = await db.conversations.find_one({"id": conv_id}, {"_id": 0}) or conv
         if _should(fresh):
             asyncio.create_task(_bot_proc(
                 db, conv_id,
-                msg_doc.get("external_message_id") or msg_doc.get("id"),
+                msg_doc["external_message_id"],
                 wa_send=_bot_wa_send,
             ))
     return msg_doc or {"ok": True, "deduped": True}
