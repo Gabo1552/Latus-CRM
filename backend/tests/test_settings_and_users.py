@@ -515,3 +515,119 @@ class TestWhatsAppConfig:
         })
         assert r.status_code == 503
         assert "APP_ENCRYPTION_KEY" in r.json()["detail"]
+
+
+# ====================================================================
+# webhook_url derivation
+# ====================================================================
+class TestWebhookUrl:
+    def test_public_base_url_wins_over_headers(self, srv, monkeypatch):
+        _, _, client = srv
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://prod.example.com")
+        r = client.get(
+            "/api/admin/whatsapp/config",
+            headers={
+                **_h(),
+                "host": "internal.cluster-8.preview.emergentcf.cloud",
+                "x-forwarded-host": "internal.cluster-8.preview.emergentcf.cloud",
+                "x-forwarded-proto": "http",
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["webhook_url"] == "https://prod.example.com/api/webhooks/whatsapp"
+        assert "webhook_url_warning" not in body
+
+    def test_internal_cluster_host_rejected_with_warning(self, srv, monkeypatch):
+        _, _, client = srv
+        monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+        r = client.get(
+            "/api/admin/whatsapp/config",
+            headers={
+                **_h(),
+                "host": "lead-scan-scheduler.cluster-8.preview.emergentcf.cloud",
+                "x-forwarded-host": "lead-scan-scheduler.cluster-8.preview.emergentcf.cloud",
+                "x-forwarded-proto": "http",
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["webhook_url"] == ""
+        assert "PUBLIC_BASE_URL" in body.get("webhook_url_warning", "")
+
+    def test_https_forced_when_header_says_http(self, srv, monkeypatch):
+        _, _, client = srv
+        monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+        r = client.get(
+            "/api/admin/whatsapp/config",
+            headers={
+                **_h(),
+                "host": "lead-scan-scheduler.preview.emergentagent.com",
+                "x-forwarded-host": "lead-scan-scheduler.preview.emergentagent.com",
+                "x-forwarded-proto": "http",  # lying upstream
+            },
+        )
+        body = r.json()
+        assert body["webhook_url"].startswith("https://lead-scan-scheduler.preview.emergentagent.com/")
+
+
+# ====================================================================
+# test-webhook-verify
+# ====================================================================
+class TestWebhookSelfTest:
+    def _seed_verify_token(self, fake, value: str = "my-verify-XYZ"):
+        from utils.crypto import encrypt
+        _run(fake.app_secrets.update_one(
+            {"_id": "whatsapp"},
+            {"$set": {"_id": "whatsapp", "verify_token_enc": encrypt(value)}},
+            upsert=True,
+        ))
+
+    def test_success_when_verify_token_matches(self, srv, monkeypatch):
+        server, fake, client = srv
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://prod.example.com")
+        self._seed_verify_token(fake, "TOKEN-OK")
+
+        captured = {}
+
+        async def fake_get(self, url, params=None, **kwargs):
+            captured["url"] = url
+            captured["params"] = params or {}
+            # Simulate our own webhook GET handler succeeding: echo challenge
+            return httpx.Response(
+                200, text=params["hub.challenge"],
+                request=httpx.Request("GET", url),
+            )
+
+        with patch.object(httpx.AsyncClient, "get", new=fake_get):
+            r = client.post("/api/admin/whatsapp/test-webhook-verify", headers=_h())
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True
+        assert body["status"] == 200
+        assert body["webhook_url"] == "https://prod.example.com/api/webhooks/whatsapp"
+        assert body["echoed_challenge"].startswith("ping-")
+        # Sanity: real verify token must not leak into the response
+        assert "TOKEN-OK" not in r.text
+        # And the actual GET targeted the right URL with the configured token
+        assert captured["url"] == "https://prod.example.com/api/webhooks/whatsapp"
+        assert captured["params"]["hub.verify_token"] == "TOKEN-OK"
+
+    def test_failure_returns_verify_token_mismatch(self, srv, monkeypatch):
+        server, fake, client = srv
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://prod.example.com")
+        self._seed_verify_token(fake, "TOKEN-MISMATCH")
+
+        async def fake_get(self, url, params=None, **kwargs):
+            return httpx.Response(403, text="forbidden",
+                                  request=httpx.Request("GET", url))
+
+        with patch.object(httpx.AsyncClient, "get", new=fake_get):
+            r = client.post("/api/admin/whatsapp/test-webhook-verify", headers=_h())
+        body = r.json()
+        assert body["ok"] is False
+        assert body["status"] == 403
+        assert body["detail"] == "verify_token mismatch"
+        # masked token shown, never the raw one
+        assert "TOKEN-MISMATCH" not in r.text
+        assert body["configured_verify_token_masked"].endswith("ATCH")

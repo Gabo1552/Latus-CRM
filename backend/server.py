@@ -726,13 +726,43 @@ class WhatsAppConfigUpdate(BaseModel):
     api_version: Any = "__unset__"
 
 
-def _webhook_url(request: Request) -> str:
-    # Compose from the public base URL when reachable; fall back to request.base_url.
-    base = os.environ.get("PUBLIC_BACKEND_URL", "").rstrip("/")
-    if not base:
-        # request.base_url already ends with /
-        base = str(request.base_url).rstrip("/")
-    return f"{base}/api/webhooks/whatsapp"
+def _webhook_url(request: Request) -> tuple[str, str]:
+    """Compute the public callback URL Meta will hit.
+
+    Returns ``(url, warning)``. ``url`` is empty when the backend cannot
+    determine a publicly-routable URL; in that case ``warning`` carries a
+    human-readable explanation in Spanish for the admin UI.
+
+    Precedence:
+      1. ``PUBLIC_BASE_URL`` env (absolute precedence, overrides all headers).
+      2. Reverse-proxy headers (``X-Forwarded-Host``/``Host``), HTTPS forced,
+         and internal cluster hosts (``.cluster-*.preview.emergentcf.cloud``,
+         ``localhost``, ``127.0.0.1``) explicitly rejected.
+      3. Otherwise empty + warning.
+    """
+    # 1) explicit env -> absolute precedence
+    explicit = (os.environ.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if explicit:
+        return f"{explicit}/api/webhooks/whatsapp", ""
+
+    # 2) reverse-proxy headers
+    fwd_host = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+    host = fwd_host or (request.headers.get("host") or "").strip()
+    if host:
+        host_lower = host.lower()
+        bad = (
+            "localhost" in host_lower
+            or host_lower.startswith("127.0.0.1")
+            or "cluster-" in host_lower  # e.g. *.cluster-8.preview.emergentcf.cloud
+            or host_lower.endswith(".cluster.local")
+        )
+        if not bad:
+            # Force HTTPS even if upstream lied (Meta requires HTTPS anyway).
+            return f"https://{host}/api/webhooks/whatsapp", ""
+    return "", (
+        "El backend no puede determinar la URL pública. "
+        "Configurá PUBLIC_BASE_URL en backend/.env"
+    )
 
 
 @api_router.get("/admin/whatsapp/config")
@@ -741,16 +771,20 @@ async def admin_wa_config_get(request: Request, admin: User = Depends(require_ad
     fields = await per_field_sources(db, env)
     cfg = await wa_config_effective(db)
     status_doc = await _wa_get_status_doc()
-    return {
+    webhook_url, webhook_warning = _webhook_url(request)
+    resp = {
         "configured": cfg.is_configured,
         "fields": fields,
         "api_version": cfg.api_version,
-        "webhook_url": _webhook_url(request),
+        "webhook_url": webhook_url,
         "encryption_available": crypto_available(),
         "last_webhook_at": status_doc.get("last_webhook_at"),
         "last_error": status_doc.get("last_error"),
         "last_error_at": status_doc.get("last_error_at"),
     }
+    if webhook_warning:
+        resp["webhook_url_warning"] = webhook_warning
+    return resp
 
 
 @api_router.put("/admin/whatsapp/config")
@@ -821,6 +855,67 @@ async def admin_wa_rotate_verify_token(admin: User = Depends(require_admin)):
     await save_db_config(db, {"verify_token": new_token}, updated_by=admin.user_id)
     logger.info("WhatsApp verify_token rotated by=%s", admin.user_id)
     return {"ok": True, "verify_token": new_token}
+
+
+@api_router.post("/admin/whatsapp/test-webhook-verify")
+async def admin_wa_test_webhook_verify(request: Request, admin: User = Depends(require_admin)):
+    """Self-test: hit our own GET /api/webhooks/whatsapp the same way Meta does.
+
+    This proves the URL is publicly reachable AND the configured verify_token
+    is the one we'd return to Meta. Never exposes the token in clear.
+    """
+    from utils.crypto import mask_tail
+    cfg = await wa_config_effective(db)
+    webhook_url, webhook_warning = _webhook_url(request)
+    if not webhook_url:
+        return {
+            "ok": False,
+            "status": 0,
+            "webhook_url": "",
+            "detail": webhook_warning or "URL del webhook no disponible — configurá PUBLIC_BASE_URL en backend/.env",
+            "configured_verify_token_masked": mask_tail(cfg.verify_token),
+        }
+    if not cfg.verify_token:
+        return {
+            "ok": False,
+            "status": 0,
+            "webhook_url": webhook_url,
+            "detail": "Verify Token no configurado — guardalo primero en Credenciales",
+            "configured_verify_token_masked": "",
+        }
+    challenge = f"ping-{int(datetime.now(timezone.utc).timestamp())}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as hc:
+            r = await hc.get(webhook_url, params={
+                "hub.mode": "subscribe",
+                "hub.verify_token": cfg.verify_token,
+                "hub.challenge": challenge,
+            })
+    except (httpx.TimeoutException, httpx.TransportError) as e:
+        return {
+            "ok": False,
+            "status": 0,
+            "webhook_url": webhook_url,
+            "detail": f"No se pudo alcanzar la URL del webhook ({type(e).__name__}: {e})",
+            "configured_verify_token_masked": mask_tail(cfg.verify_token),
+        }
+    body_text = r.text or ""
+    if r.status_code == 200 and body_text.strip() == challenge:
+        return {
+            "ok": True,
+            "status": 200,
+            "webhook_url": webhook_url,
+            "echoed_challenge": challenge,
+        }
+    # 403 / mismatch / wrong echo
+    detail = "verify_token mismatch" if r.status_code == 403 else f"respuesta inesperada (HTTP {r.status_code})"
+    return {
+        "ok": False,
+        "status": r.status_code,
+        "webhook_url": webhook_url,
+        "detail": detail,
+        "configured_verify_token_masked": mask_tail(cfg.verify_token),
+    }
 
 
 # ---------------------------------------------------------------------------

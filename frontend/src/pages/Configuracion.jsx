@@ -561,6 +561,22 @@ function WhatsAppTab() {
     onError: (e) => toast.error(e?.response?.data?.detail || "No se pudo probar la conexión"),
   });
 
+  const testWebhook = useMutation({
+    mutationFn: () => api.post("/admin/whatsapp/test-webhook-verify").then((r) => r.data),
+    onSuccess: (data) => {
+      if (data.ok) {
+        toast.success("Webhook validado correctamente — podés registrarlo en Meta");
+      } else if (data.detail === "verify_token mismatch") {
+        toast.error("El Verify Token configurado en Latus no coincide. Revisá que el valor en Meta sea exactamente el mismo.");
+      } else if (data.status === 0) {
+        toast.error("No se pudo alcanzar la URL del webhook. Verificá que la app esté online y que la URL sea pública.");
+      } else {
+        toast.error(`Webhook respondió HTTP ${data.status}: ${data.detail || ""}`);
+      }
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "No se pudo probar el webhook"),
+  });
+
   const rotate = useMutation({
     mutationFn: () => api.post("/admin/whatsapp/rotate-verify-token").then((r) => r.data),
     onSuccess: (data) => {
@@ -616,11 +632,23 @@ function WhatsAppTab() {
           </div>
           <div>
             <p className="text-xs text-[#52525B] mb-1">Webhook URL (configurar en Meta)</p>
+            {cfg.webhook_url_warning && (
+              <div data-testid="webhook-url-warning" className="bg-[#FEF2F2] border-l-4 border-[#DC2626] p-2.5 text-xs text-[#991B1B] mb-2">
+                <p className="font-bold flex items-center gap-1.5"><AlertTriangle className="h-3.5 w-3.5" /> URL pública no disponible</p>
+                <p className="mt-0.5">{cfg.webhook_url_warning}</p>
+              </div>
+            )}
             <div className="flex items-center gap-2 bg-zinc-50 border border-zinc-200 rounded-sm px-3 py-2">
-              <code data-testid="wa-webhook-url" className="flex-1 font-mono text-xs break-all">{cfg.webhook_url}</code>
-              <CopyButton value={cfg.webhook_url} />
+              <code data-testid="wa-webhook-url" className="flex-1 font-mono text-xs break-all">{cfg.webhook_url || "—"}</code>
+              {cfg.webhook_url && <CopyButton value={cfg.webhook_url} />}
             </div>
-            <p className="text-xs text-[#52525B] mt-2">Versión API</p>
+            <p className="text-xs text-neutral-600 mt-2 leading-relaxed">
+              Pegá esta URL en <b>Meta Business → WhatsApp → Configuración → Webhooks → URL de devolución de llamada</b>.
+              Tiene que ser exactamente esta URL (HTTPS, sin <span className="font-mono">localhost</span>).
+              Si ves <span className="font-mono">localhost</span> o un dominio interno, configurá{" "}
+              <span className="font-mono">PUBLIC_BASE_URL</span> en el backend o pedile a un admin que lo haga.
+            </p>
+            <p className="text-xs text-[#52525B] mt-3 mb-1">Versión API</p>
             <Input
               data-testid="wa-api-version"
               value={apiVersion}
@@ -724,6 +752,15 @@ function WhatsAppTab() {
             className="rounded-sm font-semibold bg-[#0A0A0A] hover:bg-[#27272A] text-white"
           >
             <CheckCircle2 className="h-4 w-4 mr-1" /> Probar conexión
+          </Button>
+          <Button
+            data-testid="wa-test-webhook"
+            onClick={() => testWebhook.mutate()}
+            disabled={testWebhook.isPending}
+            variant="outline"
+            className="rounded-sm font-semibold"
+          >
+            <CheckCircle2 className="h-4 w-4 mr-1" /> Probar webhook
           </Button>
         </div>
         {rotated && (
