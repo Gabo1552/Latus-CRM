@@ -2052,8 +2052,59 @@ async def on_startup():
     await _seed(force=False)
     await backfill_notifications()
     await _ensure_indexes()
+    await _migrate_promote_first_google_admin()
     _start_scheduler()
     logger.info("Latus CRM started")
+
+
+async def _migrate_promote_first_google_admin() -> None:
+    """Idempotent migration: if no real Google admin exists, promote the
+    earliest-created real Google user to admin.
+
+    A "real Google user" is detected by EITHER:
+      * ``google_sub`` non-empty (new flow), OR
+      * ``picture`` containing ``googleusercontent.com`` (legacy users created
+        before ``google_sub`` was stored).
+
+    Seed / test users (``@latus.test`` emails or ``user_test*`` ids) are
+    explicitly excluded so they cannot count as "Google admin already exists".
+    """
+    REAL_GOOGLE_QUERY = {
+        "is_demo": {"$ne": True},
+        "active": True,
+        "deleted_at": None,
+        "auth_provider": {"$ne": "local"},
+        "email": {"$not": {"$regex": "@latus\\.test$"}},
+        "user_id": {"$not": {"$regex": "^user_test"}},
+        "$or": [
+            {"google_sub": {"$exists": True, "$nin": ["", None]}},
+            {"picture": {"$regex": "googleusercontent\\.com"}},
+        ],
+    }
+    try:
+        existing_admin = await db.users.find_one(
+            {**REAL_GOOGLE_QUERY, "role": "admin"}, {"_id": 0},
+        )
+        if existing_admin:
+            return
+        candidates = await db.users.find(
+            REAL_GOOGLE_QUERY, {"_id": 0},
+        ).sort("created_at", 1).to_list(20)
+        if not candidates:
+            return
+        chosen = candidates[0]
+        await db.users.update_one(
+            {"user_id": chosen["user_id"]},
+            {"$set": {"role": "admin", "updated_at": now_iso(),
+                      "promoted_to_admin_by": "auto-migration",
+                      "promoted_to_admin_at": now_iso()}},
+        )
+        logger.warning(
+            "Promoted %s (%s) to admin via auto-migration (no real Google admin existed)",
+            chosen.get("email"), chosen.get("user_id"),
+        )
+    except Exception:
+        logger.exception("_migrate_promote_first_google_admin failed")
 
 
 async def _ensure_indexes() -> None:

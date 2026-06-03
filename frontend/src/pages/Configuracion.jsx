@@ -739,7 +739,40 @@ export default function Configuracion() {
 
   if (loading) return null;
   if (!user) return <Navigate to="/" replace />;
-  if (user.role !== "admin") return <Navigate to="/dashboard" replace />;
+  if (user.role !== "admin") {
+    return (
+      <AppLayout title="Configuración">
+        <div className="px-6 py-6 max-w-2xl">
+          <div
+            data-testid="config-no-access"
+            className="bg-white border border-zinc-200 rounded-sm p-8 text-center"
+          >
+            <div className="mx-auto h-12 w-12 rounded-sm bg-[#FFF7ED] border border-[#FED7AA] flex items-center justify-center mb-4">
+              <AlertTriangle className="h-6 w-6 text-[#FF4500]" />
+            </div>
+            <h2 className="text-xl font-bold tracking-tight text-[#0A0A0A] mb-1">
+              No tenés permisos para acceder a esta sección
+            </h2>
+            <p className="text-sm text-[#52525B] mb-4">
+              La sección <b>Configuración</b> es exclusiva para usuarios con rol{" "}
+              <RolePill role="admin" />. Tu cuenta actual tiene rol{" "}
+              <RolePill role={user.role} />.
+            </p>
+            <p className="text-xs text-[#52525B] mb-5">
+              Si necesitás acceso, pedile a un administrador que actualice tu rol
+              desde <span className="font-mono">/configuracion</span> &gt; Usuarios.
+            </p>
+            <a
+              href="/dashboard"
+              className="inline-flex items-center text-sm font-bold text-[#FF4500] hover:underline"
+            >
+              Volver al panel principal
+            </a>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout title="Configuración">
