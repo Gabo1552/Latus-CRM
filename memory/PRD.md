@@ -40,6 +40,16 @@ Full-stack CRM web app for managing WhatsApp sales conversations: auth, dashboar
 - Dashboard "Requiere atención" ahora incluye columna "Lead sin respuesta". Panel admin con tarjeta de configuración del umbral.
 - Tests backend: `/app/backend/tests/test_lead_no_response.py` (17 casos, 16/16 efectivos pass) cubriendo los 6 escenarios requeridos. iteration_3.json.
 
+## Asistente de Ventas IA sobre WhatsApp (2026-06-03)
+- Nueva colección `bot_events` (idempotencia via índice único sparse en `triggered_by_message_id`) y `bot_settings` (doc `_id: default`) con: `bot_enabled_default`, `confidence_threshold`, `recent_messages_context_max`, `business_instructions`, `handoff_rules`, `faqs[]`, `tone`, `model` (gpt-4o-mini default).
+- Campos nuevos en `conversations`: `summary`, `last_summary_at`, `bot_status` (bot_activo|esperando_cliente|requiere_humano|en_atencion_humana|cerrada), `detected_intent`, `human_required_reason`, `next_best_action`, `confidence`. Campo nuevo en `messages`: `sender_type="bot"`.
+- Pipeline (`backend/ai/pipeline.py`): `process_inbound()` ejecutado en BackgroundTasks desde el webhook de WhatsApp; idempotente; clasifica intención + confianza + decisión (`reply`, `require_human`, `update_status`, `no_action`); auto-handoff cuando `confidence < threshold` o detecta DNI/CBU/tarjeta; envía notificación `handoff_required` al asignado o broadcast a admins/supervisores; actualiza resumen.
+- Endpoints nuevos (todos /api): `POST /conversations/{id}/bot/process` (?force=true), `POST /conversations/{id}/summary/regenerate`, `POST /conversations/{id}/bot/reactivate`, `POST /conversations/{id}/bot/suggest-reply`, `GET/PATCH /admin/bot-settings`. PATCH valida threshold ∈ [0,1], ctx_max ∈ [3,50], y modelo en {gpt-4o-mini, gpt-4o}.
+- LLM via Emergent Universal Key (`EMERGENT_LLM_KEY`) + `emergentintegrations.LlmChat.with_params(max_tokens=900, temperature=0.2)`. Cualquier excepción de la llamada se envuelve como `LLMUnavailable` y el endpoint responde 200 con `error` legible — sin 500.
+- Frontend Inbox `BotPanel` (sidebar derecho): pill `bot_status` con colores (verde/azul/naranja/violeta/gris), intención detectada + confianza %, motivo de derivación (sólo si existe), próxima acción, resumen + Regenerar, sugerencia editable con Copiar al input / Descartar, botón Reactivar bot (sólo si bot_enabled=false). Mensajes con `sender_type="bot"` muestran badge "Bot" naranja.
+- Frontend `/configuracion` Tab "Bot IA" (admin): toggle default, select modelo, slider de confianza con valor numérico, ctx_max con validación cliente (toast rojo en español + cancela PATCH), tono, instrucciones del negocio, reglas de derivación, editor FAQ add/remove (Pregunta/Respuesta). Botones Guardar/Descartar. Read-only para `viewer`.
+- Tests: `/app/backend/tests/test_ai_bot.py` 10/10 pass (idempotencia, low-confidence handoff con notificación broadcast, sensitive-data handoff, role gating, model whitelist, bot_settings GET/PATCH, etc.). Total suite 60/60 (excluyendo tests de integración pre-existentes que ya estaban rojos antes de esta feature). iteration_4.json verde tanto en backend HTTP como en flujos UI.
+
 ## Backlog / Next
 - P1: Real WhatsApp webhook ingestion (`/api/webhooks/whatsapp`) — backend already structured for it (messages/conversations model ready).
 - P1: AI streaming (SSE) for summary/suggested reply.
