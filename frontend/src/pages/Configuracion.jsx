@@ -489,11 +489,36 @@ function UserFormDialog({ open, mode, initialUser, onClose, onSaved }) {
 // WHATSAPP TAB
 // =============================================================================
 const WA_FIELDS = [
-  { key: "verify_token", label: "Verify Token" },
-  { key: "access_token", label: "Access Token" },
-  { key: "phone_number_id", label: "Phone Number ID" },
-  { key: "app_secret", label: "App Secret" },
-  { key: "business_account_id", label: "Business Account ID" },
+  {
+    key: "verify_token",
+    label: "Verify Token",
+    metaName: "En Meta: \"Token de verificación\" (Verify token)",
+    help: "Lo definís vos. Pegá el mismo valor en Meta Business → WhatsApp → Configuración → Webhooks → Token de verificación.",
+  },
+  {
+    key: "access_token",
+    label: "Access Token",
+    metaName: "En Meta: \"Token de acceso\" (Access token)",
+    help: "Meta Business → Configuración del negocio → Usuarios del sistema → Generar token. Usá un token permanente con permisos whatsapp_business_messaging y whatsapp_business_management.",
+  },
+  {
+    key: "phone_number_id",
+    label: "Phone Number ID",
+    metaName: "En Meta: \"Identificador del número de teléfono\" (Phone number ID)",
+    help: "Meta Business → WhatsApp → Configuración de la API → Números de teléfono. Copiá el ID que aparece debajo del número, NO el número en sí.",
+  },
+  {
+    key: "app_secret",
+    label: "App Secret",
+    metaName: "En Meta: \"Clave secreta de la app\" (App secret)",
+    help: "Panel de desarrolladores de Meta → Tu app → Configuración → Básica → Clave secreta de la app. Hacé clic en Mostrar para revelarla.",
+  },
+  {
+    key: "business_account_id",
+    label: "Business Account ID",
+    metaName: "En Meta: \"Identificador de la cuenta de WhatsApp Business\" (WhatsApp Business Account ID / WABA ID)",
+    help: "Meta Business → WhatsApp → Configuración de la API → arriba dice \"WhatsApp Business Account ID\". También aparece en WhatsApp Manager → Configuración.",
+  },
 ];
 
 function WhatsAppTab() {
@@ -622,41 +647,47 @@ function WhatsAppTab() {
             </p>
           </div>
         )}
-        <div className="space-y-3">
+        <div className="space-y-5">
           {WA_FIELDS.map((f) => {
             const meta = cfg.fields[f.key] || { source: "none", masked: "", configured: false };
             const pill = meta.source === "db" ? { label: "DB", c: "#16A34A", bg: "#F0FDF4" }
               : meta.source === "env" ? { label: "ENV", c: "#1D4ED8", bg: "#EFF6FF" }
               : { label: "Sin configurar", c: "#52525B", bg: "#F4F4F5" };
             return (
-              <div key={f.key} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
-                <Label className="md:col-span-3 text-sm font-semibold">{f.label}</Label>
-                <div className="md:col-span-2 flex items-center gap-2">
-                  <span
-                    className="inline-flex items-center text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-sm border"
-                    style={{ color: pill.c, background: pill.bg, borderColor: pill.c + "33" }}
-                  >
-                    {pill.label}
-                  </span>
-                  <span className="font-mono text-xs text-[#52525B]">{meta.masked || "—"}</span>
+              <div key={f.key} className="border-t border-zinc-100 pt-4 first:border-t-0 first:pt-0">
+                <div className="mb-1.5">
+                  <Label className="text-sm font-bold text-[#0A0A0A]">{f.label}</Label>
+                  <p className="text-xs italic text-neutral-500 mt-0.5">{f.metaName}</p>
+                  <p className="text-xs text-neutral-600 mt-1 leading-relaxed">{f.help}</p>
                 </div>
-                <Input
-                  data-testid={`wa-input-${f.key}`}
-                  value={drafts[f.key] !== undefined && drafts[f.key] !== "__CLEAR__" ? drafts[f.key] : ""}
-                  placeholder={meta.masked ? `Reemplazar ${meta.masked}` : "Ingresá un nuevo valor"}
-                  onChange={(e) => setDrafts({ ...drafts, [f.key]: e.target.value })}
-                  className="md:col-span-5 rounded-sm font-mono text-xs"
-                  disabled={!cfg.encryption_available}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="md:col-span-2 rounded-sm h-9 text-xs"
-                  disabled={!cfg.encryption_available || meta.source !== "db"}
-                  onClick={() => setDrafts({ ...drafts, [f.key]: "__CLEAR__" })}
-                >
-                  {drafts[f.key] === "__CLEAR__" ? "Se limpiará" : "Limpiar"}
-                </Button>
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
+                  <div className="md:col-span-3 flex items-center gap-2">
+                    <span
+                      className="inline-flex items-center text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-sm border"
+                      style={{ color: pill.c, background: pill.bg, borderColor: pill.c + "33" }}
+                    >
+                      {pill.label}
+                    </span>
+                    <span className="font-mono text-xs text-[#52525B]">{meta.masked || "—"}</span>
+                  </div>
+                  <Input
+                    data-testid={`wa-input-${f.key}`}
+                    value={drafts[f.key] !== undefined && drafts[f.key] !== "__CLEAR__" ? drafts[f.key] : ""}
+                    placeholder={meta.masked ? `Reemplazar ${meta.masked}` : "Ingresá un nuevo valor"}
+                    onChange={(e) => setDrafts({ ...drafts, [f.key]: e.target.value })}
+                    className="md:col-span-7 rounded-sm font-mono text-xs"
+                    disabled={!cfg.encryption_available}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="md:col-span-2 rounded-sm h-9 text-xs"
+                    disabled={!cfg.encryption_available || meta.source !== "db"}
+                    onClick={() => setDrafts({ ...drafts, [f.key]: "__CLEAR__" })}
+                  >
+                    {drafts[f.key] === "__CLEAR__" ? "Se limpiará" : "Limpiar"}
+                  </Button>
+                </div>
               </div>
             );
           })}
@@ -712,11 +743,44 @@ function WhatsAppTab() {
       {/* Instrucciones */}
       <details className="bg-white border border-zinc-200 rounded-sm p-5 group">
         <summary className="font-bold tracking-tight text-[#0A0A0A] cursor-pointer list-none flex items-center justify-between">
-          Instrucciones de configuración en Meta
+          ¿Dónde encuentro estos valores en Meta?
           <span className="text-xs text-[#52525B] group-open:hidden">Mostrar</span>
           <span className="text-xs text-[#52525B] hidden group-open:inline">Ocultar</span>
         </summary>
-        <ol className="list-decimal pl-5 mt-3 space-y-2 text-sm text-[#0A0A0A]">
+
+        {/* Equivalencias de nombres Meta ↔ Latus CRM */}
+        <div className="mt-4">
+          <p className="text-xs uppercase tracking-[0.1em] font-bold text-[#52525B] mb-2">
+            Equivalencias de nombres · Meta ↔ Latus CRM
+          </p>
+          <div className="border border-zinc-200 rounded-sm overflow-hidden">
+            <table data-testid="wa-meta-mapping" className="w-full text-sm">
+              <thead className="bg-zinc-50 text-[11px] uppercase tracking-wide text-[#52525B]">
+                <tr>
+                  <th className="text-left px-3 py-2 font-bold w-1/4">Latus CRM</th>
+                  <th className="text-left px-3 py-2 font-bold w-1/4">Nombre en Meta</th>
+                  <th className="text-left px-3 py-2 font-bold">Dónde encontrarlo</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-200">
+                {WA_FIELDS.map((f) => (
+                  <tr key={f.key}>
+                    <td className="px-3 py-2 font-semibold text-[#0A0A0A] align-top">{f.label}</td>
+                    <td className="px-3 py-2 italic text-neutral-500 align-top">
+                      {f.metaName.replace(/^En Meta:\s*/, "")}
+                    </td>
+                    <td className="px-3 py-2 text-neutral-600 align-top">{f.help}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <p className="text-xs uppercase tracking-[0.1em] font-bold text-[#52525B] mt-5 mb-2">
+          Pasos de configuración
+        </p>
+        <ol className="list-decimal pl-5 space-y-2 text-sm text-[#0A0A0A]">
           <li>Iniciá sesión en <a href="https://business.facebook.com" className="text-[#1D4ED8] underline" target="_blank" rel="noreferrer">Meta Business</a> y abrí la app de WhatsApp Business.</li>
           <li>En la sección <b>Configuración &gt; Webhooks</b>, agregá la URL <code className="font-mono bg-zinc-100 px-1">{cfg.webhook_url}</code> y el <b>Verify Token</b> guardado acá.</li>
           <li>Suscribite al campo <b>messages</b>.</li>
