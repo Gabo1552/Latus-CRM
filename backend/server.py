@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import asyncio
 import logging
 import uuid
 import httpx
@@ -31,9 +32,25 @@ from whatsapp import (
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-mongo_url = os.environ['MONGO_URL']
+# --- Required envs (fail loudly with a clear message, not a KeyError) -----
+def _required_env(name: str, default: str | None = None) -> str:
+    val = os.environ.get(name) or default
+    if not val:
+        # Logger isn't configured yet — write directly to stderr for clarity.
+        import sys
+        sys.stderr.write(
+            f"FATAL: required env var {name} is not set. "
+            f"Set it in backend/.env or via the deploy environment.\n"
+        )
+        raise RuntimeError(f"missing required env var: {name}")
+    return val
+
+
+mongo_url = _required_env("MONGO_URL")
+db_name = _required_env("DB_NAME")
+# motor accepts both ``mongodb://`` and ``mongodb+srv://`` (Atlas).
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[db_name]
 
 app = FastAPI(title="Latus CRM API", openapi_url="/api/openapi.json", docs_url="/api/docs", redoc_url="/api/redoc")
 api_router = APIRouter(prefix="/api")
@@ -1991,9 +2008,26 @@ async def reseed(admin: User = Depends(require_admin)):
 
 
 async def _seed(force: bool = False):
+    """Idempotent demo seed. In production we DO NOT seed unless:
+       * the DB is completely empty (no users at all), AND
+       * ``LATUS_SEED_DEMO=true`` is set in the environment, OR
+       * the caller explicitly forces it (e.g. POST /api/seed by an admin).
+
+    This prevents accidental insertion of demo users / tokens in production.
+    """
     flag = await db.settings.find_one({"key": "seeded"})
     if flag and not force:
         return
+    seed_enabled = (os.environ.get("LATUS_SEED_DEMO", "").strip().lower()
+                    in ("1", "true", "yes", "on"))
+    if not force:
+        user_count = await db.users.count_documents({})
+        if user_count > 0 and not seed_enabled:
+            logger.info("_seed skipped: DB not empty and LATUS_SEED_DEMO not set")
+            return
+        if not seed_enabled and user_count == 0:
+            logger.info("_seed skipped: LATUS_SEED_DEMO not set (set to true to seed an empty DB)")
+            return
     if force:
         for coll in ["contacts", "leads", "conversations", "messages", "tasks", "notes", "tags", "bot_events", "notifications"]:
             await db.__getattr__(coll).delete_many({})
@@ -2144,12 +2178,51 @@ async def _seed(force: bool = False):
 
 @app.on_event("startup")
 async def on_startup():
-    await _seed(force=False)
-    await backfill_notifications()
-    await _ensure_indexes()
-    await _migrate_promote_first_google_admin()
-    _start_scheduler()
+    """Best-effort startup. NEVER crash the process; log and continue."""
+    # Each step is wrapped so one failure doesn't take down the pod.
+    for step_name, step in (
+        ("_seed", lambda: _seed(force=False)),
+        ("backfill_notifications", backfill_notifications),
+        ("_ensure_indexes", _ensure_indexes),
+        ("_migrate_promote_first_google_admin", _migrate_promote_first_google_admin),
+    ):
+        try:
+            await step()
+        except Exception:  # pragma: no cover - logged for ops
+            logger.exception("startup step '%s' failed (continuing)", step_name)
+    try:
+        _start_scheduler()
+    except Exception:  # pragma: no cover
+        logger.exception("startup step '_start_scheduler' failed (continuing)")
     logger.info("Latus CRM started")
+
+
+# ---------------------------------------------------------------------------
+# Liveness / readiness — no auth, no DB calls in the hot path
+# ---------------------------------------------------------------------------
+
+APP_VERSION = os.environ.get("APP_VERSION", "dev")
+
+
+@api_router.get("/health")
+async def health():
+    """Cheap liveness probe. Always 200; no auth; no DB query."""
+    return {"ok": True, "version": APP_VERSION, "app": "latus-crm"}
+
+
+@api_router.get("/health/ready")
+async def health_ready():
+    """Readiness probe. Pings Mongo with a short timeout; never raises."""
+    db_ok = True
+    db_error = None
+    try:
+        # ``ping`` is a no-op command supported by Mongo since forever.
+        await asyncio.wait_for(db.command("ping"), timeout=3.0)
+    except Exception as e:  # pragma: no cover - exercised in deploy
+        db_ok = False
+        db_error = type(e).__name__
+    return {"ok": db_ok, "db": "up" if db_ok else f"down ({db_error})",
+            "version": APP_VERSION}
 
 
 async def _migrate_promote_first_google_admin() -> None:

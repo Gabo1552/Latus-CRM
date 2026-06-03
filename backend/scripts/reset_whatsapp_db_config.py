@@ -28,8 +28,10 @@ from whatsapp.storage import save_db_config, SENSITIVE_FIELDS  # noqa: E402
 
 
 async def main() -> None:
-    mongo_url = os.environ["MONGO_URL"]
-    db_name = os.environ["DB_NAME"]
+    mongo_url = os.environ.get("MONGO_URL")
+    db_name = os.environ.get("DB_NAME")
+    if not mongo_url or not db_name:
+        raise SystemExit("MONGO_URL and DB_NAME must be set in backend/.env")
     client = AsyncIOMotorClient(mongo_url)
     db = client[db_name]
     updates = {f: None for f in SENSITIVE_FIELDS}
