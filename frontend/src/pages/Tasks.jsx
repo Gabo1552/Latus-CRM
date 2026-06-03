@@ -48,7 +48,7 @@ export default function Tasks() {
       actions={
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button data-testid="new-task-button" className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm font-semibold">
+            <Button data-testid="new-task-button" className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm font-semibold">
               <Plus className="h-4 w-4 mr-1" /> Nueva tarea
             </Button>
           </DialogTrigger>
@@ -76,7 +76,7 @@ export default function Tasks() {
               </div>
             </div>
             <DialogFooter>
-              <Button data-testid="submit-task-button" disabled={!form.title || create.isPending} onClick={() => create.mutate()} className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm w-full font-semibold">Crear tarea</Button>
+              <Button data-testid="submit-task-button" disabled={!form.title || create.isPending} onClick={() => create.mutate()} className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm w-full font-semibold">Crear tarea</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -84,34 +84,34 @@ export default function Tasks() {
     >
       <div className="p-6 md:p-8 space-y-5 animate-in fade-in duration-300">
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="bg-transparent border-b border-zinc-200 rounded-none h-auto p-0 gap-4">
-            <TabsTrigger data-testid="tab-todo" value="todo" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#FF4500] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-1 pb-3 font-semibold">Pendientes</TabsTrigger>
-            <TabsTrigger data-testid="tab-done" value="done" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#FF4500] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-1 pb-3 font-semibold">Completadas</TabsTrigger>
+          <TabsList className="bg-transparent border-b border-[#E9E6DC] rounded-none h-auto p-0 gap-4">
+            <TabsTrigger data-testid="tab-todo" value="todo" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#0E8DDB] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-1 pb-3 font-semibold">Pendientes</TabsTrigger>
+            <TabsTrigger data-testid="tab-done" value="done" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#0E8DDB] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-1 pb-3 font-semibold">Completadas</TabsTrigger>
           </TabsList>
         </Tabs>
 
         {filtered.length === 0 ? (
-          <div className="bg-white border border-zinc-200 rounded-sm"><EmptyState icon={CheckSquare} title="Nada por aquí" subtitle="Creá una tarea o recordatorio para tu equipo." /></div>
+          <div className="bg-white border border-[#E9E6DC] rounded-sm"><EmptyState icon={CheckSquare} title="Nada por aquí" subtitle="Creá una tarea o recordatorio para tu equipo." /></div>
         ) : (
           <div className="space-y-2">
             {filtered.map((t) => (
-              <div key={t.id} data-testid={`task-row-${t.id}`} className="bg-white border border-zinc-200 rounded-sm p-4 flex items-center gap-4 hover:border-zinc-300 transition-colors">
+              <div key={t.id} data-testid={`task-row-${t.id}`} className="bg-white border border-[#E9E6DC] rounded-sm p-4 flex items-center gap-4 hover:border-zinc-300 transition-colors">
                 <button
                   onClick={() => toggle.mutate({ id: t.id, status: t.status === "done" ? "todo" : "done" })}
                   data-testid={`task-toggle-${t.id}`}
-                  className={`h-5 w-5 rounded-sm border flex items-center justify-center shrink-0 transition-colors ${t.status === "done" ? "bg-[#064E3B] border-[#064E3B]" : "border-zinc-300 hover:border-[#FF4500]"}`}
+                  className={`h-5 w-5 rounded-sm border flex items-center justify-center shrink-0 transition-colors ${t.status === "done" ? "bg-[#064E3B] border-[#064E3B]" : "border-zinc-300 hover:border-[#0E8DDB]"}`}
                 >
                   {t.status === "done" && <Check className="h-3.5 w-3.5 text-white" />}
                 </button>
                 <div className="flex-1 min-w-0">
-                  <p className={`font-semibold ${t.status === "done" ? "line-through text-zinc-400" : "text-[#0A0A0A]"}`}>{t.title}</p>
-                  {t.description && <p className="text-sm text-[#52525B] truncate">{t.description}</p>}
-                  {t.lead?.title && <p className="text-xs text-[#FF4500] mt-0.5">Vinculado: {t.lead.title}</p>}
+                  <p className={`font-semibold ${t.status === "done" ? "line-through text-latus-muted" : "text-[#0B1B26]"}`}>{t.title}</p>
+                  {t.description && <p className="text-sm text-[#888888] truncate">{t.description}</p>}
+                  {t.lead?.title && <p className="text-xs text-[#0E8DDB] mt-0.5">Vinculado: {t.lead.title}</p>}
                 </div>
                 <div className="flex items-center gap-4 shrink-0">
-                  {t.due_date && <span className="flex items-center gap-1.5 text-xs text-[#52525B]"><Calendar className="h-3.5 w-3.5" /> {t.due_date}</span>}
+                  {t.due_date && <span className="flex items-center gap-1.5 text-xs text-[#888888]"><Calendar className="h-3.5 w-3.5" /> {t.due_date}</span>}
                   <PriorityDot value={t.priority} />
-                  <span className="text-xs text-[#52525B] w-28 truncate text-right">{userName(t.assigned_to)}</span>
+                  <span className="text-xs text-[#888888] w-28 truncate text-right">{userName(t.assigned_to)}</span>
                 </div>
               </div>
             ))}

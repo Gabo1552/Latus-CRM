@@ -62,7 +62,7 @@ export default function Leads() {
       actions={
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button data-testid="new-lead-button" className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm font-semibold">
+            <Button data-testid="new-lead-button" className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm font-semibold">
               <Plus className="h-4 w-4 mr-1" /> Nuevo lead
             </Button>
           </DialogTrigger>
@@ -111,7 +111,7 @@ export default function Leads() {
               </div>
             </div>
             <DialogFooter>
-              <Button data-testid="submit-lead-button" disabled={!form.contact_id || !form.title || createLead.isPending} onClick={() => createLead.mutate()} className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm w-full font-semibold">
+              <Button data-testid="submit-lead-button" disabled={!form.contact_id || !form.title || createLead.isPending} onClick={() => createLead.mutate()} className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm w-full font-semibold">
                 Crear lead
               </Button>
             </DialogFooter>
@@ -123,7 +123,7 @@ export default function Leads() {
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-[200px] max-w-xs">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-latus-muted" />
             <Input data-testid="leads-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar leads…" className="pl-9 rounded-sm bg-white" />
           </div>
           <FilterSelect testid="filter-status" value={filters.status} onChange={(v) => setFilters({ ...filters, status: v })} placeholder="Todos los estados" options={LEAD_STATUSES} />
@@ -138,34 +138,34 @@ export default function Leads() {
         </div>
 
         {/* Table */}
-        <div className="bg-white border border-zinc-200 rounded-sm overflow-hidden">
+        <div className="bg-white border border-[#E9E6DC] rounded-sm overflow-hidden">
           {filtered.length === 0 ? (
             <EmptyState icon={Target} title="No se encontraron leads" subtitle="Ajustá los filtros o creá un nuevo lead para empezar." />
           ) : (
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-zinc-200 bg-zinc-50">
+                <tr className="border-b border-[#E9E6DC] bg-latus-cream">
                   {["Lead", "Estado", "Prioridad", "Valor", "Responsable"].map((h) => (
-                    <th key={h} className="text-left px-5 py-3 text-xs tracking-[0.1em] uppercase font-bold text-[#52525B]">{h}</th>
+                    <th key={h} className="text-left px-5 py-3 text-xs tracking-[0.1em] uppercase font-bold text-[#888888]">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
                 {filtered.map((l) => (
-                  <tr key={l.id} onClick={() => setSelected(l.id)} className="hover:bg-zinc-50 cursor-pointer transition-colors" data-testid={`lead-row-${l.id}`}>
+                  <tr key={l.id} onClick={() => setSelected(l.id)} className="hover:bg-latus-cream cursor-pointer transition-colors" data-testid={`lead-row-${l.id}`}>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
                         <Avatar src={l.contact?.avatar} name={l.contact?.name} size={32} />
                         <div>
-                          <p className="font-semibold text-[#0A0A0A]">{l.title}</p>
-                          <p className="text-xs text-[#52525B]">{l.contact?.name} · {l.contact?.company}</p>
+                          <p className="font-semibold text-[#0B1B26]">{l.title}</p>
+                          <p className="text-xs text-[#888888]">{l.contact?.name} · {l.contact?.company}</p>
                         </div>
                       </div>
                     </td>
                     <td className="px-5 py-3.5"><StatusBadge list={LEAD_STATUSES} value={l.status} /></td>
                     <td className="px-5 py-3.5"><PriorityDot value={l.priority} /></td>
-                    <td className="px-5 py-3.5 font-bold text-[#0A0A0A]">{money(l.value)}</td>
-                    <td className="px-5 py-3.5 text-[#52525B]">{userName(l.assigned_to)}</td>
+                    <td className="px-5 py-3.5 font-bold text-[#0B1B26]">{money(l.value)}</td>
+                    <td className="px-5 py-3.5 text-[#888888]">{userName(l.assigned_to)}</td>
                   </tr>
                 ))}
               </tbody>

@@ -1,19 +1,35 @@
-@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --latus-ink: #0B1B26;
+  --latus-ink-soft: #1A2F3D;
+  --latus-blue: #0E8DDB;
+  --latus-coral: #EF5030;
+  --latus-orange: #F08050;
+  --latus-cream: #F4F2EC;
+  --latus-warm-gray: #E9E6DC;
+  --latus-warm-border: #D8D4C7;
+  --latus-muted: #888888;
+  --latus-blush: #EFE3E1;
+}
+
 body {
   margin: 0;
-  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #f9f9f7;
+  background: var(--latus-cream);
+  color: var(--latus-ink);
+  letter-spacing: -0.005em;
 }
 
 h1, h2, h3, h4, h5, .font-heading {
-  font-family: "Manrope", sans-serif;
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.015em;
 }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }

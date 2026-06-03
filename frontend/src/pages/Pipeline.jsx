@@ -41,17 +41,17 @@ export default function Pipeline() {
                 data-testid={`pipeline-col-${stage.key}`}
                 onDragOver={(e) => { e.preventDefault(); setOverCol(stage.key); }}
                 onDrop={() => onDrop(stage.key)}
-                className={`w-72 shrink-0 rounded-sm bg-zinc-50 border transition-colors ${overCol === stage.key ? "border-[#FF4500]" : "border-zinc-200"}`}
+                className={`w-72 shrink-0 rounded-sm bg-latus-cream border transition-colors ${overCol === stage.key ? "border-[#0E8DDB]" : "border-[#E9E6DC]"}`}
               >
-                <div className="p-4 border-b border-zinc-200 sticky top-0 bg-zinc-50 z-10">
+                <div className="p-4 border-b border-[#E9E6DC] sticky top-0 bg-latus-cream z-10">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: stage.color }} />
-                      <span className="font-bold text-sm text-[#0A0A0A]">{stage.label}</span>
-                      <span className="text-xs font-semibold text-[#52525B] bg-white border border-zinc-200 rounded-full px-2">{items.length}</span>
+                      <span className="font-bold text-sm text-[#0B1B26]">{stage.label}</span>
+                      <span className="text-xs font-semibold text-[#888888] bg-white border border-[#E9E6DC] rounded-full px-2">{items.length}</span>
                     </div>
                   </div>
-                  <p className="text-xs font-semibold text-[#52525B] mt-1">{money(total)}</p>
+                  <p className="text-xs font-semibold text-[#888888] mt-1">{money(total)}</p>
                 </div>
                 <div className="p-3 space-y-3 min-h-[120px]">
                   {items.map((l) => (
@@ -61,18 +61,18 @@ export default function Pipeline() {
                       onDragStart={() => setDragId(l.id)}
                       onDragEnd={() => { setDragId(null); setOverCol(null); }}
                       data-testid={`pipeline-card-${l.id}`}
-                      className={`group bg-white border border-zinc-200 rounded-sm p-3 cursor-grab active:cursor-grabbing hover:border-zinc-300 transition-colors ${dragId === l.id ? "opacity-50" : ""}`}
+                      className={`group bg-white border border-[#E9E6DC] rounded-sm p-3 cursor-grab active:cursor-grabbing hover:border-zinc-300 transition-colors ${dragId === l.id ? "opacity-50" : ""}`}
                     >
                       <div className="flex items-start gap-2">
-                        <GripVertical className="h-4 w-4 text-zinc-300 group-hover:text-zinc-400 shrink-0 mt-0.5" />
+                        <GripVertical className="h-4 w-4 text-zinc-300 group-hover:text-latus-muted shrink-0 mt-0.5" />
                         <div className="flex-1 min-w-0">
-                          <p className="font-semibold text-sm text-[#0A0A0A] truncate">{l.title}</p>
+                          <p className="font-semibold text-sm text-[#0B1B26] truncate">{l.title}</p>
                           <div className="flex items-center gap-2 mt-2">
                             <Avatar src={l.contact?.avatar} name={l.contact?.name} size={20} />
-                            <span className="text-xs text-[#52525B] truncate">{l.contact?.name}</span>
+                            <span className="text-xs text-[#888888] truncate">{l.contact?.name}</span>
                           </div>
                           <div className="flex items-center justify-between mt-3">
-                            <span className="font-bold text-sm text-[#FF4500]">{money(l.value)}</span>
+                            <span className="font-bold text-sm text-[#0E8DDB]">{money(l.value)}</span>
                             <PriorityDot value={l.priority} />
                           </div>
                         </div>

@@ -6,7 +6,7 @@ import api from "@/lib/api";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 const TYPE_META = {
-  new_message: { icon: MessageSquare, color: "#FF4500", label: "Nuevo mensaje" },
+  new_message: { icon: MessageSquare, color: "#0E8DDB", label: "Nuevo mensaje" },
   handoff_required: { icon: ArrowRightLeft, color: "#DC2626", label: "Requiere atención humana" },
   overdue_task: { icon: AlarmClock, color: "#DC2626", label: "Tarea vencida" },
   task_due_soon: { icon: Clock, color: "#EAB308", label: "Tarea próxima a vencer" },
@@ -66,20 +66,20 @@ export default function NotificationBell() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button data-testid="notification-bell" className="relative h-10 w-10 flex items-center justify-center rounded-sm border border-zinc-200 bg-white hover:border-zinc-300 transition-colors">
-          <Bell className="h-[18px] w-[18px] text-[#0A0A0A]" />
+        <button data-testid="notification-bell" className="relative h-10 w-10 flex items-center justify-center rounded-sm border border-[#E9E6DC] bg-white hover:border-zinc-300 transition-colors">
+          <Bell className="h-[18px] w-[18px] text-[#0B1B26]" />
           {unread > 0 && (
-            <span data-testid="notification-unread-count" className="absolute -top-1.5 -right-1.5 h-5 min-w-5 px-1 bg-[#FF4500] text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+            <span data-testid="notification-unread-count" className="absolute -top-1.5 -right-1.5 h-5 min-w-5 px-1 bg-[#0E8DDB] text-white text-[10px] font-bold rounded-full flex items-center justify-center">
               {unread > 99 ? "99+" : unread}
             </span>
           )}
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-96 p-0 rounded-sm" data-testid="notification-dropdown">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200">
-          <p className="font-bold text-[#0A0A0A]">Notificaciones</p>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-[#E9E6DC]">
+          <p className="font-bold text-[#0B1B26]">Notificaciones</p>
           {unread > 0 && (
-            <button data-testid="mark-all-read" onClick={() => markAll.mutate()} className="flex items-center gap-1 text-xs font-semibold text-[#FF4500] hover:underline">
+            <button data-testid="mark-all-read" onClick={() => markAll.mutate()} className="flex items-center gap-1 text-xs font-semibold text-[#0E8DDB] hover:underline">
               <CheckCheck className="h-3.5 w-3.5" /> Marcar todo como leído
             </button>
           )}
@@ -88,7 +88,7 @@ export default function NotificationBell() {
           {notifs.length === 0 ? (
             <div className="py-12 text-center">
               <Bell className="h-7 w-7 text-zinc-300 mx-auto mb-2" />
-              <p className="text-sm text-[#52525B]">Estás al día</p>
+              <p className="text-sm text-[#888888]">Estás al día</p>
             </div>
           ) : (
             notifs.map((n) => {
@@ -99,18 +99,18 @@ export default function NotificationBell() {
                   key={n.id}
                   onClick={() => handleClick(n)}
                   data-testid={`notification-item-${n.id}`}
-                  className={`w-full flex items-start gap-3 px-4 py-3 text-left border-b border-zinc-100 transition-colors hover:bg-zinc-50 ${n.is_read ? "opacity-60" : "bg-[#FFF7ED]/40"}`}
+                  className={`w-full flex items-start gap-3 px-4 py-3 text-left border-b border-[#E9E6DC] transition-colors hover:bg-latus-cream ${n.is_read ? "opacity-60" : "bg-[#F4F2EC]/40"}`}
                 >
                   <div className="h-8 w-8 rounded-sm flex items-center justify-center shrink-0 mt-0.5" style={{ backgroundColor: meta.color + "1A" }}>
                     <Icon className="h-4 w-4" style={{ color: meta.color }} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
-                      <p className="font-semibold text-sm text-[#0A0A0A] truncate">{n.title}</p>
-                      {!n.is_read && <span className="h-2 w-2 rounded-full bg-[#FF4500] shrink-0" />}
+                      <p className="font-semibold text-sm text-[#0B1B26] truncate">{n.title}</p>
+                      {!n.is_read && <span className="h-2 w-2 rounded-full bg-[#0E8DDB] shrink-0" />}
                     </div>
-                    {n.body && <p className="text-xs text-[#52525B] truncate mt-0.5">{n.body}</p>}
-                    <p className="text-[11px] text-zinc-400 mt-1">{timeAgo(n.created_at)}</p>
+                    {n.body && <p className="text-xs text-[#888888] truncate mt-0.5">{n.body}</p>}
+                    <p className="text-[11px] text-latus-muted mt-1">{timeAgo(n.created_at)}</p>
                   </div>
                 </button>
               );

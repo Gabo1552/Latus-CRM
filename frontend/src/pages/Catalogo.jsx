@@ -26,7 +26,7 @@ const STOCK_OPTS = [
 const STOCK_COLOR = {
   disponible: { bg: "#DCFCE7", color: "#16A34A" },
   sin_stock:  { bg: "#FEE2E2", color: "#DC2626" },
-  consultar:  { bg: "#F4F4F5", color: "#52525B" },
+  consultar:  { bg: "#F4F4F5", color: "#888888" },
 };
 
 
@@ -107,7 +107,7 @@ export default function Catalogo() {
         {/* Header / stats */}
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <p className="text-sm text-[#52525B]">
+            <p className="text-sm text-[#888888]">
               {statsQ.data
                 ? `${statsQ.data.active} productos activos · ${statsQ.data.out_of_stock} sin stock`
                 : "Cargando…"}
@@ -128,7 +128,7 @@ export default function Catalogo() {
                   <Download className="h-4 w-4 mr-1.5" /> Exportar CSV
                 </Button>
                 <Button data-testid="catalog-new" onClick={() => setCreating(true)}
-                        className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm">
+                        className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm">
                   <Plus className="h-4 w-4 mr-1.5" /> Nuevo producto
                 </Button>
               </>
@@ -137,9 +137,9 @@ export default function Catalogo() {
         </div>
 
         {/* Filters */}
-        <div className="bg-white border border-zinc-200 rounded-sm p-3 grid grid-cols-1 sm:grid-cols-5 gap-2">
+        <div className="bg-white border border-[#E9E6DC] rounded-sm p-3 grid grid-cols-1 sm:grid-cols-5 gap-2">
           <div className="sm:col-span-2 relative">
-            <Search className="h-4 w-4 absolute left-2.5 top-2.5 text-[#52525B]" />
+            <Search className="h-4 w-4 absolute left-2.5 top-2.5 text-[#888888]" />
             <Input data-testid="catalog-search"
                    placeholder="Buscar por nombre, SKU o tag…"
                    value={filters.q}
@@ -183,19 +183,19 @@ export default function Catalogo() {
 
         {/* Empty / table */}
         {items.length === 0 && !listQ.isPending ? (
-          <div className="bg-zinc-50 border border-dashed border-zinc-300 rounded-sm p-10 text-center">
-            <Package className="h-7 w-7 text-[#FF4500] mx-auto mb-2" />
-            <p className="text-sm font-bold text-[#0A0A0A]">Aún no hay productos</p>
-            <p className="text-xs text-[#52525B] mt-1">
+          <div className="bg-latus-cream border border-dashed border-zinc-300 rounded-sm p-10 text-center">
+            <Package className="h-7 w-7 text-[#0E8DDB] mx-auto mb-2" />
+            <p className="text-sm font-bold text-[#0B1B26]">Aún no hay productos</p>
+            <p className="text-xs text-[#888888] mt-1">
               {canWrite
                 ? "Agregá el primero o importá un CSV para empezar."
                 : "Pediles a un administrador que cargue el catálogo."}
             </p>
           </div>
         ) : (
-          <div className="bg-white border border-zinc-200 rounded-sm overflow-hidden" data-testid="catalog-table">
+          <div className="bg-white border border-[#E9E6DC] rounded-sm overflow-hidden" data-testid="catalog-table">
             <table className="w-full text-sm">
-              <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-[#52525B]">
+              <thead className="bg-latus-cream text-[10px] uppercase tracking-wider text-[#888888]">
                 <tr>
                   <th className="text-left px-3 py-2">Producto</th>
                   <th className="text-left px-3 py-2">SKU</th>
@@ -211,21 +211,21 @@ export default function Catalogo() {
                   return (
                     <tr key={p.product_id}
                         data-testid={`catalog-row-${p.product_id}`}
-                        className="border-t border-zinc-100 hover:bg-zinc-50 cursor-pointer"
+                        className="border-t border-[#E9E6DC] hover:bg-latus-cream cursor-pointer"
                         onClick={() => canWrite && setEditing(p)}>
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-2">
                           {p.image_url ? (
                             <img src={p.image_url} alt="" className="h-8 w-8 object-cover rounded-sm" />
                           ) : (
-                            <div className="h-8 w-8 bg-zinc-100 rounded-sm flex items-center justify-center">
-                              <Package className="h-3.5 w-3.5 text-[#52525B]" />
+                            <div className="h-8 w-8 bg-latus-warm-gray rounded-sm flex items-center justify-center">
+                              <Package className="h-3.5 w-3.5 text-[#888888]" />
                             </div>
                           )}
                           <div>
-                            <p className="font-bold text-[#0A0A0A]">{p.name}</p>
+                            <p className="font-bold text-[#0B1B26]">{p.name}</p>
                             {Array.isArray(p.tags) && p.tags.length > 0 && (
-                              <p className="text-[10px] text-[#52525B]">{p.tags.join(" · ")}</p>
+                              <p className="text-[10px] text-[#888888]">{p.tags.join(" · ")}</p>
                             )}
                           </div>
                         </div>
@@ -233,11 +233,11 @@ export default function Catalogo() {
                       <td className="px-3 py-2 font-mono text-xs">{p.sku || "—"}</td>
                       <td className="px-3 py-2">{p.category || "—"}</td>
                       <td className="px-3 py-2 text-right">
-                        <span className={p.promo_price ? "line-through text-[#52525B]" : "font-bold text-[#0A0A0A]"}>
+                        <span className={p.promo_price ? "line-through text-[#888888]" : "font-bold text-[#0B1B26]"}>
                           {fmtPrice(p.price, p.currency)}
                         </span>
                         {p.promo_price && (
-                          <p className="text-xs font-bold text-[#FF4500]">{fmtPrice(p.promo_price, p.currency)}</p>
+                          <p className="text-xs font-bold text-[#0E8DDB]">{fmtPrice(p.promo_price, p.currency)}</p>
                         )}
                       </td>
                       <td className="px-3 py-2">
@@ -260,8 +260,8 @@ export default function Catalogo() {
                 })}
               </tbody>
             </table>
-            <div className="px-3 py-2 border-t border-zinc-100 flex items-center justify-between text-xs">
-              <p className="text-[#52525B]">Mostrando {Math.min(filters.offset + 1, total)}–{Math.min(filters.offset + items.length, total)} de {total}</p>
+            <div className="px-3 py-2 border-t border-[#E9E6DC] flex items-center justify-between text-xs">
+              <p className="text-[#888888]">Mostrando {Math.min(filters.offset + 1, total)}–{Math.min(filters.offset + items.length, total)} de {total}</p>
               <div className="flex gap-2">
                 <Button size="sm" variant="outline" className="rounded-sm h-7"
                         disabled={filters.offset === 0}
@@ -346,28 +346,28 @@ function ProductModal({ product, categories, onClose, onSaved }) {
       <div data-testid="catalog-product-modal"
            className="bg-white rounded-sm max-w-3xl w-full max-h-[90vh] overflow-auto"
            onClick={(e) => e.stopPropagation()}>
-        <div className="px-5 py-3 border-b border-zinc-200 flex items-center justify-between">
-          <p className="text-base font-bold text-[#0A0A0A]">
+        <div className="px-5 py-3 border-b border-[#E9E6DC] flex items-center justify-between">
+          <p className="text-base font-bold text-[#0B1B26]">
             {isEdit ? "Editar producto" : "Nuevo producto"}
           </p>
-          <button onClick={onClose} className="text-[#52525B] hover:text-[#0A0A0A]">
+          <button onClick={onClose} className="text-[#888888] hover:text-[#0B1B26]">
             <X className="h-4 w-4" />
           </button>
         </div>
 
         <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="sm:col-span-2">
-            <Label className="text-xs font-bold text-[#52525B]">Nombre *</Label>
+            <Label className="text-xs font-bold text-[#888888]">Nombre *</Label>
             <Input data-testid="modal-name" value={d.name || ""} onChange={(e) => setD({ ...d, name: e.target.value })}
                    className="rounded-sm h-9 mt-1" />
           </div>
           <div>
-            <Label className="text-xs font-bold text-[#52525B]">SKU</Label>
+            <Label className="text-xs font-bold text-[#888888]">SKU</Label>
             <Input data-testid="modal-sku" value={d.sku || ""} onChange={(e) => setD({ ...d, sku: e.target.value })}
                    className="rounded-sm h-9 mt-1 font-mono" />
           </div>
           <div>
-            <Label className="text-xs font-bold text-[#52525B]">Categoría</Label>
+            <Label className="text-xs font-bold text-[#888888]">Categoría</Label>
             <Input data-testid="modal-category" list="cat-suggestions" value={d.category || ""}
                    onChange={(e) => setD({ ...d, category: e.target.value })}
                    className="rounded-sm h-9 mt-1" />
@@ -376,19 +376,19 @@ function ProductModal({ product, categories, onClose, onSaved }) {
             </datalist>
           </div>
           <div>
-            <Label className="text-xs font-bold text-[#52525B]">Precio</Label>
+            <Label className="text-xs font-bold text-[#888888]">Precio</Label>
             <Input data-testid="modal-price" type="number" step="0.01" min="0"
                    value={d.price ?? ""} onChange={(e) => setD({ ...d, price: e.target.value })}
                    className="rounded-sm h-9 mt-1" />
           </div>
           <div>
-            <Label className="text-xs font-bold text-[#52525B]">Precio promocional</Label>
+            <Label className="text-xs font-bold text-[#888888]">Precio promocional</Label>
             <Input data-testid="modal-promo" type="number" step="0.01" min="0"
                    value={d.promo_price ?? ""} onChange={(e) => setD({ ...d, promo_price: e.target.value })}
                    className="rounded-sm h-9 mt-1" />
           </div>
           <div>
-            <Label className="text-xs font-bold text-[#52525B]">Moneda</Label>
+            <Label className="text-xs font-bold text-[#888888]">Moneda</Label>
             <Select value={d.currency || "ARS"} onValueChange={(v) => setD({ ...d, currency: v })}>
               <SelectTrigger data-testid="modal-currency" className="rounded-sm h-9 mt-1 text-sm">
                 <SelectValue />
@@ -397,7 +397,7 @@ function ProductModal({ product, categories, onClose, onSaved }) {
             </Select>
           </div>
           <div>
-            <Label className="text-xs font-bold text-[#52525B]">Stock</Label>
+            <Label className="text-xs font-bold text-[#888888]">Stock</Label>
             <Select value={d.stock_status || "consultar"} onValueChange={(v) => setD({ ...d, stock_status: v })}>
               <SelectTrigger data-testid="modal-stock" className="rounded-sm h-9 mt-1 text-sm">
                 <SelectValue />
@@ -406,7 +406,7 @@ function ProductModal({ product, categories, onClose, onSaved }) {
             </Select>
           </div>
           <div className="sm:col-span-2">
-            <Label className="text-xs font-bold text-[#52525B]">Tags</Label>
+            <Label className="text-xs font-bold text-[#888888]">Tags</Label>
             <div className="flex gap-2 mt-1">
               <Input data-testid="modal-tag-input" value={tagDraft} onChange={(e) => setTagDraft(e.target.value)}
                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }}
@@ -417,7 +417,7 @@ function ProductModal({ product, categories, onClose, onSaved }) {
             </div>
             <div className="flex flex-wrap gap-1 mt-2">
               {(d.tags || []).map((t, i) => (
-                <span key={i} className="text-xs bg-[#FFF7ED] border border-[#FED7AA] text-[#FF4500] px-2 py-0.5 rounded-sm inline-flex items-center gap-1">
+                <span key={i} className="text-xs bg-[#F4F2EC] border border-[#EFE3E1] text-[#0E8DDB] px-2 py-0.5 rounded-sm inline-flex items-center gap-1">
                   {t}
                   <button onClick={() => setD({ ...d, tags: d.tags.filter((_, j) => j !== i) })}>×</button>
                 </span>
@@ -425,30 +425,30 @@ function ProductModal({ product, categories, onClose, onSaved }) {
             </div>
           </div>
           <div className="sm:col-span-2">
-            <Label className="text-xs font-bold text-[#52525B]">Descripción</Label>
+            <Label className="text-xs font-bold text-[#888888]">Descripción</Label>
             <Textarea data-testid="modal-description" value={d.description || ""}
                       onChange={(e) => setD({ ...d, description: e.target.value })}
                       className="rounded-sm mt-1 min-h-[80px] text-sm" />
           </div>
           <div>
-            <Label className="text-xs font-bold text-[#52525B]">URL de imagen</Label>
+            <Label className="text-xs font-bold text-[#888888]">URL de imagen</Label>
             <Input data-testid="modal-image" value={d.image_url || ""}
                    onChange={(e) => setD({ ...d, image_url: e.target.value })}
                    className="rounded-sm h-9 mt-1 font-mono text-xs"
                    placeholder="https://…" />
             {d.image_url && /^https?:\/\//.test(d.image_url) && (
-              <img src={d.image_url} alt="" className="h-12 mt-1 rounded-sm border border-zinc-200" />
+              <img src={d.image_url} alt="" className="h-12 mt-1 rounded-sm border border-[#E9E6DC]" />
             )}
           </div>
           <div>
-            <Label className="text-xs font-bold text-[#52525B]">Enlace externo</Label>
+            <Label className="text-xs font-bold text-[#888888]">Enlace externo</Label>
             <Input data-testid="modal-link" value={d.external_link || ""}
                    onChange={(e) => setD({ ...d, external_link: e.target.value })}
                    className="rounded-sm h-9 mt-1 font-mono text-xs"
                    placeholder="https://…" />
           </div>
           <div className="sm:col-span-2">
-            <Label className="text-xs font-bold text-[#52525B]">Condiciones comerciales</Label>
+            <Label className="text-xs font-bold text-[#888888]">Condiciones comerciales</Label>
             <Textarea data-testid="modal-conditions" value={d.commercial_conditions || ""}
                       onChange={(e) => setD({ ...d, commercial_conditions: e.target.value })}
                       className="rounded-sm mt-1 min-h-[60px] text-sm" />
@@ -456,11 +456,11 @@ function ProductModal({ product, categories, onClose, onSaved }) {
           <div className="sm:col-span-2 flex items-center gap-2">
             <Switch data-testid="modal-active" checked={!!d.active}
                     onCheckedChange={(v) => setD({ ...d, active: v })} />
-            <Label className="text-sm font-bold text-[#0A0A0A]">Producto activo</Label>
+            <Label className="text-sm font-bold text-[#0B1B26]">Producto activo</Label>
           </div>
         </div>
 
-        <div className="px-5 py-3 border-t border-zinc-200 flex items-center justify-between">
+        <div className="px-5 py-3 border-t border-[#E9E6DC] flex items-center justify-between">
           {isEdit ? (
             <Button data-testid="modal-delete" variant="outline" className="rounded-sm text-[#DC2626]"
                     onClick={() => { if (confirm("¿Eliminar este producto?")) del.mutate(); }}>
@@ -470,7 +470,7 @@ function ProductModal({ product, categories, onClose, onSaved }) {
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose} className="rounded-sm">Cancelar</Button>
             <Button data-testid="modal-save" onClick={onSave} disabled={save.isPending}
-                    className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm">
+                    className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm">
               {save.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
               Guardar
             </Button>
@@ -519,20 +519,20 @@ function ImportModal({ onClose, onDone }) {
       <div data-testid="catalog-import-modal"
            className="bg-white rounded-sm max-w-lg w-full"
            onClick={(e) => e.stopPropagation()}>
-        <div className="px-5 py-3 border-b border-zinc-200 flex items-center justify-between">
-          <p className="text-base font-bold text-[#0A0A0A]">Importar catálogo desde CSV</p>
-          <button onClick={onClose} className="text-[#52525B] hover:text-[#0A0A0A]">
+        <div className="px-5 py-3 border-b border-[#E9E6DC] flex items-center justify-between">
+          <p className="text-base font-bold text-[#0B1B26]">Importar catálogo desde CSV</p>
+          <button onClick={onClose} className="text-[#888888] hover:text-[#0B1B26]">
             <X className="h-4 w-4" />
           </button>
         </div>
         <div className="p-5 space-y-3">
           <div className="border-2 border-dashed border-zinc-300 rounded-sm p-6 text-center cursor-pointer"
                onClick={() => fileInput.current?.click()}>
-            <FileSpreadsheet className="h-7 w-7 text-[#FF4500] mx-auto mb-2" />
+            <FileSpreadsheet className="h-7 w-7 text-[#0E8DDB] mx-auto mb-2" />
             {file ? (
-              <p className="text-sm font-bold text-[#0A0A0A]">{file.name} <span className="text-[#52525B]">· {(file.size / 1024).toFixed(1)} KB</span></p>
+              <p className="text-sm font-bold text-[#0B1B26]">{file.name} <span className="text-[#888888]">· {(file.size / 1024).toFixed(1)} KB</span></p>
             ) : (
-              <p className="text-sm text-[#52525B]">Hacé clic para elegir un archivo .csv (UTF-8, máx 5MB)</p>
+              <p className="text-sm text-[#888888]">Hacé clic para elegir un archivo .csv (UTF-8, máx 5MB)</p>
             )}
             <input data-testid="import-file-input" ref={fileInput} type="file" accept=".csv" hidden
                    onChange={(e) => { setFile(e.target.files?.[0]); setResult(null); }} />
@@ -542,12 +542,12 @@ function ImportModal({ onClose, onDone }) {
             <Label className="text-sm">Actualizar productos existentes por SKU</Label>
           </div>
           <button onClick={downloadTemplate}
-                  className="text-xs text-[#FF4500] hover:underline">
+                  className="text-xs text-[#0E8DDB] hover:underline">
             Descargar plantilla CSV
           </button>
           {result && (
             <div data-testid="import-result"
-                 className="bg-zinc-50 border border-zinc-200 rounded-sm p-3 text-xs space-y-1">
+                 className="bg-latus-cream border border-[#E9E6DC] rounded-sm p-3 text-xs space-y-1">
               <p><b>{result.total_rows}</b> filas leídas · <b>{result.created}</b> creados · <b>{result.updated}</b> actualizados · <b>{result.skipped}</b> omitidos · <b>{result.errors.length}</b> errores</p>
               {result.errors.length > 0 && (
                 <details className="mt-2">
@@ -562,14 +562,14 @@ function ImportModal({ onClose, onDone }) {
             </div>
           )}
         </div>
-        <div className="px-5 py-3 border-t border-zinc-200 flex justify-end gap-2">
+        <div className="px-5 py-3 border-t border-[#E9E6DC] flex justify-end gap-2">
           <Button variant="outline" onClick={onClose} className="rounded-sm">
             {result ? "Cerrar" : "Cancelar"}
           </Button>
           <Button data-testid="import-submit"
                   onClick={() => upload.mutate()}
                   disabled={!file || upload.isPending}
-                  className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm">
+                  className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm">
             {upload.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : <Upload className="h-3.5 w-3.5 mr-1" />}
             Subir e importar
           </Button>

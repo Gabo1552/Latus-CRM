@@ -21,7 +21,7 @@ export function StatusBadge({ list, value, testid }) {
 export function PriorityDot({ value }) {
   const m = statusMeta(PRIORITIES, value);
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#52525B]">
+    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#888888]">
       <span className="h-2 w-2 rounded-full" style={{ backgroundColor: m.color }} />
       {m.label}
     </span>
@@ -36,7 +36,7 @@ export function Avatar({ src, name, size = 36 }) {
   return (
     <div
       style={{ width: size, height: size }}
-      className="rounded-sm bg-[#FF4500] text-white flex items-center justify-center text-xs font-bold shrink-0"
+      className="rounded-sm bg-[#0E8DDB] text-white flex items-center justify-center text-xs font-bold shrink-0"
     >
       {init}
     </div>
@@ -46,11 +46,11 @@ export function Avatar({ src, name, size = 36 }) {
 export function EmptyState({ icon: Icon, title, subtitle }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 text-center">
-      <div className="h-14 w-14 rounded-sm bg-zinc-100 flex items-center justify-center mb-4">
-        {Icon && <Icon className="h-6 w-6 text-zinc-400" />}
+      <div className="h-14 w-14 rounded-sm bg-latus-warm-gray flex items-center justify-center mb-4">
+        {Icon && <Icon className="h-6 w-6 text-latus-muted" />}
       </div>
-      <p className="font-semibold text-[#0A0A0A]">{title}</p>
-      {subtitle && <p className="text-sm text-[#52525B] mt-1 max-w-xs">{subtitle}</p>}
+      <p className="font-semibold text-[#0B1B26]">{title}</p>
+      {subtitle && <p className="text-sm text-[#888888] mt-1 max-w-xs">{subtitle}</p>}
     </div>
   );
 }

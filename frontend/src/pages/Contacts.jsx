@@ -41,7 +41,7 @@ export default function Contacts() {
       actions={
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button data-testid="new-contact-button" className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm font-semibold">
+            <Button data-testid="new-contact-button" className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm font-semibold">
               <Plus className="h-4 w-4 mr-1" /> Nuevo contacto
             </Button>
           </DialogTrigger>
@@ -54,7 +54,7 @@ export default function Contacts() {
               <div><Label className="text-xs font-semibold">Empresa</Label><Input data-testid="contact-company-input" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} className="rounded-sm mt-1" /></div>
             </div>
             <DialogFooter>
-              <Button data-testid="submit-contact-button" disabled={!form.name || !form.phone || create.isPending} onClick={() => create.mutate()} className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm w-full font-semibold">Agregar contacto</Button>
+              <Button data-testid="submit-contact-button" disabled={!form.name || !form.phone || create.isPending} onClick={() => create.mutate()} className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm w-full font-semibold">Agregar contacto</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -62,30 +62,30 @@ export default function Contacts() {
     >
       <div className="p-6 md:p-8 space-y-5 animate-in fade-in duration-300">
         <div className="relative max-w-xs">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-latus-muted" />
           <Input data-testid="contacts-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar contactos…" className="pl-9 rounded-sm bg-white" />
         </div>
 
         {filtered.length === 0 ? (
-          <div className="bg-white border border-zinc-200 rounded-sm"><EmptyState icon={Users} title="Sin contactos" subtitle="Cada contacto de WhatsApp vive acá." /></div>
+          <div className="bg-white border border-[#E9E6DC] rounded-sm"><EmptyState icon={Users} title="Sin contactos" subtitle="Cada contacto de WhatsApp vive acá." /></div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {filtered.map((c) => (
-              <div key={c.id} data-testid={`contact-card-${c.id}`} className="bg-white border border-zinc-200 rounded-sm p-5 hover:border-zinc-300 transition-colors">
+              <div key={c.id} data-testid={`contact-card-${c.id}`} className="bg-white border border-[#E9E6DC] rounded-sm p-5 hover:border-zinc-300 transition-colors">
                 <div className="flex items-center gap-3 mb-4">
                   <Avatar src={c.avatar} name={c.name} size={44} />
                   <div className="min-w-0">
-                    <p className="font-bold text-[#0A0A0A] truncate">{c.name}</p>
-                    <p className="text-xs text-[#52525B] truncate">{c.company}</p>
+                    <p className="font-bold text-[#0B1B26] truncate">{c.name}</p>
+                    <p className="text-xs text-[#888888] truncate">{c.company}</p>
                   </div>
                 </div>
-                <div className="space-y-1.5 text-sm text-[#52525B]">
-                  <p className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-[#FF4500]" /> {c.phone}</p>
-                  {c.email && <p className="flex items-center gap-2 truncate"><Mail className="h-3.5 w-3.5 text-[#FF4500]" /> {c.email}</p>}
+                <div className="space-y-1.5 text-sm text-[#888888]">
+                  <p className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-[#0E8DDB]" /> {c.phone}</p>
+                  {c.email && <p className="flex items-center gap-2 truncate"><Mail className="h-3.5 w-3.5 text-[#0E8DDB]" /> {c.email}</p>}
                 </div>
                 {c.tags?.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mt-4">
-                    {c.tags.map((t) => <span key={t} className="text-xs font-semibold bg-zinc-100 text-[#52525B] rounded-full px-2.5 py-0.5">{t}</span>)}
+                    {c.tags.map((t) => <span key={t} className="text-xs font-semibold bg-latus-warm-gray text-[#888888] rounded-full px-2.5 py-0.5">{t}</span>)}
                   </div>
                 )}
               </div>

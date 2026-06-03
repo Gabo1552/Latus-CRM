@@ -142,7 +142,7 @@ function UsersTab({ me }) {
     <div data-testid="users-tab" className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[220px] max-w-md">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-[#52525B]" />
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-[#888888]" />
           <Input
             data-testid="user-search"
             placeholder="Buscar por nombre o email…"
@@ -162,12 +162,12 @@ function UsersTab({ me }) {
             ))}
           </SelectContent>
         </Select>
-        <label className="flex items-center gap-2 text-sm text-[#52525B] select-none">
+        <label className="flex items-center gap-2 text-sm text-[#888888] select-none">
           <Switch
             data-testid="include-inactive"
             checked={includeInactive}
             onCheckedChange={setIncludeInactive}
-            className="data-[state=checked]:bg-[#FF4500]"
+            className="data-[state=checked]:bg-[#0E8DDB]"
           />
           Mostrar inactivos
         </label>
@@ -175,15 +175,15 @@ function UsersTab({ me }) {
         <Button
           data-testid="new-user-button"
           onClick={() => setModal({ mode: "create" })}
-          className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm font-semibold"
+          className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm font-semibold"
         >
           <Plus className="h-4 w-4 mr-1" /> Nuevo usuario
         </Button>
       </div>
 
-      <div className="bg-white border border-zinc-200 rounded-sm overflow-hidden">
+      <div className="bg-white border border-[#E9E6DC] rounded-sm overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-zinc-50 text-[11px] uppercase tracking-wide text-[#52525B]">
+          <thead className="bg-latus-cream text-[11px] uppercase tracking-wide text-[#888888]">
             <tr>
               <th className="text-left px-4 py-2.5 font-bold">Nombre</th>
               <th className="text-left px-4 py-2.5 font-bold">Email</th>
@@ -196,9 +196,9 @@ function UsersTab({ me }) {
           </thead>
           <tbody data-testid="users-table-body" className="divide-y divide-zinc-200">
             {usersQ.isLoading ? (
-              <tr><td colSpan={7} className="px-4 py-6 text-center text-[#52525B]">Cargando…</td></tr>
+              <tr><td colSpan={7} className="px-4 py-6 text-center text-[#888888]">Cargando…</td></tr>
             ) : users.length === 0 ? (
-              <tr><td colSpan={7} className="px-4 py-6 text-center text-[#52525B]">Sin usuarios</td></tr>
+              <tr><td colSpan={7} className="px-4 py-6 text-center text-[#888888]">Sin usuarios</td></tr>
             ) : users.map((u) => {
               const isSelf = u.user_id === me?.user_id;
               const ap = u.auth_provider;
@@ -206,25 +206,25 @@ function UsersTab({ me }) {
                 : ap === "both" ? "Ambos" : "Google";
               return (
                 <tr key={u.user_id} data-testid={`user-row-${u.user_id}`}>
-                  <td className="px-4 py-3 font-medium text-[#0A0A0A]">
+                  <td className="px-4 py-3 font-medium text-[#0B1B26]">
                     {u.name}
-                    {isSelf && <span className="ml-2 text-[10px] text-[#52525B] uppercase tracking-wide">Tú</span>}
+                    {isSelf && <span className="ml-2 text-[10px] text-[#888888] uppercase tracking-wide">Tú</span>}
                   </td>
-                  <td className="px-4 py-3 text-[#52525B]">{u.email}</td>
+                  <td className="px-4 py-3 text-[#888888]">{u.email}</td>
                   <td className="px-4 py-3"><RolePill role={u.role} /></td>
-                  <td className="px-4 py-3 text-[#52525B]">{apLabel}</td>
+                  <td className="px-4 py-3 text-[#888888]">{apLabel}</td>
                   <td className="px-4 py-3">
                     {u.is_active ? (
                       <span className="inline-flex items-center gap-1 text-xs font-bold text-[#15803D]">
                         <span className="h-1.5 w-1.5 rounded-full bg-[#15803D]" /> Activo
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 text-xs font-bold text-[#52525B]">
-                        <span className="h-1.5 w-1.5 rounded-full bg-[#52525B]" /> Inactivo
+                      <span className="inline-flex items-center gap-1 text-xs font-bold text-[#888888]">
+                        <span className="h-1.5 w-1.5 rounded-full bg-[#888888]" /> Inactivo
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-[#52525B] text-xs">
+                  <td className="px-4 py-3 text-[#888888] text-xs">
                     {u.last_login_at ? new Date(u.last_login_at).toLocaleString("es-AR") : "—"}
                   </td>
                   <td className="px-4 py-3 text-right">
@@ -335,17 +335,17 @@ function UsersTab({ me }) {
           </DialogHeader>
           <div className="bg-[#FEF9C3] border-l-4 border-[#EAB308] p-3 text-sm">
             <p className="font-bold flex items-center gap-2 mb-2"><AlertTriangle className="h-4 w-4" /> Copiala ahora, no se vuelve a mostrar.</p>
-            <p className="text-[#52525B] mb-2">
+            <p className="text-[#888888] mb-2">
               Compartila con <b>{resetDialog?.user?.name}</b> ({resetDialog?.user?.email})
               por un canal seguro. Al iniciar sesión, recomendales cambiarla.
             </p>
-            <div className="flex items-center gap-2 bg-white border border-zinc-200 rounded-sm px-3 py-2">
-              <code data-testid="temp-password" className="flex-1 font-mono text-[#0A0A0A] text-sm">{resetDialog?.tempPwd}</code>
+            <div className="flex items-center gap-2 bg-white border border-[#E9E6DC] rounded-sm px-3 py-2">
+              <code data-testid="temp-password" className="flex-1 font-mono text-[#0B1B26] text-sm">{resetDialog?.tempPwd}</code>
               <CopyButton value={resetDialog?.tempPwd || ""} />
             </div>
           </div>
           <DialogFooter>
-            <Button onClick={() => setResetDialog(null)} className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm">
+            <Button onClick={() => setResetDialog(null)} className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm">
               Entendido
             </Button>
           </DialogFooter>
@@ -442,8 +442,8 @@ function UserFormDialog({ open, mode, initialUser, onClose, onSaved }) {
                   onClick={() => setAuthProvider(ap.key)}
                   className={`px-3 py-2 text-xs font-semibold rounded-sm border text-center ${
                     authProvider === ap.key
-                      ? "bg-[#FF4500] text-white border-[#FF4500]"
-                      : "bg-white text-[#52525B] border-zinc-300 hover:border-[#FF4500]"
+                      ? "bg-[#0E8DDB] text-white border-[#0E8DDB]"
+                      : "bg-white text-[#888888] border-zinc-300 hover:border-[#0E8DDB]"
                   }`}
                 >
                   {ap.label}
@@ -476,7 +476,7 @@ function UserFormDialog({ open, mode, initialUser, onClose, onSaved }) {
             data-testid="user-form-save"
             disabled={!canSave}
             onClick={() => save.mutate()}
-            className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm"
+            className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm"
           >
             {isEdit ? "Guardar" : "Crear"}
           </Button>
@@ -589,7 +589,7 @@ function WhatsAppTab() {
   });
 
   if (!cfg) {
-    return <div className="text-[#52525B]">Cargando…</div>;
+    return <div className="text-[#888888]">Cargando…</div>;
   }
 
   const saveChanges = () => {
@@ -609,8 +609,8 @@ function WhatsAppTab() {
   return (
     <div data-testid="whatsapp-tab" className="space-y-5">
       {/* Estado */}
-      <div className="bg-white border border-zinc-200 rounded-sm p-5">
-        <h3 className="text-base font-bold tracking-tight text-[#0A0A0A] mb-3">Estado</h3>
+      <div className="bg-white border border-[#E9E6DC] rounded-sm p-5">
+        <h3 className="text-base font-bold tracking-tight text-[#0B1B26] mb-3">Estado</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
             {cfg.configured ? (
@@ -618,12 +618,12 @@ function WhatsAppTab() {
                 <span className="h-2 w-2 rounded-full bg-[#16A34A]" /> Conectado
               </span>
             ) : (
-              <span data-testid="wa-cfg-not-configured" className="inline-flex items-center gap-2 text-sm font-bold text-[#FF4500] bg-[#FFF7ED] border border-[#FED7AA] rounded-sm px-2.5 py-1">
-                <span className="h-2 w-2 rounded-full bg-[#FF4500]" /> No configurado
+              <span data-testid="wa-cfg-not-configured" className="inline-flex items-center gap-2 text-sm font-bold text-[#0E8DDB] bg-[#F4F2EC] border border-[#EFE3E1] rounded-sm px-2.5 py-1">
+                <span className="h-2 w-2 rounded-full bg-[#0E8DDB]" /> No configurado
               </span>
             )}
-            <p className="text-xs text-[#52525B] mt-2">Última actividad</p>
-            <p className="text-sm font-mono text-[#0A0A0A]">
+            <p className="text-xs text-[#888888] mt-2">Última actividad</p>
+            <p className="text-sm font-mono text-[#0B1B26]">
               {cfg.last_webhook_at ? new Date(cfg.last_webhook_at).toLocaleString("es-AR") : "Nunca"}
             </p>
             {cfg.last_error && (
@@ -633,14 +633,14 @@ function WhatsAppTab() {
             )}
           </div>
           <div>
-            <p className="text-xs text-[#52525B] mb-1">Webhook URL (configurar en Meta)</p>
+            <p className="text-xs text-[#888888] mb-1">Webhook URL (configurar en Meta)</p>
             {cfg.webhook_url_warning && (
               <div data-testid="webhook-url-warning" className="bg-[#FEF2F2] border-l-4 border-[#DC2626] p-2.5 text-xs text-[#991B1B] mb-2">
                 <p className="font-bold flex items-center gap-1.5"><AlertTriangle className="h-3.5 w-3.5" /> URL pública no disponible</p>
                 <p className="mt-0.5">{cfg.webhook_url_warning}</p>
               </div>
             )}
-            <div className="flex items-center gap-2 bg-zinc-50 border border-zinc-200 rounded-sm px-3 py-2">
+            <div className="flex items-center gap-2 bg-latus-cream border border-[#E9E6DC] rounded-sm px-3 py-2">
               <code data-testid="wa-webhook-url" className="flex-1 font-mono text-xs break-all">{cfg.webhook_url || "—"}</code>
               {cfg.webhook_url && <CopyButton value={cfg.webhook_url} />}
             </div>
@@ -650,7 +650,7 @@ function WhatsAppTab() {
               Si ves <span className="font-mono">localhost</span> o un dominio interno, configurá{" "}
               <span className="font-mono">PUBLIC_BASE_URL</span> en el backend o pedile a un admin que lo haga.
             </p>
-            <p className="text-xs text-[#52525B] mt-3 mb-1">Versión API</p>
+            <p className="text-xs text-[#888888] mt-3 mb-1">Versión API</p>
             <Input
               data-testid="wa-api-version"
               value={apiVersion}
@@ -662,16 +662,16 @@ function WhatsAppTab() {
       </div>
 
       {/* Credenciales */}
-      <div className="bg-white border border-zinc-200 rounded-sm p-5">
-        <h3 className="text-base font-bold tracking-tight text-[#0A0A0A] mb-1">Credenciales</h3>
-        <p className="text-xs text-[#52525B] mb-4">
+      <div className="bg-white border border-[#E9E6DC] rounded-sm p-5">
+        <h3 className="text-base font-bold tracking-tight text-[#0B1B26] mb-1">Credenciales</h3>
+        <p className="text-xs text-[#888888] mb-4">
           Los valores se guardan cifrados en base de datos y sobreescriben los de las variables de entorno.
           Para limpiar un campo y volver al valor de <code>.env</code>, usá <b>Limpiar</b>.
         </p>
         {!cfg.encryption_available && (
           <div data-testid="wa-no-encryption" className="bg-[#FEF9C3] border-l-4 border-[#EAB308] p-3 text-sm mb-4">
             <p className="font-bold flex items-center gap-2"><AlertTriangle className="h-4 w-4" /> Cifrado no disponible</p>
-            <p className="text-[#52525B]">
+            <p className="text-[#888888]">
               <code>APP_ENCRYPTION_KEY</code> no está configurado en el backend. La edición por UI
               está deshabilitada hasta que se genere y se reinicie el backend.
             </p>
@@ -682,11 +682,11 @@ function WhatsAppTab() {
             const meta = cfg.fields[f.key] || { source: "none", masked: "", configured: false };
             const pill = meta.source === "db" ? { label: "DB", c: "#16A34A", bg: "#F0FDF4" }
               : meta.source === "env" ? { label: "ENV", c: "#1D4ED8", bg: "#EFF6FF" }
-              : { label: "Sin configurar", c: "#52525B", bg: "#F4F4F5" };
+              : { label: "Sin configurar", c: "#888888", bg: "#F4F4F5" };
             return (
-              <div key={f.key} className="border-t border-zinc-100 pt-4 first:border-t-0 first:pt-0">
+              <div key={f.key} className="border-t border-[#E9E6DC] pt-4 first:border-t-0 first:pt-0">
                 <div className="mb-1.5">
-                  <Label className="text-sm font-bold text-[#0A0A0A]">{f.label}</Label>
+                  <Label className="text-sm font-bold text-[#0B1B26]">{f.label}</Label>
                   <p className="text-xs italic text-neutral-500 mt-0.5">{f.metaName}</p>
                   <p className="text-xs text-neutral-600 mt-1 leading-relaxed">{f.help}</p>
                 </div>
@@ -698,7 +698,7 @@ function WhatsAppTab() {
                     >
                       {pill.label}
                     </span>
-                    <span className="font-mono text-xs text-[#52525B]">{meta.masked || "—"}</span>
+                    <span className="font-mono text-xs text-[#888888]">{meta.masked || "—"}</span>
                   </div>
                   <Input
                     data-testid={`wa-input-${f.key}`}
@@ -727,7 +727,7 @@ function WhatsAppTab() {
             data-testid="wa-save-config"
             disabled={save.isPending || !cfg.encryption_available}
             onClick={saveChanges}
-            className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm font-semibold"
+            className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm font-semibold"
           >
             Guardar cambios
           </Button>
@@ -735,8 +735,8 @@ function WhatsAppTab() {
       </div>
 
       {/* Acciones */}
-      <div className="bg-white border border-zinc-200 rounded-sm p-5">
-        <h3 className="text-base font-bold tracking-tight text-[#0A0A0A] mb-3">Acciones</h3>
+      <div className="bg-white border border-[#E9E6DC] rounded-sm p-5">
+        <h3 className="text-base font-bold tracking-tight text-[#0B1B26] mb-3">Acciones</h3>
         <div className="flex flex-wrap gap-3">
           <Button
             data-testid="wa-rotate-verify"
@@ -751,7 +751,7 @@ function WhatsAppTab() {
             data-testid="wa-test-connection"
             onClick={() => testConn.mutate()}
             disabled={testConn.isPending}
-            className="rounded-sm font-semibold bg-[#0A0A0A] hover:bg-[#27272A] text-white"
+            className="rounded-sm font-semibold bg-[#0B1B26] hover:bg-[#27272A] text-white"
           >
             <CheckCircle2 className="h-4 w-4 mr-1" /> Probar conexión
           </Button>
@@ -768,10 +768,10 @@ function WhatsAppTab() {
         {rotated && (
           <div data-testid="wa-rotated-banner" className="bg-[#FEF9C3] border-l-4 border-[#EAB308] p-3 text-sm mt-4">
             <p className="font-bold flex items-center gap-2 mb-1"><AlertTriangle className="h-4 w-4" /> Nuevo Verify Token generado</p>
-            <p className="text-[#52525B] mb-2">
+            <p className="text-[#888888] mb-2">
               Copialo y pegalo en Meta Business. <b>Este valor no se vuelve a mostrar.</b>
             </p>
-            <div className="flex items-center gap-2 bg-white border border-zinc-200 rounded-sm px-3 py-2">
+            <div className="flex items-center gap-2 bg-white border border-[#E9E6DC] rounded-sm px-3 py-2">
               <code className="flex-1 font-mono text-xs break-all">{rotated}</code>
               <CopyButton value={rotated} />
             </div>
@@ -780,21 +780,21 @@ function WhatsAppTab() {
       </div>
 
       {/* Instrucciones */}
-      <details className="bg-white border border-zinc-200 rounded-sm p-5 group">
-        <summary className="font-bold tracking-tight text-[#0A0A0A] cursor-pointer list-none flex items-center justify-between">
+      <details className="bg-white border border-[#E9E6DC] rounded-sm p-5 group">
+        <summary className="font-bold tracking-tight text-[#0B1B26] cursor-pointer list-none flex items-center justify-between">
           ¿Dónde encuentro estos valores en Meta?
-          <span className="text-xs text-[#52525B] group-open:hidden">Mostrar</span>
-          <span className="text-xs text-[#52525B] hidden group-open:inline">Ocultar</span>
+          <span className="text-xs text-[#888888] group-open:hidden">Mostrar</span>
+          <span className="text-xs text-[#888888] hidden group-open:inline">Ocultar</span>
         </summary>
 
         {/* Equivalencias de nombres Meta ↔ Latus CRM */}
         <div className="mt-4">
-          <p className="text-xs uppercase tracking-[0.1em] font-bold text-[#52525B] mb-2">
+          <p className="text-xs uppercase tracking-[0.1em] font-bold text-[#888888] mb-2">
             Equivalencias de nombres · Meta ↔ Latus CRM
           </p>
-          <div className="border border-zinc-200 rounded-sm overflow-hidden">
+          <div className="border border-[#E9E6DC] rounded-sm overflow-hidden">
             <table data-testid="wa-meta-mapping" className="w-full text-sm">
-              <thead className="bg-zinc-50 text-[11px] uppercase tracking-wide text-[#52525B]">
+              <thead className="bg-latus-cream text-[11px] uppercase tracking-wide text-[#888888]">
                 <tr>
                   <th className="text-left px-3 py-2 font-bold w-1/4">Latus CRM</th>
                   <th className="text-left px-3 py-2 font-bold w-1/4">Nombre en Meta</th>
@@ -804,7 +804,7 @@ function WhatsAppTab() {
               <tbody className="divide-y divide-zinc-200">
                 {WA_FIELDS.map((f) => (
                   <tr key={f.key}>
-                    <td className="px-3 py-2 font-semibold text-[#0A0A0A] align-top">{f.label}</td>
+                    <td className="px-3 py-2 font-semibold text-[#0B1B26] align-top">{f.label}</td>
                     <td className="px-3 py-2 italic text-neutral-500 align-top">
                       {f.metaName.replace(/^En Meta:\s*/, "")}
                     </td>
@@ -816,12 +816,12 @@ function WhatsAppTab() {
           </div>
         </div>
 
-        <p className="text-xs uppercase tracking-[0.1em] font-bold text-[#52525B] mt-5 mb-2">
+        <p className="text-xs uppercase tracking-[0.1em] font-bold text-[#888888] mt-5 mb-2">
           Pasos de configuración
         </p>
-        <ol className="list-decimal pl-5 space-y-2 text-sm text-[#0A0A0A]">
+        <ol className="list-decimal pl-5 space-y-2 text-sm text-[#0B1B26]">
           <li>Iniciá sesión en <a href="https://business.facebook.com" className="text-[#1D4ED8] underline" target="_blank" rel="noreferrer">Meta Business</a> y abrí la app de WhatsApp Business.</li>
-          <li>En la sección <b>Configuración &gt; Webhooks</b>, agregá la URL <code className="font-mono bg-zinc-100 px-1">{cfg.webhook_url}</code> y el <b>Verify Token</b> guardado acá.</li>
+          <li>En la sección <b>Configuración &gt; Webhooks</b>, agregá la URL <code className="font-mono bg-latus-warm-gray px-1">{cfg.webhook_url}</code> y el <b>Verify Token</b> guardado acá.</li>
           <li>Suscribite al campo <b>messages</b>.</li>
           <li>En <b>Tokens de acceso</b>, generá un Access Token permanente y pegalo arriba.</li>
           <li>Copiá el <b>Phone Number ID</b> y el <b>WhatsApp Business Account ID</b> al panel.</li>
@@ -856,7 +856,7 @@ function BotIATab() {
     onError: (e) => toast.error(e?.response?.data?.detail || "No se pudieron guardar los cambios"),
   });
 
-  if (q.isPending || !draft) return <div className="text-[#52525B]">Cargando…</div>;
+  if (q.isPending || !draft) return <div className="text-[#888888]">Cargando…</div>;
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const faqs = Array.isArray(draft.faqs) ? draft.faqs : [];
@@ -892,22 +892,22 @@ function BotIATab() {
 
   return (
     <div className="space-y-6" data-testid="bot-ia-tab">
-      <div className="bg-white border border-zinc-200 rounded-sm p-5">
+      <div className="bg-white border border-[#E9E6DC] rounded-sm p-5">
         <div className="flex items-center gap-2 mb-1">
-          <Bot className="h-5 w-5 text-[#FF4500]" />
-          <h2 className="text-xl font-bold tracking-tight text-[#0A0A0A]">Asistente de IA</h2>
+          <Bot className="h-5 w-5 text-[#0E8DDB]" />
+          <h2 className="text-xl font-bold tracking-tight text-[#0B1B26]">Asistente de IA</h2>
         </div>
-        <p className="text-sm text-[#52525B] mb-5">
+        <p className="text-sm text-[#888888] mb-5">
           Configurá cómo responde el bot a los mensajes entrantes de WhatsApp. Los cambios
           impactan en todas las conversaciones nuevas y en las que tengan el bot habilitado.
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {/* Default bot on/off */}
-          <div className="flex items-start justify-between gap-4 p-3 border border-zinc-200 rounded-sm">
+          <div className="flex items-start justify-between gap-4 p-3 border border-[#E9E6DC] rounded-sm">
             <div>
-              <Label className="text-sm font-bold text-[#0A0A0A]">Bot habilitado por defecto</Label>
-              <p className="text-xs text-[#52525B] mt-0.5">
+              <Label className="text-sm font-bold text-[#0B1B26]">Bot habilitado por defecto</Label>
+              <p className="text-xs text-[#888888] mt-0.5">
                 Si está activo, cada conversación nueva arranca con el bot encendido.
               </p>
             </div>
@@ -919,9 +919,9 @@ function BotIATab() {
           </div>
 
           {/* Model */}
-          <div className="p-3 border border-zinc-200 rounded-sm">
-            <Label className="text-sm font-bold text-[#0A0A0A]">Modelo</Label>
-            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Modelo</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
               El modelo de OpenAI que genera las respuestas.
             </p>
             <Select value={draft.model || "gpt-4o-mini"} onValueChange={(v) => set({ model: v })}>
@@ -936,14 +936,14 @@ function BotIATab() {
           </div>
 
           {/* Confidence threshold */}
-          <div className="p-3 border border-zinc-200 rounded-sm">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm">
             <div className="flex items-center justify-between mb-1">
-              <Label className="text-sm font-bold text-[#0A0A0A]">Confianza mínima</Label>
-              <span data-testid="bot-setting-threshold-value" className="text-sm font-mono font-bold text-[#FF4500]">
+              <Label className="text-sm font-bold text-[#0B1B26]">Confianza mínima</Label>
+              <span data-testid="bot-setting-threshold-value" className="text-sm font-mono font-bold text-[#0E8DDB]">
                 {thresh.toFixed(2)}
               </span>
             </div>
-            <p className="text-xs text-[#52525B] mb-2">
+            <p className="text-xs text-[#888888] mb-2">
               Si la respuesta del bot tiene una confianza menor, deriva a un humano.
             </p>
             <input
@@ -951,7 +951,7 @@ function BotIATab() {
               type="range" min="0" max="1" step="0.05"
               value={thresh}
               onChange={(e) => set({ confidence_threshold: parseFloat(e.target.value) })}
-              className="w-full accent-[#FF4500]"
+              className="w-full accent-[#0E8DDB]"
             />
             {threshInvalid && (
               <p className="text-[11px] text-[#DC2626] mt-1">El valor debe estar entre 0 y 1.</p>
@@ -959,9 +959,9 @@ function BotIATab() {
           </div>
 
           {/* Context max */}
-          <div className="p-3 border border-zinc-200 rounded-sm">
-            <Label className="text-sm font-bold text-[#0A0A0A]">Mensajes recientes de contexto</Label>
-            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Mensajes recientes de contexto</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
               Cuántos mensajes previos del chat le pasamos al modelo (3 a 50).
             </p>
             <Input
@@ -977,9 +977,9 @@ function BotIATab() {
           </div>
 
           {/* Tone */}
-          <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
-            <Label className="text-sm font-bold text-[#0A0A0A]">Tono</Label>
-            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
+            <Label className="text-sm font-bold text-[#0B1B26]">Tono</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
               Una línea describiendo cómo querés que suene (ej.: profesional, cercano, conciso).
             </p>
             <Input
@@ -992,9 +992,9 @@ function BotIATab() {
           </div>
 
           {/* Business instructions */}
-          <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
-            <Label className="text-sm font-bold text-[#0A0A0A]">Instrucciones del negocio</Label>
-            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
+            <Label className="text-sm font-bold text-[#0B1B26]">Instrucciones del negocio</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
               Información que el bot puede usar: productos, precios, condiciones, políticas, horarios.
               Esto se inyecta como sistema en cada llamada al modelo.
             </p>
@@ -1008,9 +1008,9 @@ function BotIATab() {
           </div>
 
           {/* Handoff rules */}
-          <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
-            <Label className="text-sm font-bold text-[#0A0A0A]">Reglas de derivación a humano</Label>
-            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
+            <Label className="text-sm font-bold text-[#0B1B26]">Reglas de derivación a humano</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
               Cuándo el bot debe pasar el chat a un agente humano.
             </p>
             <Textarea
@@ -1023,14 +1023,14 @@ function BotIATab() {
           </div>
 
           {/* FAQs */}
-          <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
             <div className="flex items-center justify-between mb-1">
-              <Label className="text-sm font-bold text-[#0A0A0A] flex items-center gap-1.5">
-                <Sparkles className="h-3.5 w-3.5 text-[#FF4500]" /> Preguntas frecuentes (FAQ)
+              <Label className="text-sm font-bold text-[#0B1B26] flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5 text-[#0E8DDB]" /> Preguntas frecuentes (FAQ)
               </Label>
-              <span className="text-xs text-[#52525B]">{faqs.length} item(s)</span>
+              <span className="text-xs text-[#888888]">{faqs.length} item(s)</span>
             </div>
-            <p className="text-xs text-[#52525B] mb-2">
+            <p className="text-xs text-[#888888] mb-2">
               Cada par P/R se pasa al modelo para responder con precisión.
             </p>
             <div className="space-y-2">
@@ -1078,7 +1078,7 @@ function BotIATab() {
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 mt-6 pt-4 border-t border-zinc-200">
+        <div className="flex items-center justify-end gap-2 mt-6 pt-4 border-t border-[#E9E6DC]">
           <Button
             data-testid="bot-settings-reset"
             variant="outline"
@@ -1092,7 +1092,7 @@ function BotIATab() {
             data-testid="bot-settings-save"
             onClick={onSave}
             disabled={!dirty || save.isPending}
-            className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm"
+            className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm"
           >
             {save.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
             Guardar cambios
@@ -1100,11 +1100,11 @@ function BotIATab() {
         </div>
       </div>
 
-      <details className="bg-zinc-50 border border-zinc-200 rounded-sm px-4 py-3" data-testid="bot-help-details">
-        <summary className="cursor-pointer text-sm font-bold text-[#0A0A0A] flex items-center gap-2">
-          <Lightbulb className="h-3.5 w-3.5 text-[#FF4500]" /> Cómo funciona el bot
+      <details className="bg-latus-cream border border-[#E9E6DC] rounded-sm px-4 py-3" data-testid="bot-help-details">
+        <summary className="cursor-pointer text-sm font-bold text-[#0B1B26] flex items-center gap-2">
+          <Lightbulb className="h-3.5 w-3.5 text-[#0E8DDB]" /> Cómo funciona el bot
         </summary>
-        <ul className="list-disc pl-5 space-y-1 mt-3 text-xs text-[#52525B]">
+        <ul className="list-disc pl-5 space-y-1 mt-3 text-xs text-[#888888]">
           <li>Cada mensaje entrante del cliente en WhatsApp dispara una llamada al modelo configurado en <b>EMERGENT_LLM_KEY</b>.</li>
           <li>El bot decide si responder, derivar a humano, actualizar estado del lead, o no hacer nada.</li>
           <li>Si detecta DNI/CBU/tarjeta o si el cliente pide hablar con un humano, deriva sin contestar.</li>
@@ -1167,7 +1167,7 @@ function AIAutoTab() {
     onError: (e) => toast.error(e?.response?.data?.detail || "Error al probar la conexión"),
   });
 
-  if (q.isPending || !draft) return <div className="text-[#52525B]">Cargando…</div>;
+  if (q.isPending || !draft) return <div className="text-[#888888]">Cargando…</div>;
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const providers = draft.supported_providers || Object.keys(PROVIDER_LABELS);
@@ -1216,22 +1216,22 @@ function AIAutoTab() {
 
   return (
     <div className="space-y-6" data-testid="ai-auto-tab">
-      <div className="bg-white border border-zinc-200 rounded-sm p-5">
+      <div className="bg-white border border-[#E9E6DC] rounded-sm p-5">
         <div className="flex items-center gap-2 mb-1">
-          <Sparkles className="h-5 w-5 text-[#FF4500]" />
-          <h2 className="text-xl font-bold tracking-tight text-[#0A0A0A]">IA y automatización</h2>
+          <Sparkles className="h-5 w-5 text-[#0E8DDB]" />
+          <h2 className="text-xl font-bold tracking-tight text-[#0B1B26]">IA y automatización</h2>
         </div>
-        <p className="text-sm text-[#52525B] mb-5">
+        <p className="text-sm text-[#888888] mb-5">
           Elegí qué proveedor de IA usa el asistente, ajustá costos/calidad y controlá
           la automatización en WhatsApp.
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {/* AI enabled */}
-          <div className="flex items-start justify-between gap-4 p-3 border border-zinc-200 rounded-sm md:col-span-2">
+          <div className="flex items-start justify-between gap-4 p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
             <div>
-              <Label className="text-sm font-bold text-[#0A0A0A]">IA activa</Label>
-              <p className="text-xs text-[#52525B] mt-0.5">
+              <Label className="text-sm font-bold text-[#0B1B26]">IA activa</Label>
+              <p className="text-xs text-[#888888] mt-0.5">
                 Apaga completamente las llamadas al proveedor (resumen, sugerencias y bot).
               </p>
             </div>
@@ -1243,9 +1243,9 @@ function AIAutoTab() {
           </div>
 
           {/* Provider */}
-          <div className="p-3 border border-zinc-200 rounded-sm">
-            <Label className="text-sm font-bold text-[#0A0A0A]">Proveedor</Label>
-            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Proveedor</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
               Por defecto se usa Emergent con la clave universal. Configurá tu propio
               proveedor para usar tu cuenta directa.
             </p>
@@ -1265,9 +1265,9 @@ function AIAutoTab() {
           </div>
 
           {/* Model */}
-          <div className="p-3 border border-zinc-200 rounded-sm">
-            <Label className="text-sm font-bold text-[#0A0A0A]">Modelo</Label>
-            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Modelo</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
               Nombre del modelo (validado por el proveedor).
             </p>
             <Input
@@ -1285,13 +1285,13 @@ function AIAutoTab() {
 
           {/* API key */}
           {needsKey && (
-            <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
-              <Label className="text-sm font-bold text-[#0A0A0A]">API Key</Label>
-              <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+            <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
+              <Label className="text-sm font-bold text-[#0B1B26]">API Key</Label>
+              <p className="text-xs text-[#888888] mt-0.5 mb-2">
                 Se guarda cifrada y nunca se muestra en claro. Estado actual:{" "}
                 {draft.api_key_configured
                   ? <span className="font-mono text-[#16A34A]">{draft.api_key_masked || "configurada"}</span>
-                  : <span className="font-mono text-[#FF4500]">no configurada</span>}
+                  : <span className="font-mono text-[#0E8DDB]">no configurada</span>}
               </p>
               <div className="flex gap-2">
                 <Input
@@ -1322,7 +1322,7 @@ function AIAutoTab() {
                 </p>
               )}
               {keyAction === "clear" && (
-                <p className="text-[11px] text-[#FF4500] mt-1">
+                <p className="text-[11px] text-[#0E8DDB] mt-1">
                   Al guardar se borrará la API Key actual.
                 </p>
               )}
@@ -1331,9 +1331,9 @@ function AIAutoTab() {
 
           {/* Base URL */}
           {needsBaseUrl && (
-            <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
-              <Label className="text-sm font-bold text-[#0A0A0A]">URL base</Label>
-              <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+            <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
+              <Label className="text-sm font-bold text-[#0B1B26]">URL base</Label>
+              <p className="text-xs text-[#888888] mt-0.5 mb-2">
                 Endpoint compatible con OpenAI (ej. <span className="font-mono">https://api.together.xyz/v1</span>).
               </p>
               <Input
@@ -1347,14 +1347,14 @@ function AIAutoTab() {
           )}
 
           {/* Temperature */}
-          <div className="p-3 border border-zinc-200 rounded-sm">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm">
             <div className="flex items-center justify-between mb-1">
-              <Label className="text-sm font-bold text-[#0A0A0A]">Temperatura</Label>
-              <span data-testid="ai-setting-temp-value" className="text-sm font-mono font-bold text-[#FF4500]">
+              <Label className="text-sm font-bold text-[#0B1B26]">Temperatura</Label>
+              <span data-testid="ai-setting-temp-value" className="text-sm font-mono font-bold text-[#0E8DDB]">
                 {temp.toFixed(1)}
               </span>
             </div>
-            <p className="text-xs text-[#52525B] mb-2">
+            <p className="text-xs text-[#888888] mb-2">
               0 = determinístico, 2 = muy creativo. Recomendado: 0.2 – 0.5.
             </p>
             <input
@@ -1362,15 +1362,15 @@ function AIAutoTab() {
               type="range" min="0" max="2" step="0.1"
               value={temp}
               onChange={(e) => set({ temperature: parseFloat(e.target.value) })}
-              className="w-full accent-[#FF4500]"
+              className="w-full accent-[#0E8DDB]"
             />
             {tempBad && <p className="text-[11px] text-[#DC2626] mt-1">Debe estar entre 0 y 2.</p>}
           </div>
 
           {/* Max tokens */}
-          <div className="p-3 border border-zinc-200 rounded-sm">
-            <Label className="text-sm font-bold text-[#0A0A0A]">Máximo de tokens por respuesta</Label>
-            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Máximo de tokens por respuesta</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
               Límite de tokens generados (100 a 4096).
             </p>
             <Input
@@ -1384,14 +1384,14 @@ function AIAutoTab() {
           </div>
 
           {/* Min confidence */}
-          <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
             <div className="flex items-center justify-between mb-1">
-              <Label className="text-sm font-bold text-[#0A0A0A]">Umbral mínimo de confianza para responder automáticamente</Label>
-              <span data-testid="ai-setting-conf-value" className="text-sm font-mono font-bold text-[#FF4500]">
+              <Label className="text-sm font-bold text-[#0B1B26]">Umbral mínimo de confianza para responder automáticamente</Label>
+              <span data-testid="ai-setting-conf-value" className="text-sm font-mono font-bold text-[#0E8DDB]">
                 {minConf.toFixed(2)}
               </span>
             </div>
-            <p className="text-xs text-[#52525B] mb-2">
+            <p className="text-xs text-[#888888] mb-2">
               Si la confianza del bot es menor a este valor, deriva a humano en vez de responder.
             </p>
             <input
@@ -1399,16 +1399,16 @@ function AIAutoTab() {
               type="range" min="0" max="1" step="0.05"
               value={minConf}
               onChange={(e) => set({ min_confidence_for_auto_reply: parseFloat(e.target.value) })}
-              className="w-full accent-[#FF4500]"
+              className="w-full accent-[#0E8DDB]"
             />
             {minConfBad && <p className="text-[11px] text-[#DC2626] mt-1">Debe estar entre 0 y 1.</p>}
           </div>
 
           {/* Switches: auto-reply + auto-handoff */}
-          <div className="p-3 border border-zinc-200 rounded-sm flex items-start justify-between gap-3">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm flex items-start justify-between gap-3">
             <div>
-              <Label className="text-sm font-bold text-[#0A0A0A]">Respuesta automática por WhatsApp</Label>
-              <p className="text-xs text-[#52525B] mt-0.5">
+              <Label className="text-sm font-bold text-[#0B1B26]">Respuesta automática por WhatsApp</Label>
+              <p className="text-xs text-[#888888] mt-0.5">
                 Si está apagado, el bot detecta intent y resume, pero no envía mensajes.
               </p>
             </div>
@@ -1418,10 +1418,10 @@ function AIAutoTab() {
               onCheckedChange={(v) => set({ whatsapp_auto_reply_enabled: v })}
             />
           </div>
-          <div className="p-3 border border-zinc-200 rounded-sm flex items-start justify-between gap-3">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm flex items-start justify-between gap-3">
             <div>
-              <Label className="text-sm font-bold text-[#0A0A0A]">Handoff automático a humano</Label>
-              <p className="text-xs text-[#52525B] mt-0.5">
+              <Label className="text-sm font-bold text-[#0B1B26]">Handoff automático a humano</Label>
+              <p className="text-xs text-[#888888] mt-0.5">
                 Si está apagado, el bot no cierra la conversación al solicitar humano; solo notifica.
               </p>
             </div>
@@ -1433,9 +1433,9 @@ function AIAutoTab() {
           </div>
 
           {/* System prompt base */}
-          <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
-            <Label className="text-sm font-bold text-[#0A0A0A]">Prompt base del asistente</Label>
-            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+          <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
+            <Label className="text-sm font-bold text-[#0B1B26]">Prompt base del asistente</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
               Texto que se antepone a las instrucciones del bot. Útil para personalidad/branding global.
             </p>
             <Textarea
@@ -1448,7 +1448,7 @@ function AIAutoTab() {
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-2 mt-6 pt-4 border-t border-zinc-200">
+        <div className="flex items-center justify-between gap-2 mt-6 pt-4 border-t border-[#E9E6DC]">
           <Button
             data-testid="ai-test-button"
             variant="outline"
@@ -1473,7 +1473,7 @@ function AIAutoTab() {
               data-testid="ai-settings-save"
               onClick={onSave}
               disabled={!dirty || save.isPending}
-              className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm"
+              className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm"
             >
               {save.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
               Guardar
@@ -1501,26 +1501,26 @@ export default function Configuracion() {
         <div className="px-6 py-6 max-w-2xl">
           <div
             data-testid="config-no-access"
-            className="bg-white border border-zinc-200 rounded-sm p-8 text-center"
+            className="bg-white border border-[#E9E6DC] rounded-sm p-8 text-center"
           >
-            <div className="mx-auto h-12 w-12 rounded-sm bg-[#FFF7ED] border border-[#FED7AA] flex items-center justify-center mb-4">
-              <AlertTriangle className="h-6 w-6 text-[#FF4500]" />
+            <div className="mx-auto h-12 w-12 rounded-sm bg-[#F4F2EC] border border-[#EFE3E1] flex items-center justify-center mb-4">
+              <AlertTriangle className="h-6 w-6 text-[#0E8DDB]" />
             </div>
-            <h2 className="text-xl font-bold tracking-tight text-[#0A0A0A] mb-1">
+            <h2 className="text-xl font-bold tracking-tight text-[#0B1B26] mb-1">
               No tenés permisos para acceder a esta sección
             </h2>
-            <p className="text-sm text-[#52525B] mb-4">
+            <p className="text-sm text-[#888888] mb-4">
               La sección <b>Configuración</b> es exclusiva para usuarios con rol{" "}
               <RolePill role="admin" />. Tu cuenta actual tiene rol{" "}
               <RolePill role={user.role} />.
             </p>
-            <p className="text-xs text-[#52525B] mb-5">
+            <p className="text-xs text-[#888888] mb-5">
               Si necesitás acceso, pedile a un administrador que actualice tu rol
               desde <span className="font-mono">/configuracion</span> &gt; Usuarios.
             </p>
             <a
               href="/dashboard"
-              className="inline-flex items-center text-sm font-bold text-[#FF4500] hover:underline"
+              className="inline-flex items-center text-sm font-bold text-[#0E8DDB] hover:underline"
             >
               Volver al panel principal
             </a>
@@ -1533,14 +1533,14 @@ export default function Configuracion() {
   return (
     <AppLayout title="Configuración">
       <div className="px-6 py-6 max-w-6xl">
-        <div className="flex items-center gap-2 mb-6 border-b border-zinc-200">
+        <div className="flex items-center gap-2 mb-6 border-b border-[#E9E6DC]">
           <button
             data-testid="tab-users"
             onClick={() => setTab("users")}
             className={`px-4 py-2.5 -mb-px text-sm font-bold border-b-2 transition-colors ${
               tab === "users"
-                ? "border-[#FF4500] text-[#0A0A0A]"
-                : "border-transparent text-[#52525B] hover:text-[#0A0A0A]"
+                ? "border-[#0E8DDB] text-[#0B1B26]"
+                : "border-transparent text-[#888888] hover:text-[#0B1B26]"
             }`}
           >
             <UsersIcon className="h-4 w-4 inline mr-1.5" /> Usuarios
@@ -1550,8 +1550,8 @@ export default function Configuracion() {
             onClick={() => setTab("whatsapp")}
             className={`px-4 py-2.5 -mb-px text-sm font-bold border-b-2 transition-colors ${
               tab === "whatsapp"
-                ? "border-[#FF4500] text-[#0A0A0A]"
-                : "border-transparent text-[#52525B] hover:text-[#0A0A0A]"
+                ? "border-[#0E8DDB] text-[#0B1B26]"
+                : "border-transparent text-[#888888] hover:text-[#0B1B26]"
             }`}
           >
             <MessageSquareText className="h-4 w-4 inline mr-1.5" /> WhatsApp
@@ -1561,8 +1561,8 @@ export default function Configuracion() {
             onClick={() => setTab("bot")}
             className={`px-4 py-2.5 -mb-px text-sm font-bold border-b-2 transition-colors ${
               tab === "bot"
-                ? "border-[#FF4500] text-[#0A0A0A]"
-                : "border-transparent text-[#52525B] hover:text-[#0A0A0A]"
+                ? "border-[#0E8DDB] text-[#0B1B26]"
+                : "border-transparent text-[#888888] hover:text-[#0B1B26]"
             }`}
           >
             <Bot className="h-4 w-4 inline mr-1.5" /> Bot IA
@@ -1572,8 +1572,8 @@ export default function Configuracion() {
             onClick={() => setTab("ai")}
             className={`px-4 py-2.5 -mb-px text-sm font-bold border-b-2 transition-colors ${
               tab === "ai"
-                ? "border-[#FF4500] text-[#0A0A0A]"
-                : "border-transparent text-[#52525B] hover:text-[#0A0A0A]"
+                ? "border-[#0E8DDB] text-[#0B1B26]"
+                : "border-transparent text-[#888888] hover:text-[#0B1B26]"
             }`}
           >
             <Sparkles className="h-4 w-4 inline mr-1.5" /> IA y automatización

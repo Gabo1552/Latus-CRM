@@ -12,13 +12,13 @@ import { StatusBadge, Avatar } from "@/components/Bits";
 
 function Metric({ icon: Icon, label, value, sub, testid }) {
   return (
-    <div className="bg-white border border-zinc-200 rounded-sm p-5 hover:border-zinc-300 transition-colors" data-testid={testid}>
+    <div className="bg-white border border-[#E9E6DC] rounded-sm p-5 hover:border-zinc-300 transition-colors" data-testid={testid}>
       <div className="flex items-center justify-between mb-3">
-        <span className="text-xs tracking-[0.15em] uppercase font-bold text-[#52525B]">{label}</span>
-        <Icon className="h-4 w-4 text-[#FF4500]" />
+        <span className="text-xs tracking-[0.15em] uppercase font-bold text-[#888888]">{label}</span>
+        <Icon className="h-4 w-4 text-[#0E8DDB]" />
       </div>
-      <p className="text-3xl font-extrabold tracking-tighter text-[#0A0A0A]">{value}</p>
-      {sub && <p className="text-xs text-[#52525B] mt-1">{sub}</p>}
+      <p className="text-3xl font-extrabold tracking-tighter text-[#0B1B26]">{value}</p>
+      {sub && <p className="text-xs text-[#888888] mt-1">{sub}</p>}
     </div>
   );
 }
@@ -28,13 +28,13 @@ function AttnColumn({ icon: Icon, title, count, children, testid }) {
     <div className="p-4" data-testid={testid}>
       <div className="flex items-center justify-between mb-2 px-2">
         <div className="flex items-center gap-2">
-          <Icon className="h-3.5 w-3.5 text-[#52525B]" />
-          <span className="text-xs tracking-[0.12em] uppercase font-bold text-[#52525B]">{title}</span>
+          <Icon className="h-3.5 w-3.5 text-[#888888]" />
+          <span className="text-xs tracking-[0.12em] uppercase font-bold text-[#888888]">{title}</span>
         </div>
-        <span className="text-xs font-bold text-[#0A0A0A] bg-zinc-100 rounded-full px-2">{count}</span>
+        <span className="text-xs font-bold text-[#0B1B26] bg-latus-warm-gray rounded-full px-2">{count}</span>
       </div>
       <div className="space-y-0.5">
-        {count === 0 ? <p className="text-sm text-zinc-400 px-2 py-3">Sin pendientes</p> : children}
+        {count === 0 ? <p className="text-sm text-latus-muted px-2 py-3">Sin pendientes</p> : children}
       </div>
     </div>
   );
@@ -63,21 +63,21 @@ export default function Dashboard() {
         </div>
 
         {/* Requires attention */}
-        <div className="bg-white border border-zinc-200 rounded-sm" data-testid="requires-attention">
-          <div className="flex items-center gap-2 px-5 py-4 border-b border-zinc-200">
-            <AlertTriangle className="h-4 w-4 text-[#FF4500]" />
-            <h3 className="text-lg font-bold tracking-tight text-[#0A0A0A]">Requiere atención</h3>
-            <span className="text-xs font-bold text-white bg-[#FF4500] rounded-full px-2 py-0.5">{attnTotal}</span>
+        <div className="bg-white border border-[#E9E6DC] rounded-sm" data-testid="requires-attention">
+          <div className="flex items-center gap-2 px-5 py-4 border-b border-[#E9E6DC]">
+            <AlertTriangle className="h-4 w-4 text-[#0E8DDB]" />
+            <h3 className="text-lg font-bold tracking-tight text-[#0B1B26]">Requiere atención</h3>
+            <span className="text-xs font-bold text-white bg-[#0E8DDB] rounded-full px-2 py-0.5">{attnTotal}</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-zinc-100">
             {/* Handoffs */}
             <AttnColumn icon={ArrowRightLeft} title="Atención humana" count={attn.open_handoffs.length} testid="attn-handoffs">
               {attn.open_handoffs.slice(0, 4).map((c) => (
-                <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-handoff-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-zinc-50 text-left transition-colors">
+                <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-handoff-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-latus-cream text-left transition-colors">
                   <Avatar src={c.contact_avatar} name={c.contact_name} size={28} />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-[#0A0A0A] truncate">{c.contact_name}</p>
-                    <p className="text-xs text-[#52525B] truncate">{c.last_message}</p>
+                    <p className="text-sm font-semibold text-[#0B1B26] truncate">{c.contact_name}</p>
+                    <p className="text-xs text-[#888888] truncate">{c.last_message}</p>
                   </div>
                 </button>
               ))}
@@ -85,23 +85,23 @@ export default function Dashboard() {
             {/* Unread */}
             <AttnColumn icon={Mail} title="Chats sin leer" count={attn.unread_conversations.length} testid="attn-unread">
               {attn.unread_conversations.slice(0, 4).map((c) => (
-                <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-unread-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-zinc-50 text-left transition-colors">
+                <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-unread-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-latus-cream text-left transition-colors">
                   <Avatar src={c.contact_avatar} name={c.contact_name} size={28} />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-[#0A0A0A] truncate">{c.contact_name}</p>
-                    <p className="text-xs text-[#52525B] truncate">{c.last_message}</p>
+                    <p className="text-sm font-semibold text-[#0B1B26] truncate">{c.contact_name}</p>
+                    <p className="text-xs text-[#888888] truncate">{c.last_message}</p>
                   </div>
-                  <span className="bg-[#FF4500] text-white text-[10px] font-bold rounded-full h-4 min-w-4 px-1 flex items-center justify-center shrink-0">{c.unread}</span>
+                  <span className="bg-[#0E8DDB] text-white text-[10px] font-bold rounded-full h-4 min-w-4 px-1 flex items-center justify-center shrink-0">{c.unread}</span>
                 </button>
               ))}
             </AttnColumn>
             {/* Lead sin respuesta */}
             <AttnColumn icon={UserX} title="Lead sin respuesta" count={attn.no_response?.length || 0} testid="attn-no-response">
               {(attn.no_response || []).slice(0, 4).map((c) => (
-                <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-no-response-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-zinc-50 text-left transition-colors">
+                <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-no-response-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-latus-cream text-left transition-colors">
                   <Avatar src={c.contact_avatar} name={c.contact_name} size={28} />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-[#0A0A0A] truncate">{c.contact_name}</p>
+                    <p className="text-sm font-semibold text-[#0B1B26] truncate">{c.contact_name}</p>
                     <p className="text-xs text-[#7C3AED] truncate">{c.last_message}</p>
                   </div>
                 </button>
@@ -110,10 +110,10 @@ export default function Dashboard() {
             {/* Overdue tasks */}
             <AttnColumn icon={AlarmClock} title="Tareas vencidas" count={attn.overdue_tasks.length} testid="attn-overdue">
               {attn.overdue_tasks.slice(0, 4).map((t) => (
-                <button key={t.id} onClick={() => navigate("/tasks")} data-testid={`attn-overdue-${t.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-zinc-50 text-left transition-colors">
+                <button key={t.id} onClick={() => navigate("/tasks")} data-testid={`attn-overdue-${t.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-latus-cream text-left transition-colors">
                   <span className="h-2 w-2 rounded-full bg-[#DC2626] shrink-0" />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-[#0A0A0A] truncate">{t.title}</p>
+                    <p className="text-sm font-semibold text-[#0B1B26] truncate">{t.title}</p>
                     <p className="text-xs text-[#DC2626] truncate">Vence {t.due_date}</p>
                   </div>
                 </button>
@@ -124,20 +124,20 @@ export default function Dashboard() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Pipeline chart */}
-          <div className="lg:col-span-2 bg-white border border-zinc-200 rounded-sm p-6">
+          <div className="lg:col-span-2 bg-white border border-[#E9E6DC] rounded-sm p-6">
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h3 className="text-lg font-bold tracking-tight text-[#0A0A0A]">Leads por etapa</h3>
-                <p className="text-sm text-[#52525B]">Distribución en el embudo</p>
+                <h3 className="text-lg font-bold tracking-tight text-[#0B1B26]">Leads por etapa</h3>
+                <p className="text-sm text-[#888888]">Distribución en el embudo</p>
               </div>
-              <button onClick={() => navigate("/pipeline")} className="text-sm font-semibold text-[#FF4500] flex items-center gap-1 hover:gap-2 transition-all" data-testid="view-pipeline-link">
+              <button onClick={() => navigate("/pipeline")} className="text-sm font-semibold text-[#0E8DDB] flex items-center gap-1 hover:gap-2 transition-all" data-testid="view-pipeline-link">
                 Pipeline <ArrowUpRight className="h-4 w-4" />
               </button>
             </div>
             <ResponsiveContainer width="100%" height={240}>
               <BarChart data={chartData} barCategoryGap={24}>
-                <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#52525B" }} axisLine={{ stroke: "#E4E4E7" }} tickLine={false} />
-                <YAxis tick={{ fontSize: 12, fill: "#52525B" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#888888" }} axisLine={{ stroke: "#E4E4E7" }} tickLine={false} />
+                <YAxis tick={{ fontSize: 12, fill: "#888888" }} axisLine={false} tickLine={false} allowDecimals={false} />
                 <Tooltip cursor={{ fill: "#F4F4F5" }} contentStyle={{ borderRadius: 2, border: "1px solid #E4E4E7", fontSize: 13 }} />
                 <Bar dataKey="value" radius={[2, 2, 0, 0]}>
                   {chartData.map((e, i) => <Cell key={i} fill={e.color} />)}
@@ -148,26 +148,26 @@ export default function Dashboard() {
 
           {/* Quick stats */}
           <div className="space-y-4">
-            <div className="bg-[#0A0A0A] rounded-sm p-6 text-white">
-              <Bot className="h-5 w-5 text-[#FF4500] mb-3" />
-              <p className="text-xs tracking-[0.15em] uppercase font-bold text-zinc-400">Atendido por humano</p>
+            <div className="bg-[#0B1B26] rounded-sm p-6 text-white">
+              <Bot className="h-5 w-5 text-[#0E8DDB] mb-3" />
+              <p className="text-xs tracking-[0.15em] uppercase font-bold text-latus-muted">Atendido por humano</p>
               <p className="text-3xl font-extrabold tracking-tighter mt-1">{m?.human_handled ?? "—"}</p>
               <p className="text-xs text-zinc-500 mt-1">conversaciones fuera del bot</p>
             </div>
-            <div className="bg-white border border-zinc-200 rounded-sm p-6">
-              <CheckSquare className="h-5 w-5 text-[#FF4500] mb-3" />
-              <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#52525B]">Tareas abiertas</p>
-              <p className="text-3xl font-extrabold tracking-tighter mt-1 text-[#0A0A0A]">{m?.open_tasks ?? "—"}</p>
-              <button onClick={() => navigate("/tasks")} className="text-xs font-semibold text-[#FF4500] mt-2" data-testid="view-tasks-link">Ver tareas →</button>
+            <div className="bg-white border border-[#E9E6DC] rounded-sm p-6">
+              <CheckSquare className="h-5 w-5 text-[#0E8DDB] mb-3" />
+              <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#888888]">Tareas abiertas</p>
+              <p className="text-3xl font-extrabold tracking-tighter mt-1 text-[#0B1B26]">{m?.open_tasks ?? "—"}</p>
+              <button onClick={() => navigate("/tasks")} className="text-xs font-semibold text-[#0E8DDB] mt-2" data-testid="view-tasks-link">Ver tareas →</button>
             </div>
           </div>
         </div>
 
         {/* Recent conversations */}
-        <div className="bg-white border border-zinc-200 rounded-sm">
-          <div className="flex items-center justify-between p-5 border-b border-zinc-200">
-            <h3 className="text-lg font-bold tracking-tight text-[#0A0A0A]">Conversaciones recientes</h3>
-            <button onClick={() => navigate("/inbox")} className="text-sm font-semibold text-[#FF4500] flex items-center gap-1" data-testid="view-inbox-link">
+        <div className="bg-white border border-[#E9E6DC] rounded-sm">
+          <div className="flex items-center justify-between p-5 border-b border-[#E9E6DC]">
+            <h3 className="text-lg font-bold tracking-tight text-[#0B1B26]">Conversaciones recientes</h3>
+            <button onClick={() => navigate("/inbox")} className="text-sm font-semibold text-[#0E8DDB] flex items-center gap-1" data-testid="view-inbox-link">
               Abrir bandeja <ArrowUpRight className="h-4 w-4" />
             </button>
           </div>
@@ -176,17 +176,17 @@ export default function Dashboard() {
               <button
                 key={c.id}
                 onClick={() => navigate("/inbox", { state: { convId: c.id } })}
-                className="w-full flex items-center gap-4 p-4 hover:bg-zinc-50 transition-colors text-left"
+                className="w-full flex items-center gap-4 p-4 hover:bg-latus-cream transition-colors text-left"
                 data-testid={`recent-conv-${c.id}`}
               >
                 <Avatar src={c.contact?.avatar} name={c.contact?.name} />
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm text-[#0A0A0A] truncate">{c.contact?.name}</p>
-                  <p className="text-sm text-[#52525B] truncate">{c.last_message}</p>
+                  <p className="font-semibold text-sm text-[#0B1B26] truncate">{c.contact?.name}</p>
+                  <p className="text-sm text-[#888888] truncate">{c.last_message}</p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {!c.bot_enabled && (
-                    <span className="text-xs font-bold text-[#FF4500] bg-[#FFF7ED] border border-[#FED7AA] rounded-full px-2 py-0.5">HUMANO</span>
+                    <span className="text-xs font-bold text-[#0E8DDB] bg-[#F4F2EC] border border-[#EFE3E1] rounded-full px-2 py-0.5">HUMANO</span>
                   )}
                   <StatusBadge list={CONV_STATUSES} value={c.status} />
                 </div>

@@ -131,28 +131,28 @@ export default function ConsumoIA() {
         </div>
 
         {/* Filters */}
-        <div className="bg-white border border-zinc-200 rounded-sm p-4">
+        <div className="bg-white border border-[#E9E6DC] rounded-sm p-4">
           <div className="flex items-center gap-2 mb-3">
-            <Filter className="h-4 w-4 text-[#FF4500]" />
-            <p className="text-sm font-bold tracking-tight text-[#0A0A0A]">Filtros</p>
+            <Filter className="h-4 w-4 text-[#0E8DDB]" />
+            <p className="text-sm font-bold tracking-tight text-[#0B1B26]">Filtros</p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <div>
-              <Label className="text-xs font-bold text-[#52525B]">Desde</Label>
+              <Label className="text-xs font-bold text-[#888888]">Desde</Label>
               <Input data-testid="filter-from" type="date"
                      value={filters.from}
                      onChange={(e) => { setFilters((f) => ({ ...f, from: e.target.value })); setLogsPage(0); }}
                      className="rounded-sm h-9 mt-1" />
             </div>
             <div>
-              <Label className="text-xs font-bold text-[#52525B]">Hasta</Label>
+              <Label className="text-xs font-bold text-[#888888]">Hasta</Label>
               <Input data-testid="filter-to" type="date"
                      value={filters.to}
                      onChange={(e) => { setFilters((f) => ({ ...f, to: e.target.value })); setLogsPage(0); }}
                      className="rounded-sm h-9 mt-1" />
             </div>
             <div>
-              <Label className="text-xs font-bold text-[#52525B]">Modelo</Label>
+              <Label className="text-xs font-bold text-[#888888]">Modelo</Label>
               <Input data-testid="filter-model"
                      placeholder="Cualquier modelo"
                      value={filters.model}
@@ -160,7 +160,7 @@ export default function ConsumoIA() {
                      className="rounded-sm h-9 mt-1" />
             </div>
             <div>
-              <Label className="text-xs font-bold text-[#52525B]">Estado</Label>
+              <Label className="text-xs font-bold text-[#888888]">Estado</Label>
               <Select value={filters.status}
                       onValueChange={(v) => { setFilters((f) => ({ ...f, status: v === "all" ? "" : v })); setLogsPage(0); }}>
                 <SelectTrigger data-testid="filter-status" className="rounded-sm h-9 mt-1 text-sm">
@@ -185,10 +185,10 @@ export default function ConsumoIA() {
         {/* Empty state */}
         {!summaryQ.isPending && summaryQ.data && summaryQ.data.total_calls === 0 && (
           <div data-testid="empty-state"
-               className="bg-zinc-50 border border-dashed border-zinc-300 rounded-sm p-8 text-center">
-            <Sparkles className="h-6 w-6 text-[#FF4500] mx-auto mb-2" />
-            <p className="text-sm font-bold text-[#0A0A0A]">Aún no hay registros de consumo</p>
-            <p className="text-xs text-[#52525B] mt-1">
+               className="bg-latus-cream border border-dashed border-zinc-300 rounded-sm p-8 text-center">
+            <Sparkles className="h-6 w-6 text-[#0E8DDB] mx-auto mb-2" />
+            <p className="text-sm font-bold text-[#0B1B26]">Aún no hay registros de consumo</p>
+            <p className="text-xs text-[#888888] mt-1">
               Cuando el bot procese mensajes, vas a verlos acá.
             </p>
           </div>
@@ -228,13 +228,13 @@ export default function ConsumoIA() {
 
 function QuickCard({ label, calls, cost, loading, ...props }) {
   return (
-    <div {...props} className="bg-white border border-zinc-200 rounded-sm p-4">
-      <p className="text-[10px] font-bold tracking-[0.15em] uppercase text-[#52525B]">{label}</p>
-      <p className="text-3xl font-bold text-[#0A0A0A] mt-2 tracking-tight">
+    <div {...props} className="bg-white border border-[#E9E6DC] rounded-sm p-4">
+      <p className="text-[10px] font-bold tracking-[0.15em] uppercase text-[#888888]">{label}</p>
+      <p className="text-3xl font-bold text-[#0B1B26] mt-2 tracking-tight">
         {loading ? "—" : fmtInt(calls)}
       </p>
-      <p className="text-xs text-[#52525B] mt-0.5">llamadas</p>
-      <p className="text-sm font-bold text-[#FF4500] mt-3 flex items-center gap-1">
+      <p className="text-xs text-[#888888] mt-0.5">llamadas</p>
+      <p className="text-sm font-bold text-[#0E8DDB] mt-3 flex items-center gap-1">
         <DollarSign className="h-3 w-3" /> {loading ? "—" : fmtUSD(cost)}
       </p>
     </div>
@@ -243,8 +243,8 @@ function QuickCard({ label, calls, cost, loading, ...props }) {
 
 function TopModelCard({ model, share, loading, ...props }) {
   return (
-    <div {...props} className="bg-[#0A0A0A] text-white rounded-sm p-4 border border-zinc-800">
-      <p className="text-[10px] font-bold tracking-[0.15em] uppercase text-[#FF4500]">Modelo más usado</p>
+    <div {...props} className="bg-[#0B1B26] text-white rounded-sm p-4 border border-zinc-800">
+      <p className="text-[10px] font-bold tracking-[0.15em] uppercase text-[#0E8DDB]">Modelo más usado</p>
       <p className="text-base font-bold mt-2 truncate" title={model || ""}>
         {loading ? "—" : (model || "Sin datos")}
       </p>
@@ -252,7 +252,7 @@ function TopModelCard({ model, share, loading, ...props }) {
         <p className="text-3xl font-bold tracking-tight">
           {loading ? "—" : `${(share || 0).toFixed(0)}%`}
         </p>
-        <p className="text-[10px] text-zinc-400">del total</p>
+        <p className="text-[10px] text-latus-muted">del total</p>
       </div>
     </div>
   );
@@ -268,13 +268,13 @@ function ByModelTable({ data }) {
   const rows = data?.by_model || [];
   const total = data?.total_calls || 0;
   return (
-    <div className="bg-white border border-zinc-200 rounded-sm overflow-hidden" data-testid="by-model-table">
-      <div className="p-3 border-b border-zinc-200 flex items-center gap-2">
-        <p className="text-sm font-bold text-[#0A0A0A]">Por modelo</p>
-        <span className="text-xs text-[#52525B]">({rows.length})</span>
+    <div className="bg-white border border-[#E9E6DC] rounded-sm overflow-hidden" data-testid="by-model-table">
+      <div className="p-3 border-b border-[#E9E6DC] flex items-center gap-2">
+        <p className="text-sm font-bold text-[#0B1B26]">Por modelo</p>
+        <span className="text-xs text-[#888888]">({rows.length})</span>
       </div>
       <table className="w-full text-sm">
-        <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-[#52525B]">
+        <thead className="bg-latus-cream text-[10px] uppercase tracking-wider text-[#888888]">
           <tr>
             <th className="text-left px-3 py-2">Modelo</th>
             <th className="text-right px-3 py-2">Llamadas</th>
@@ -285,10 +285,10 @@ function ByModelTable({ data }) {
         </thead>
         <tbody>
           {rows.length === 0 && (
-            <tr><td colSpan={5} className="text-center text-[#52525B] py-4">Sin datos</td></tr>
+            <tr><td colSpan={5} className="text-center text-[#888888] py-4">Sin datos</td></tr>
           )}
           {rows.map((r) => (
-            <tr key={r.model} className="border-t border-zinc-100">
+            <tr key={r.model} className="border-t border-[#E9E6DC]">
               <td className="px-3 py-2 font-mono text-xs">{r.model}</td>
               <td className="px-3 py-2 text-right">{fmtInt(r.calls)}</td>
               <td className="px-3 py-2 text-right">{fmtInt(r.tokens)}</td>
@@ -308,13 +308,13 @@ function ByDayTable({ data }) {
   const rows = data?.by_day || [];
   const max = Math.max(1, ...rows.map((r) => Number(r.cost_usd || 0)));
   return (
-    <div className="bg-white border border-zinc-200 rounded-sm overflow-hidden" data-testid="by-day-table">
-      <div className="p-3 border-b border-zinc-200 flex items-center gap-2">
-        <p className="text-sm font-bold text-[#0A0A0A]">Por día</p>
-        <span className="text-xs text-[#52525B]">({rows.length})</span>
+    <div className="bg-white border border-[#E9E6DC] rounded-sm overflow-hidden" data-testid="by-day-table">
+      <div className="p-3 border-b border-[#E9E6DC] flex items-center gap-2">
+        <p className="text-sm font-bold text-[#0B1B26]">Por día</p>
+        <span className="text-xs text-[#888888]">({rows.length})</span>
       </div>
       <table className="w-full text-sm">
-        <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-[#52525B]">
+        <thead className="bg-latus-cream text-[10px] uppercase tracking-wider text-[#888888]">
           <tr>
             <th className="text-left px-3 py-2">Fecha</th>
             <th className="text-right px-3 py-2">Llamadas</th>
@@ -324,19 +324,19 @@ function ByDayTable({ data }) {
         </thead>
         <tbody>
           {rows.length === 0 && (
-            <tr><td colSpan={4} className="text-center text-[#52525B] py-4">Sin datos</td></tr>
+            <tr><td colSpan={4} className="text-center text-[#888888] py-4">Sin datos</td></tr>
           )}
           {rows.map((r) => {
             const pct = (Number(r.cost_usd || 0) / max) * 100;
             return (
-              <tr key={r.date} className="border-t border-zinc-100">
+              <tr key={r.date} className="border-t border-[#E9E6DC]">
                 <td className="px-3 py-2 font-mono text-xs">{r.date}</td>
                 <td className="px-3 py-2 text-right">{fmtInt(r.calls)}</td>
                 <td className="px-3 py-2 text-right">{fmtInt(r.tokens)}</td>
                 <td className="px-3 py-2 text-right font-mono">
                   <div className="flex items-center justify-end gap-2">
-                    <div className="w-12 h-1 bg-zinc-100 rounded-sm overflow-hidden">
-                      <div className="h-1 bg-[#FF4500]" style={{ width: `${pct}%` }} />
+                    <div className="w-12 h-1 bg-latus-warm-gray rounded-sm overflow-hidden">
+                      <div className="h-1 bg-[#0E8DDB]" style={{ width: `${pct}%` }} />
                     </div>
                     {fmtUSD(r.cost_usd)}
                   </div>
@@ -353,13 +353,13 @@ function ByDayTable({ data }) {
 function TopConvsTable({ data }) {
   const rows = data?.top_conversations || [];
   return (
-    <div className="bg-white border border-zinc-200 rounded-sm overflow-hidden" data-testid="top-convs-table">
-      <div className="p-3 border-b border-zinc-200 flex items-center gap-2">
-        <p className="text-sm font-bold text-[#0A0A0A]">Conversaciones con mayor consumo</p>
-        <span className="text-xs text-[#52525B]">(top 10)</span>
+    <div className="bg-white border border-[#E9E6DC] rounded-sm overflow-hidden" data-testid="top-convs-table">
+      <div className="p-3 border-b border-[#E9E6DC] flex items-center gap-2">
+        <p className="text-sm font-bold text-[#0B1B26]">Conversaciones con mayor consumo</p>
+        <span className="text-xs text-[#888888]">(top 10)</span>
       </div>
       <table className="w-full text-sm">
-        <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-[#52525B]">
+        <thead className="bg-latus-cream text-[10px] uppercase tracking-wider text-[#888888]">
           <tr>
             <th className="text-left px-3 py-2">Conversación</th>
             <th className="text-right px-3 py-2">Llamadas</th>
@@ -369,16 +369,16 @@ function TopConvsTable({ data }) {
         </thead>
         <tbody>
           {rows.length === 0 && (
-            <tr><td colSpan={4} className="text-center text-[#52525B] py-4">Sin datos</td></tr>
+            <tr><td colSpan={4} className="text-center text-[#888888] py-4">Sin datos</td></tr>
           )}
           {rows.map((r) => (
-            <tr key={r.conversation_id} className="border-t border-zinc-100">
+            <tr key={r.conversation_id} className="border-t border-[#E9E6DC]">
               <td className="px-3 py-2 font-mono text-xs truncate max-w-[280px]">{r.conversation_id}</td>
               <td className="px-3 py-2 text-right">{fmtInt(r.calls)}</td>
               <td className="px-3 py-2 text-right font-mono">{fmtUSD(r.cost_usd)}</td>
               <td className="px-3 py-2 text-right">
                 <Link to="/inbox" state={{ convId: r.conversation_id }}
-                      className="inline-flex items-center gap-1 text-xs font-semibold text-[#FF4500] hover:underline">
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-[#0E8DDB] hover:underline">
                   Abrir <ExternalLink className="h-3 w-3" />
                 </Link>
               </td>
@@ -393,14 +393,14 @@ function TopConvsTable({ data }) {
 
 function LogsTable({ logs, total, page, numPages, onPrev, onNext, loading }) {
   return (
-    <div className="bg-white border border-zinc-200 rounded-sm overflow-hidden" data-testid="logs-table">
-      <div className="p-3 border-b border-zinc-200 flex items-center justify-between">
+    <div className="bg-white border border-[#E9E6DC] rounded-sm overflow-hidden" data-testid="logs-table">
+      <div className="p-3 border-b border-[#E9E6DC] flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <p className="text-sm font-bold text-[#0A0A0A]">Logs detallados</p>
-          <span className="text-xs text-[#52525B]">({fmtInt(total)} totales)</span>
+          <p className="text-sm font-bold text-[#0B1B26]">Logs detallados</p>
+          <span className="text-xs text-[#888888]">({fmtInt(total)} totales)</span>
         </div>
         <div className="flex items-center gap-2">
-          <span data-testid="logs-page-indicator" className="text-xs text-[#52525B]">
+          <span data-testid="logs-page-indicator" className="text-xs text-[#888888]">
             Página {page + 1} de {numPages}
           </span>
           <Button data-testid="logs-prev" size="sm" variant="outline"
@@ -413,7 +413,7 @@ function LogsTable({ logs, total, page, numPages, onPrev, onNext, loading }) {
       </div>
       <div className="overflow-auto">
         <table className="w-full text-xs">
-          <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-[#52525B]">
+          <thead className="bg-latus-cream text-[10px] uppercase tracking-wider text-[#888888]">
             <tr>
               <th className="text-left px-3 py-2">Fecha/hora</th>
               <th className="text-left px-3 py-2">Modelo</th>
@@ -427,13 +427,13 @@ function LogsTable({ logs, total, page, numPages, onPrev, onNext, loading }) {
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={8} className="text-center text-[#52525B] py-4">Cargando…</td></tr>
+              <tr><td colSpan={8} className="text-center text-[#888888] py-4">Cargando…</td></tr>
             )}
             {!loading && logs.length === 0 && (
-              <tr><td colSpan={8} className="text-center text-[#52525B] py-4">Sin registros</td></tr>
+              <tr><td colSpan={8} className="text-center text-[#888888] py-4">Sin registros</td></tr>
             )}
             {logs.map((l) => (
-              <tr key={l.log_id} className="border-t border-zinc-100 align-top">
+              <tr key={l.log_id} className="border-t border-[#E9E6DC] align-top">
                 <td className="px-3 py-2 font-mono">{(l.created_at || "").replace("T", " ").slice(0, 19)}</td>
                 <td className="px-3 py-2 font-mono">{l.model}</td>
                 <td className="px-3 py-2">{PURPOSE_LABEL[l.purpose] || l.purpose}</td>
@@ -456,7 +456,7 @@ function LogsTable({ logs, total, page, numPages, onPrev, onNext, loading }) {
                 <td className="px-3 py-2 font-mono">
                   {l.conversation_id ? (
                     <Link to="/inbox" state={{ convId: l.conversation_id }}
-                          className="text-[#FF4500] hover:underline">{l.conversation_id}</Link>
+                          className="text-[#0E8DDB] hover:underline">{l.conversation_id}</Link>
                   ) : "—"}
                 </td>
               </tr>
@@ -497,11 +497,11 @@ function PricingEditor({ pricing, onSaved }) {
   };
 
   return (
-    <div className="bg-white border border-zinc-200 rounded-sm" data-testid="pricing-editor">
-      <div className="p-3 border-b border-zinc-200 flex items-center justify-between">
+    <div className="bg-white border border-[#E9E6DC] rounded-sm" data-testid="pricing-editor">
+      <div className="p-3 border-b border-[#E9E6DC] flex items-center justify-between">
         <div>
-          <p className="text-sm font-bold text-[#0A0A0A]">Precios por modelo</p>
-          <p className="text-[11px] text-[#52525B]">USD por 1 millón de tokens. Sirven para estimar el costo.</p>
+          <p className="text-sm font-bold text-[#0B1B26]">Precios por modelo</p>
+          <p className="text-[11px] text-[#888888]">USD por 1 millón de tokens. Sirven para estimar el costo.</p>
         </div>
         <Button data-testid="pricing-reset"
                 variant="outline" size="sm" className="rounded-sm"
@@ -510,7 +510,7 @@ function PricingEditor({ pricing, onSaved }) {
         </Button>
       </div>
       <table className="w-full text-sm">
-        <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-[#52525B]">
+        <thead className="bg-latus-cream text-[10px] uppercase tracking-wider text-[#888888]">
           <tr>
             <th className="text-left px-3 py-2">Modelo</th>
             <th className="text-right px-3 py-2">Input (USD / 1M)</th>
@@ -524,7 +524,7 @@ function PricingEditor({ pricing, onSaved }) {
             const dirty = drafts[m] !== undefined;
             const bad = (cur.input < 0) || (cur.output < 0);
             return (
-              <tr key={m} className="border-t border-zinc-100">
+              <tr key={m} className="border-t border-[#E9E6DC]">
                 <td className="px-3 py-2 font-mono text-xs">{m}</td>
                 <td className="px-3 py-2 text-right">
                   <Input data-testid={`pricing-input-${m}`} type="number" step="0.001" min="0"
@@ -546,7 +546,7 @@ function PricingEditor({ pricing, onSaved }) {
                             input_per_million: cur.input,
                             output_per_million: cur.output,
                           })}
-                          className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm h-8 text-xs">
+                          className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm h-8 text-xs">
                     Guardar
                   </Button>
                 </td>

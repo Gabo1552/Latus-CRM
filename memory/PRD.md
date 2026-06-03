@@ -91,6 +91,15 @@ Full-stack CRM web app for managing WhatsApp sales conversations: auth, dashboar
   - "¿Cuánto cuesta la zapatilla LATUS-DEMO-1?" → bot real respondió "La zapatilla Latus Demo (SKU: LATUS-DEMO-1) tiene un precio de ARS 89,999.0" (precio REAL del catálogo, no inventado). `catalog_matched=True, intent=consulta_precio_producto, confidence=1.0`.
   - "¿Me hacen un descuento? Necesito algo más barato." → `decision=require_human`, `catalog_intent=negotiation`, **reply_text=None (LLM nunca fue invocado)**, conv pasó a `bot_status=requiere_humano + bot_enabled=False`.
 
+## Fase 5 — Rebrand visual Latus (2026-06-03)
+- **Tokens**: `tailwind.config.js` extendido con namespace `latus` (`ink #0B1B26`, `ink-soft #1A2F3D`, `blue #0E8DDB`, `blue-deep #0a7ab8`, `coral #EF5030`, `coral-deep #d8451f`, `orange #F08050`, `cream #F4F2EC`, `warm-gray #E9E6DC`, `warm-border #D8D4C7`, `muted #888888`, `blush #EFE3E1`). `fontFamily.sans: Inter`. `index.css` con CSS vars en `:root`, Inter de Google Fonts, fondo body `latus-cream`, color base `latus-ink`, tracking apretado en headings (-0.015em).
+- **Bulk color swap** en `/app/frontend/src/{pages,components}/*.{jsx,js}` (16 archivos): `#FF4500 → #0E8DDB` (acento principal pasa de naranja eléctrico a azul Latus), `#E63E00 → #0a7ab8` (hover deep), `#0A0A0A → #0B1B26` (texto principal ahora azul oscuro), `#52525B → #888888` (muted), `#FED7AA/#FFF7ED → #EFE3E1/#F4F2EC` (acentos cálidos), `bg-zinc-{50,100} → bg-latus-{cream,warm-gray}`, `border-zinc-{100,200} → border-[#E9E6DC]`.
+- **AppLayout** rediseñado: fondo `bg-latus-ink`, item activo `bg-latus-ink-soft` con barra lateral 3px `bg-latus-blue`, items inactivos `text-white/70 hover:bg-white/5`, separadores `border-white/10`, logo "Latus CRM" peso 700 con `letter-spacing: -0.02em`, badge cuadrado del logo `bg-latus-blue`, avatares iniciales `bg-latus-blue`, `rounded-md` en toda la nav.
+- **Excepción para `requiere_humano`** en `BOT_STATUS_META` (Inbox): restaurado a `color: #EF5030 (latus-coral)` con fondo `latus-blush` para mantener jerarquía de alerta en el pill del bot panel.
+- **No tocó**: lógica, endpoints, schemas, pipeline IA, WhatsApp, catálogo, responsive, RBAC. Cero cambios de comportamiento.
+- **Tests**: `pytest` **127/127 PASS** sin regresiones (las pruebas son backend, el rebrand fue UI puro). `yarn build` exit 0 en 15.11s.
+- **Capturas live confirmadas** (`/inbox`, `/configuracion`, `/catalogo`, `/consumo-ia`): sidebar ink + logo blanco con badge azul, tablas con header cream, botones primarios azul, pill "Requiere humano" coral, badge "Bot" naranja Latus, fondo general cream, tipografía Inter.
+
 ## Backlog / Next
 - P1: Real WhatsApp webhook ingestion (`/api/webhooks/whatsapp`) — backend already structured for it (messages/conversations model ready).
 - P1: AI streaming (SSE) for summary/suggested reply.

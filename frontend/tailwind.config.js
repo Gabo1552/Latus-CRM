@@ -52,7 +52,24 @@ module.exports = {
           '3': 'hsl(var(--chart-3))',
           '4': 'hsl(var(--chart-4))',
           '5': 'hsl(var(--chart-5))'
-        }
+        },
+        latus: {
+          ink: '#0B1B26',
+          'ink-soft': '#1A2F3D',
+          blue: '#0E8DDB',
+          'blue-deep': '#0a7ab8',
+          coral: '#EF5030',
+          'coral-deep': '#d8451f',
+          orange: '#F08050',
+          cream: '#F4F2EC',
+          'warm-gray': '#E9E6DC',
+          'warm-border': '#D8D4C7',
+          muted: '#888888',
+          blush: '#EFE3E1',
+        },
+      },
+      fontFamily: {
+        sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'sans-serif'],
       },
       keyframes: {
         'accordion-down': {

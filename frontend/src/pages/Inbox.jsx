@@ -152,10 +152,10 @@ export default function Inbox() {
     <AppLayout title="Bandeja">
       <div className="flex h-[calc(100vh-4rem)] w-full overflow-hidden bg-white">
         {/* Left: conversation list */}
-        <div className="w-80 border-r border-zinc-200 flex flex-col bg-zinc-50 shrink-0">
-          <div className="p-3 space-y-2 border-b border-zinc-200">
+        <div className="w-80 border-r border-[#E9E6DC] flex flex-col bg-latus-cream shrink-0">
+          <div className="p-3 space-y-2 border-b border-[#E9E6DC]">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-latus-muted" />
               <Input data-testid="inbox-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar chats…" className="pl-9 rounded-sm bg-white h-9" />
             </div>
             <div className="flex gap-2">
@@ -181,19 +181,19 @@ export default function Inbox() {
                 key={c.id}
                 onClick={() => setActiveId(c.id)}
                 data-testid={`conv-item-${c.id}`}
-                className={`w-full flex items-start gap-3 p-3 text-left border-b border-zinc-100 transition-colors ${activeId === c.id ? "bg-white border-l-2 border-l-[#FF4500]" : "hover:bg-white"}`}
+                className={`w-full flex items-start gap-3 p-3 text-left border-b border-[#E9E6DC] transition-colors ${activeId === c.id ? "bg-white border-l-2 border-l-[#0E8DDB]" : "hover:bg-white"}`}
               >
                 <Avatar src={c.contact?.avatar} name={c.contact?.name} size={40} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="font-semibold text-sm text-[#0A0A0A] truncate">{c.contact?.name}</p>
-                    {c.unread > 0 && <span className="bg-[#FF4500] text-white text-[10px] font-bold rounded-full h-4 min-w-4 px-1 flex items-center justify-center">{c.unread}</span>}
+                    <p className="font-semibold text-sm text-[#0B1B26] truncate">{c.contact?.name}</p>
+                    {c.unread > 0 && <span className="bg-[#0E8DDB] text-white text-[10px] font-bold rounded-full h-4 min-w-4 px-1 flex items-center justify-center">{c.unread}</span>}
                   </div>
-                  <p className="text-xs text-[#52525B] truncate mt-0.5">{c.last_message}</p>
+                  <p className="text-xs text-[#888888] truncate mt-0.5">{c.last_message}</p>
                   <div className="flex items-center gap-1.5 mt-1.5">
                     {!c.bot_enabled
-                      ? <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#FF4500] bg-[#FFF7ED] border border-[#FED7AA] rounded-full px-1.5 py-px"><UserIcon className="h-2.5 w-2.5" />HUMANO</span>
-                      : <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#52525B] bg-zinc-100 rounded-full px-1.5 py-px"><Bot className="h-2.5 w-2.5" />BOT</span>}
+                      ? <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#0E8DDB] bg-[#F4F2EC] border border-[#EFE3E1] rounded-full px-1.5 py-px"><UserIcon className="h-2.5 w-2.5" />HUMANO</span>
+                      : <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#888888] bg-latus-warm-gray rounded-full px-1.5 py-px"><Bot className="h-2.5 w-2.5" />BOT</span>}
                     <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: statusMeta(PRIORITIES, c.priority).color }} />
                   </div>
                 </div>
@@ -205,26 +205,26 @@ export default function Inbox() {
         {/* Middle: thread */}
         <div className="flex-1 flex flex-col bg-white min-w-0">
           {!active ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-zinc-400">
+            <div className="flex-1 flex flex-col items-center justify-center text-latus-muted">
               <MessageSquare className="h-10 w-10 mb-3" />
               <p className="text-sm">Seleccioná una conversación</p>
             </div>
           ) : (
             <>
               {/* header */}
-              <div className="h-16 border-b border-zinc-200 flex items-center justify-between px-5 shrink-0">
+              <div className="h-16 border-b border-[#E9E6DC] flex items-center justify-between px-5 shrink-0">
                 <div className="flex items-center gap-3">
                   <Avatar src={active.contact?.avatar} name={active.contact?.name} size={38} />
                   <div>
                     <div className="flex items-center gap-2">
-                      <p className="font-bold text-[#0A0A0A] leading-tight">{active.contact?.name}</p>
+                      <p className="font-bold text-[#0B1B26] leading-tight">{active.contact?.name}</p>
                       {active.channel === "whatsapp" && (
-                        <span data-testid="channel-badge-whatsapp" className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wide uppercase text-[#FF4500] bg-[#FFF7ED] border border-[#FED7AA] rounded-sm px-1.5 py-px">
+                        <span data-testid="channel-badge-whatsapp" className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wide uppercase text-[#0E8DDB] bg-[#F4F2EC] border border-[#EFE3E1] rounded-sm px-1.5 py-px">
                           WhatsApp
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-[#52525B]">{active.contact?.phone}</p>
+                    <p className="text-xs text-[#888888]">{active.contact?.phone}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
@@ -232,20 +232,20 @@ export default function Inbox() {
                     data-testid="simulate-inbound-button"
                     onClick={() => simulateInbound.mutate()}
                     disabled={simulateInbound.isPending}
-                    className="text-xs font-semibold text-[#52525B] hover:text-[#FF4500] border border-zinc-200 rounded-sm px-2.5 py-1.5 transition-colors"
+                    className="text-xs font-semibold text-[#888888] hover:text-[#0E8DDB] border border-[#E9E6DC] rounded-sm px-2.5 py-1.5 transition-colors"
                     title="Simular un mensaje entrante de WhatsApp del cliente"
                   >
                     + Respuesta del cliente
                   </button>
-                  <div className={`flex items-center gap-2 px-3 py-1.5 rounded-sm border ${active.bot_enabled ? "border-zinc-200 bg-zinc-50" : "border-[#FED7AA] bg-[#FFF7ED]"}`} data-testid="handoff-control" title="Tomar control / Devolver al bot">
-                    <ArrowRightLeft className="h-3.5 w-3.5 text-[#FF4500]" />
-                    <span className="text-xs font-bold text-[#0A0A0A]">{active.bot_enabled ? "Bot activo" : "Solo humano"}</span>
+                  <div className={`flex items-center gap-2 px-3 py-1.5 rounded-sm border ${active.bot_enabled ? "border-[#E9E6DC] bg-latus-cream" : "border-[#EFE3E1] bg-[#F4F2EC]"}`} data-testid="handoff-control" title="Tomar control / Devolver al bot">
+                    <ArrowRightLeft className="h-3.5 w-3.5 text-[#0E8DDB]" />
+                    <span className="text-xs font-bold text-[#0B1B26]">{active.bot_enabled ? "Bot activo" : "Solo humano"}</span>
                     <Switch
                       data-testid="bot-toggle"
                       checked={active.bot_enabled}
                       disabled={readOnly}
                       onCheckedChange={(v) => { patchConv.mutate({ bot_enabled: v }); toast.success(v ? "Bot reactivado" : "Traspasado a un agente"); }}
-                      className="data-[state=checked]:bg-zinc-400 data-[state=unchecked]:bg-[#FF4500]"
+                      className="data-[state=checked]:bg-zinc-400 data-[state=unchecked]:bg-[#0E8DDB]"
                     />
                   </div>
                   <Select value={active.status} onValueChange={(v) => patchConv.mutate({ status: v })}>
@@ -270,22 +270,22 @@ export default function Inbox() {
                   return (
                     <div key={m.id} className={`flex ${isCustomer ? "justify-start" : "justify-end"}`}>
                       <div className={`max-w-[70%] rounded-sm px-3.5 py-2 ${
-                        isCustomer ? "bg-white border border-zinc-200"
-                        : isBot ? "bg-zinc-100 border border-zinc-200"
-                        : "bg-[#FF4500] text-white"}`}>
+                        isCustomer ? "bg-white border border-[#E9E6DC]"
+                        : isBot ? "bg-latus-warm-gray border border-[#E9E6DC]"
+                        : "bg-[#0E8DDB] text-white"}`}>
                         {!isCustomer && (
-                          <div className={`flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mb-0.5 ${isBot ? "text-[#FF4500]" : "text-orange-100"}`}>
+                          <div className={`flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mb-0.5 ${isBot ? "text-[#0E8DDB]" : "text-orange-100"}`}>
                             {isBot ? <><Bot className="h-2.5 w-2.5" />Bot</> : <><UserIcon className="h-2.5 w-2.5" />{m.sender_name}</>}
                           </div>
                         )}
-                        <p className={`text-sm ${isCustomer || isBot ? "text-[#0A0A0A]" : "text-white"}`}>{m.body}</p>
+                        <p className={`text-sm ${isCustomer || isBot ? "text-[#0B1B26]" : "text-white"}`}>{m.body}</p>
                         {isOutbound && dsLabel && (
                           <div
                             data-testid={`delivery-status-${m.id}`}
                             className={`text-[10px] font-semibold mt-1 text-right ${
                               ds === "failed"
                                 ? "text-yellow-200"
-                                : isBot ? "text-[#FF4500]" : "text-orange-100"
+                                : isBot ? "text-[#0E8DDB]" : "text-orange-100"
                             }`}
                           >
                             {dsLabel}
@@ -298,12 +298,12 @@ export default function Inbox() {
               </div>
 
               {/* composer */}
-              <div className="border-t border-zinc-200 p-3 shrink-0">
+              <div className="border-t border-[#E9E6DC] p-3 shrink-0">
                 {!active.bot_enabled && (
-                  <p className="text-[11px] font-semibold text-[#FF4500] mb-2 flex items-center gap-1"><UserIcon className="h-3 w-3" /> Traspaso a humano activo — estás respondiendo como agente</p>
+                  <p className="text-[11px] font-semibold text-[#0E8DDB] mb-2 flex items-center gap-1"><UserIcon className="h-3 w-3" /> Traspaso a humano activo — estás respondiendo como agente</p>
                 )}
                 {active.channel === "whatsapp" && waStatus && !waStatus.configured && (
-                  <p data-testid="wa-not-configured-banner" className="text-[11px] font-semibold text-[#FF4500] mb-2">
+                  <p data-testid="wa-not-configured-banner" className="text-[11px] font-semibold text-[#0E8DDB] mb-2">
                     WhatsApp no configurado — el envío real está deshabilitado. Podés seguir usando &quot;+ Respuesta del cliente&quot; como simulador.
                   </p>
                 )}
@@ -321,7 +321,7 @@ export default function Inbox() {
                     data-testid="send-message-button"
                     disabled={readOnly || !draft.trim() || sendMsg.isPending || (active.channel === "whatsapp" && waStatus && !waStatus.configured)}
                     onClick={() => sendMsg.mutate()}
-                    className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm h-11 px-4"
+                    className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm h-11 px-4"
                   >
                     <Send className="h-4 w-4" />
                   </Button>
@@ -333,29 +333,29 @@ export default function Inbox() {
 
         {/* Right: lead info + AI */}
         {active && (
-          <div className="w-80 border-l border-zinc-200 flex flex-col bg-zinc-50 shrink-0 overflow-auto">
-            <div className="p-4 border-b border-zinc-200">
-              <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#52525B] mb-3">Contacto</p>
+          <div className="w-80 border-l border-[#E9E6DC] flex flex-col bg-latus-cream shrink-0 overflow-auto">
+            <div className="p-4 border-b border-[#E9E6DC]">
+              <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#888888] mb-3">Contacto</p>
               <div className="flex items-center gap-3 mb-3">
                 <Avatar src={active.contact?.avatar} name={active.contact?.name} size={44} />
                 <div className="min-w-0">
-                  <p className="font-bold text-[#0A0A0A] truncate">{active.contact?.name}</p>
-                  <p className="text-xs text-[#52525B] truncate">{active.contact?.company}</p>
+                  <p className="font-bold text-[#0B1B26] truncate">{active.contact?.name}</p>
+                  <p className="text-xs text-[#888888] truncate">{active.contact?.company}</p>
                 </div>
               </div>
-              <div className="space-y-1.5 text-sm text-[#52525B]">
-                <p className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-[#FF4500]" /> {active.contact?.phone}</p>
-                <p className="flex items-center gap-2"><Building2 className="h-3.5 w-3.5 text-[#FF4500]" /> {active.contact?.company}</p>
+              <div className="space-y-1.5 text-sm text-[#888888]">
+                <p className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-[#0E8DDB]" /> {active.contact?.phone}</p>
+                <p className="flex items-center gap-2"><Building2 className="h-3.5 w-3.5 text-[#0E8DDB]" /> {active.contact?.company}</p>
               </div>
             </div>
 
             {active.lead && (
-              <div className="p-4 border-b border-zinc-200">
-                <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#52525B] mb-3">Lead vinculado</p>
-                <p className="font-semibold text-[#0A0A0A] text-sm">{active.lead.title}</p>
+              <div className="p-4 border-b border-[#E9E6DC]">
+                <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#888888] mb-3">Lead vinculado</p>
+                <p className="font-semibold text-[#0B1B26] text-sm">{active.lead.title}</p>
                 <div className="flex items-center justify-between mt-2">
                   <StatusBadge list={LEAD_STATUSES} value={active.lead.status} />
-                  <span className="font-extrabold tracking-tighter text-[#0A0A0A]">{money(active.lead.value)}</span>
+                  <span className="font-extrabold tracking-tighter text-[#0B1B26]">{money(active.lead.value)}</span>
                 </div>
               </div>
             )}
@@ -386,9 +386,9 @@ export default function Inbox() {
 const BOT_STATUS_META = {
   bot_activo:        { label: "Bot activo",         color: "#16A34A", bg: "#DCFCE7", border: "#86EFAC" },
   esperando_cliente: { label: "Esperando cliente",  color: "#1D4ED8", bg: "#DBEAFE", border: "#93C5FD" },
-  requiere_humano:   { label: "Requiere humano",    color: "#FF4500", bg: "#FFF7ED", border: "#FED7AA" },
+  requiere_humano:   { label: "Requiere humano",    color: "#EF5030", bg: "#EFE3E1", border: "#EF5030" },
   en_atencion_humana:{ label: "En atención humana", color: "#7C3AED", bg: "#EDE9FE", border: "#C4B5FD" },
-  cerrada:           { label: "Cerrada",            color: "#52525B", bg: "#F4F4F5", border: "#D4D4D8" },
+  cerrada:           { label: "Cerrada",            color: "#888888", bg: "#F4F4F5", border: "#D4D4D8" },
 };
 
 function BotStatusPill({ status }) {
@@ -420,14 +420,14 @@ function BotPanel({
     : null;
 
   return (
-    <div data-testid="bot-panel" className="p-4 border-b border-zinc-200 space-y-4">
-      <p className="flex items-center gap-1.5 text-xs tracking-[0.15em] uppercase font-bold text-[#FF4500]">
+    <div data-testid="bot-panel" className="p-4 border-b border-[#E9E6DC] space-y-4">
+      <p className="flex items-center gap-1.5 text-xs tracking-[0.15em] uppercase font-bold text-[#0E8DDB]">
         <Sparkles className="h-3.5 w-3.5" /> Asistente IA
       </p>
 
       {/* Bot status */}
       <div>
-        <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#52525B] mb-1.5">Estado del bot</p>
+        <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#888888] mb-1.5">Estado del bot</p>
         <div className="flex items-center justify-between gap-2">
           <BotStatusPill status={botStatus} />
           {!conv?.bot_enabled && (
@@ -436,7 +436,7 @@ function BotPanel({
               size="sm"
               disabled={readOnly || reactivateBot.isPending}
               onClick={() => reactivateBot.mutate()}
-              className="bg-[#0A0A0A] hover:bg-[#FF4500] rounded-sm h-7 text-xs"
+              className="bg-[#0B1B26] hover:bg-[#0E8DDB] rounded-sm h-7 text-xs"
             >
               {reactivateBot.isPending ? <RefreshCw className="h-3 w-3 animate-spin mr-1" /> : <Bot className="h-3 w-3 mr-1" />}
               Reactivar bot
@@ -448,11 +448,11 @@ function BotPanel({
       {/* Intent */}
       {(intent || confidencePct) && (
         <div>
-          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#52525B] mb-1.5">Intención detectada</p>
+          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#888888] mb-1.5">Intención detectada</p>
           <div className="flex items-center justify-between gap-2" data-testid="bot-intent-block">
-            <span className="text-sm font-semibold text-[#0A0A0A]">{intent || "—"}</span>
+            <span className="text-sm font-semibold text-[#0B1B26]">{intent || "—"}</span>
             {confidencePct && (
-              <span data-testid="bot-confidence-value" className="text-xs font-bold text-[#52525B] bg-zinc-100 border border-zinc-200 rounded-sm px-1.5 py-0.5">
+              <span data-testid="bot-confidence-value" className="text-xs font-bold text-[#888888] bg-latus-warm-gray border border-[#E9E6DC] rounded-sm px-1.5 py-0.5">
                 {confidencePct}
               </span>
             )}
@@ -462,20 +462,20 @@ function BotPanel({
 
       {/* Handoff reason — only when present */}
       {reason && (
-        <div data-testid="bot-handoff-reason" className="border border-[#FED7AA] bg-[#FFF7ED] rounded-sm p-2.5">
-          <p className="flex items-center gap-1 text-[10px] font-bold tracking-[0.12em] uppercase text-[#FF4500] mb-1">
+        <div data-testid="bot-handoff-reason" className="border border-[#EFE3E1] bg-[#F4F2EC] rounded-sm p-2.5">
+          <p className="flex items-center gap-1 text-[10px] font-bold tracking-[0.12em] uppercase text-[#0E8DDB] mb-1">
             <AlertOctagon className="h-3 w-3" /> Motivo de derivación
           </p>
-          <p className="text-xs text-[#0A0A0A]">{reason}</p>
+          <p className="text-xs text-[#0B1B26]">{reason}</p>
         </div>
       )}
 
       {/* Next best action */}
       {nba && (
         <div data-testid="bot-next-action">
-          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#52525B] mb-1">Próxima acción sugerida</p>
-          <p className="text-xs text-[#0A0A0A] flex items-start gap-1.5">
-            <ChevronRight className="h-3.5 w-3.5 text-[#FF4500] mt-0.5 shrink-0" /> {nba}
+          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#888888] mb-1">Próxima acción sugerida</p>
+          <p className="text-xs text-[#0B1B26] flex items-start gap-1.5">
+            <ChevronRight className="h-3.5 w-3.5 text-[#0E8DDB] mt-0.5 shrink-0" /> {nba}
           </p>
         </div>
       )}
@@ -483,49 +483,49 @@ function BotPanel({
       {/* Summary */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
-          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#52525B]">Resumen</p>
+          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#888888]">Resumen</p>
           <button
             data-testid="bot-summary-regenerate"
             onClick={() => regenSummary.mutate()}
             disabled={readOnly || regenSummary.isPending}
-            className="text-[11px] font-semibold text-[#FF4500] flex items-center gap-1 disabled:opacity-50"
+            className="text-[11px] font-semibold text-[#0E8DDB] flex items-center gap-1 disabled:opacity-50"
           >
             <RefreshCw className={`h-3 w-3 ${regenSummary.isPending ? "animate-spin" : ""}`} /> Regenerar
           </button>
         </div>
         <div
           data-testid="bot-summary-output"
-          className="border border-zinc-200 bg-white rounded-sm p-2.5 min-h-[60px] text-sm text-[#0A0A0A] whitespace-pre-wrap"
+          className="border border-[#E9E6DC] bg-white rounded-sm p-2.5 min-h-[60px] text-sm text-[#0B1B26] whitespace-pre-wrap"
         >
           {regenSummary.isPending
-            ? <span className="text-[#52525B] animate-pulse">Analizando la conversación…</span>
+            ? <span className="text-[#888888] animate-pulse">Analizando la conversación…</span>
             : summary
               ? summary
-              : <span className="text-[#52525B]">Aún no hay resumen. Tocá Regenerar para crearlo.</span>}
+              : <span className="text-[#888888]">Aún no hay resumen. Tocá Regenerar para crearlo.</span>}
         </div>
         {conv?.last_summary_at && (
-          <p className="text-[10px] text-[#52525B] mt-1">Actualizado: {new Date(conv.last_summary_at).toLocaleString("es-AR")}</p>
+          <p className="text-[10px] text-[#888888] mt-1">Actualizado: {new Date(conv.last_summary_at).toLocaleString("es-AR")}</p>
         )}
       </div>
 
       {/* Suggested reply */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
-          <p className="flex items-center gap-1 text-[10px] font-bold tracking-[0.12em] uppercase text-[#52525B]">
-            <Lightbulb className="h-3 w-3 text-[#FF4500]" /> Sugerencia de respuesta
+          <p className="flex items-center gap-1 text-[10px] font-bold tracking-[0.12em] uppercase text-[#888888]">
+            <Lightbulb className="h-3 w-3 text-[#0E8DDB]" /> Sugerencia de respuesta
           </p>
           <button
             data-testid="bot-suggest-button"
             onClick={() => suggestReply.mutate()}
             disabled={readOnly || suggestReply.isPending}
-            className="text-[11px] font-semibold text-[#FF4500] flex items-center gap-1 disabled:opacity-50"
+            className="text-[11px] font-semibold text-[#0E8DDB] flex items-center gap-1 disabled:opacity-50"
           >
             {suggestReply.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
             Sugerir
           </button>
         </div>
         {suggestionDraft ? (
-          <div className="border border-[#FED7AA] bg-[#FFF7ED] rounded-sm p-2.5">
+          <div className="border border-[#EFE3E1] bg-[#F4F2EC] rounded-sm p-2.5">
             <Textarea
               data-testid="bot-suggestion-textarea"
               value={suggestionDraft}
@@ -534,10 +534,10 @@ function BotPanel({
               disabled={readOnly}
             />
             {suggestionMeta && (
-              <div className="flex items-center gap-2 text-[10px] text-[#52525B] mb-2">
-                {suggestionMeta.intent && <span>Intención: <b className="text-[#0A0A0A]">{suggestionMeta.intent}</b></span>}
+              <div className="flex items-center gap-2 text-[10px] text-[#888888] mb-2">
+                {suggestionMeta.intent && <span>Intención: <b className="text-[#0B1B26]">{suggestionMeta.intent}</b></span>}
                 {suggestionMeta.confidence > 0 && (
-                  <span>· Confianza: <b className="text-[#0A0A0A]">{Math.round(suggestionMeta.confidence * 100)}%</b></span>
+                  <span>· Confianza: <b className="text-[#0B1B26]">{Math.round(suggestionMeta.confidence * 100)}%</b></span>
                 )}
               </div>
             )}
@@ -547,7 +547,7 @@ function BotPanel({
                 size="sm"
                 disabled={readOnly || !suggestionDraft.trim()}
                 onClick={() => onUseDraft(suggestionDraft)}
-                className="bg-[#0A0A0A] hover:bg-[#FF4500] rounded-sm h-7 text-xs flex-1"
+                className="bg-[#0B1B26] hover:bg-[#0E8DDB] rounded-sm h-7 text-xs flex-1"
               >
                 <Copy className="h-3 w-3 mr-1" /> Copiar al input
               </Button>
@@ -563,7 +563,7 @@ function BotPanel({
             </div>
           </div>
         ) : (
-          <div className="border border-zinc-200 bg-zinc-50 rounded-sm p-2.5 text-xs text-[#52525B]">
+          <div className="border border-[#E9E6DC] bg-latus-cream rounded-sm p-2.5 text-xs text-[#888888]">
             Generá un borrador editable con la IA basado en el contexto actual.
           </div>
         )}
