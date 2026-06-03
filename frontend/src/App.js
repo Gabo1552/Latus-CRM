@@ -11,6 +11,7 @@ import Pipeline from "@/pages/Pipeline";
 import Contacts from "@/pages/Contacts";
 import Tasks from "@/pages/Tasks";
 import Admin from "@/pages/Admin";
+import Configuracion from "@/pages/Configuracion";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -47,6 +48,7 @@ function AppRouter() {
       <Route path="/contacts" element={<Protected><Contacts /></Protected>} />
       <Route path="/tasks" element={<Protected><Tasks /></Protected>} />
       <Route path="/admin" element={<Protected><Admin /></Protected>} />
+      <Route path="/configuracion" element={<Protected><Configuracion /></Protected>} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );

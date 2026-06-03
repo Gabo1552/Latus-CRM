@@ -22,12 +22,22 @@ export const PRIORITIES = [
 ];
 
 export const ROLES = [
-  { key: "admin", label: "Administrador" },
-  { key: "supervisor", label: "Supervisor" },
-  { key: "sales_agent", label: "Agente de ventas" },
+  { key: "admin", label: "Administrador", color: "#FF4500", bg: "#FFF7ED" },
+  { key: "supervisor", label: "Supervisor", color: "#1D4ED8", bg: "#EFF6FF" },
+  { key: "agent", label: "Agente", color: "#52525B", bg: "#F4F4F5" },
+  { key: "viewer", label: "Consulta", color: "#15803D", bg: "#F0FDF4" },
+  // legacy
+  { key: "sales_agent", label: "Agente", color: "#52525B", bg: "#F4F4F5" },
+];
+
+export const AUTH_PROVIDERS = [
+  { key: "google", label: "Google" },
+  { key: "local", label: "Email y contraseña" },
+  { key: "both", label: "Ambos" },
 ];
 
 export const roleLabel = (key) => (ROLES.find((r) => r.key === key) || { label: key }).label;
+export const roleMeta = (key) => ROLES.find((r) => r.key === key) || { label: key, color: "#52525B", bg: "#F4F4F5" };
 
 export const statusMeta = (list, key) =>
   list.find((s) => s.key === key) || { label: key, color: "#52525B", bg: "#F4F4F5" };

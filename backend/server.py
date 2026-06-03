@@ -58,7 +58,14 @@ def new_id(prefix: str) -> str:
 LEAD_STATUSES = ["new", "contacted", "qualified", "proposal", "won", "lost"]
 CONV_STATUSES = ["open", "pending", "resolved"]
 PRIORITIES = ["low", "medium", "high"]
-ROLES = ["admin", "supervisor", "sales_agent"]
+ROLES = ["admin", "supervisor", "agent", "viewer"]
+LEGACY_ROLE_MAP = {"sales_agent": "agent"}
+
+
+def _normalize_role(r: str | None) -> str:
+    if not r:
+        return "agent"
+    return LEGACY_ROLE_MAP.get(r, r)
 
 # ---------------------------------------------------------------------------
 # Models
@@ -69,8 +76,10 @@ class User(BaseModel):
     email: str
     name: str
     picture: Optional[str] = None
-    role: str = "sales_agent"
+    role: str = "agent"
     active: bool = True
+    auth_provider: str = "google"   # one of: google | local | both
+    last_login_at: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
 
     @field_validator("created_at", mode="before")
@@ -79,6 +88,11 @@ class User(BaseModel):
         if isinstance(v, datetime):
             return v.isoformat()
         return v
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def _normalize_role_field(cls, v: Any):
+        return _normalize_role(v if isinstance(v, str) else None)
 
 
 class RoleUpdate(BaseModel):
@@ -281,6 +295,29 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def require_role(*allowed_roles: str):
+    """Dependency factory: deny anyone whose role is not in ``allowed_roles``.
+
+    Use as ``user: User = Depends(require_role("admin","supervisor","agent"))``
+    on write endpoints to keep ``viewer`` out.
+    """
+    allowed = set(allowed_roles)
+
+    async def _dep(user: User = Depends(get_current_user)) -> User:
+        if user.role not in allowed:
+            raise HTTPException(status_code=403, detail="Sin permisos")
+        return user
+
+    return _dep
+
+
+# Convenience: blocks viewer everywhere on write paths.
+async def require_write(user: User = Depends(get_current_user)) -> User:
+    if user.role == "viewer":
+        raise HTTPException(status_code=403, detail="Sin permisos")
+    return user
+
+
 @api_router.post("/auth/session")
 async def process_session(request: Request, response: Response):
     body = await request.json()
@@ -297,20 +334,32 @@ async def process_session(request: Request, response: Response):
         raise HTTPException(status_code=401, detail="Invalid session_id")
     data = r.json()
 
-    email = data["email"]
+    email = (data["email"] or "").lower().strip()
     existing = await db.users.find_one({"email": email}, {"_id": 0})
     if existing:
+        if existing.get("deleted_at"):
+            raise HTTPException(status_code=403, detail="Cuenta deshabilitada")
+        if not existing.get("active", True):
+            raise HTTPException(status_code=403, detail="Cuenta deshabilitada")
+        ap = (existing.get("auth_provider") or "google").lower()
+        if ap == "local":
+            # Pre-approved as local-only — Google login is not allowed for this user.
+            raise HTTPException(status_code=403, detail="Este usuario solo permite acceso con email y contraseña")
         user_id = existing["user_id"]
-        await db.users.update_one(
-            {"user_id": user_id},
-            {"$set": {"name": data["name"], "picture": data.get("picture")}},
-        )
-        role = existing["role"]
+        upd = {
+            "name": data["name"], "picture": data.get("picture"),
+            "last_login_at": now_iso(),
+        }
+        if not existing.get("google_sub") and data.get("id"):
+            upd["google_sub"] = data["id"]
+        if ap not in ("google", "both"):
+            # Existing legacy user without explicit provider -> mark as google
+            upd["auth_provider"] = "google"
+        await db.users.update_one({"user_id": user_id}, {"$set": upd})
     else:
         user_id = new_id("user")
-        # First ever real user becomes admin
-        real_users = await db.users.count_documents({"is_demo": {"$ne": True}})
-        role = "admin" if real_users == 0 else "sales_agent"
+        real_users = await db.users.count_documents({"is_demo": {"$ne": True}, "deleted_at": {"$exists": False}})
+        role = "admin" if real_users == 0 else "agent"
         await db.users.insert_one({
             "user_id": user_id,
             "email": email,
@@ -318,8 +367,11 @@ async def process_session(request: Request, response: Response):
             "picture": data.get("picture"),
             "role": role,
             "active": True,
+            "auth_provider": "google",
+            "google_sub": data.get("id"),
             "is_demo": False,
             "created_at": now_iso(),
+            "last_login_at": now_iso(),
         })
 
     session_token = data["session_token"]
@@ -355,6 +407,421 @@ async def logout(request: Request, response: Response):
         await db.user_sessions.delete_one({"session_token": token})
     response.delete_cookie("session_token", path="/")
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Local password login + change-password
+# ---------------------------------------------------------------------------
+
+from utils.passwords import (  # noqa: E402
+    hash_password, verify_password, validate_password_policy,
+    generate_temp_password, login_too_many, login_register_failure, login_reset,
+)
+
+
+class LocalLoginBody(BaseModel):
+    email: str
+    password: str
+
+
+class ChangePasswordBody(BaseModel):
+    current_password: str
+    new_password: str
+
+
+async def _issue_session(user_id: str, response: Response) -> str:
+    """Create a 7-day session for the given user and set the cookie."""
+    session_token = secrets_token_urlsafe(48)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    await db.user_sessions.insert_one({
+        "user_id": user_id,
+        "session_token": session_token,
+        "expires_at": expires_at.isoformat(),
+        "created_at": now_iso(),
+    })
+    response.set_cookie(
+        key="session_token", value=session_token, httponly=True,
+        secure=True, samesite="none", path="/", max_age=7 * 24 * 60 * 60,
+    )
+    return session_token
+
+
+def secrets_token_urlsafe(n: int = 32) -> str:
+    import secrets as _s
+    return _s.token_urlsafe(n)
+
+
+@api_router.post("/auth/login", response_model=User)
+async def auth_login(payload: LocalLoginBody, response: Response):
+    email = (payload.email or "").lower().strip()
+    if not email or not payload.password:
+        raise HTTPException(status_code=400, detail="Email y contraseña requeridos")
+    if login_too_many(email):
+        raise HTTPException(status_code=429, detail="Demasiados intentos, esperá unos minutos")
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user or user.get("deleted_at") or not user.get("active", True):
+        login_register_failure(email)
+        raise HTTPException(status_code=401, detail="Credenciales inválidas")
+    ap = (user.get("auth_provider") or "google").lower()
+    if ap not in ("local", "both"):
+        login_register_failure(email)
+        raise HTTPException(status_code=401, detail="Credenciales inválidas")
+    hashed = user.get("password_hash") or ""
+    if not verify_password(payload.password, hashed):
+        login_register_failure(email)
+        raise HTTPException(status_code=401, detail="Credenciales inválidas")
+    login_reset(email)
+    await _issue_session(user["user_id"], response)
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"last_login_at": now_iso()}})
+    user_doc = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    return User(**user_doc)
+
+
+@api_router.post("/auth/password/change")
+async def auth_change_password(payload: ChangePasswordBody, user: User = Depends(get_current_user)):
+    full = await db.users.find_one({"user_id": user.user_id}, {"_id": 0})
+    if not full:
+        raise HTTPException(status_code=401, detail="Usuario no encontrado")
+    ap = (full.get("auth_provider") or "google").lower()
+    if ap not in ("local", "both"):
+        raise HTTPException(status_code=400, detail="Este usuario no usa contraseña local")
+    if not verify_password(payload.current_password, full.get("password_hash") or ""):
+        raise HTTPException(status_code=401, detail="Contraseña actual incorrecta")
+    ok, msg = validate_password_policy(payload.new_password)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    await db.users.update_one(
+        {"user_id": user.user_id},
+        {"$set": {"password_hash": hash_password(payload.new_password), "updated_at": now_iso()}},
+    )
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Admin · Users CRUD
+# ---------------------------------------------------------------------------
+
+class AdminUserCreate(BaseModel):
+    email: str
+    name: str
+    role: str
+    auth_provider: str  # google | local | both
+    password: Optional[str] = None
+
+
+class AdminUserUpdate(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    auth_provider: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+AUTH_PROVIDERS = ("google", "local", "both")
+
+
+def _public_user(d: dict) -> dict:
+    """Strip password_hash and shape for the admin UI."""
+    out = {
+        "user_id": d.get("user_id"),
+        "email": d.get("email"),
+        "name": d.get("name"),
+        "picture": d.get("picture"),
+        "role": _normalize_role(d.get("role")),
+        "is_active": bool(d.get("active", True)) and not d.get("deleted_at"),
+        "active": bool(d.get("active", True)) and not d.get("deleted_at"),
+        "auth_provider": (d.get("auth_provider") or "google").lower(),
+        "has_password": bool(d.get("password_hash")),
+        "last_login_at": d.get("last_login_at"),
+        "created_at": d.get("created_at"),
+        "updated_at": d.get("updated_at"),
+        "deleted_at": d.get("deleted_at"),
+    }
+    return out
+
+
+@api_router.get("/admin/users")
+async def admin_list_users(
+    admin: User = Depends(require_admin),
+    q: Optional[str] = None,
+    role: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    include_inactive: bool = False,
+):
+    query: dict[str, Any] = {}
+    if not include_inactive:
+        query["deleted_at"] = {"$exists": False}
+    if role:
+        query["role"] = role
+    if is_active is not None:
+        query["active"] = is_active
+    if q:
+        query["$or"] = [
+            {"name": {"$regex": q, "$options": "i"}},
+            {"email": {"$regex": q, "$options": "i"}},
+        ]
+    docs = await db.users.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return [_public_user(d) for d in docs]
+
+
+@api_router.get("/admin/users/{uid}")
+async def admin_get_user(uid: str, admin: User = Depends(require_admin)):
+    d = await db.users.find_one({"user_id": uid}, {"_id": 0})
+    if not d:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    return _public_user(d)
+
+
+@api_router.post("/admin/users")
+async def admin_create_user(payload: AdminUserCreate, admin: User = Depends(require_admin)):
+    email = (payload.email or "").lower().strip()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Email inválido")
+    if payload.role not in ROLES:
+        raise HTTPException(status_code=400, detail="Rol inválido")
+    ap = (payload.auth_provider or "").lower()
+    if ap not in AUTH_PROVIDERS:
+        raise HTTPException(status_code=400, detail="Método de acceso inválido")
+    existing = await db.users.find_one({"email": email}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=409, detail="El email ya está registrado")
+
+    password_hash: Optional[str] = None
+    if ap in ("local", "both"):
+        if not payload.password:
+            raise HTTPException(status_code=400, detail="La contraseña es requerida para acceso local")
+        ok, msg = validate_password_policy(payload.password)
+        if not ok:
+            raise HTTPException(status_code=400, detail=msg)
+        password_hash = hash_password(payload.password)
+
+    user_id = new_id("user")
+    doc = {
+        "user_id": user_id,
+        "email": email,
+        "name": payload.name.strip(),
+        "role": payload.role,
+        "auth_provider": ap,
+        "active": True,
+        "is_demo": False,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "created_by": admin.user_id,
+    }
+    if password_hash:
+        doc["password_hash"] = password_hash
+    await db.users.insert_one(doc)
+    return _public_user(doc)
+
+
+async def _count_active_admins() -> int:
+    return await db.users.count_documents({
+        "role": "admin", "active": True, "deleted_at": {"$exists": False},
+    })
+
+
+@api_router.patch("/admin/users/{uid}")
+async def admin_update_user(uid: str, payload: AdminUserUpdate, admin: User = Depends(require_admin)):
+    target = await db.users.find_one({"user_id": uid}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    update: dict[str, Any] = {}
+    if payload.name is not None:
+        update["name"] = payload.name.strip()
+    if payload.role is not None:
+        if payload.role not in ROLES:
+            raise HTTPException(status_code=400, detail="Rol inválido")
+        # Don't allow demoting the last admin
+        if target.get("role") == "admin" and payload.role != "admin":
+            if await _count_active_admins() <= 1:
+                raise HTTPException(status_code=400, detail="No se puede degradar al último administrador activo")
+        update["role"] = payload.role
+    if payload.auth_provider is not None:
+        ap = payload.auth_provider.lower()
+        if ap not in AUTH_PROVIDERS:
+            raise HTTPException(status_code=400, detail="Método de acceso inválido")
+        update["auth_provider"] = ap
+    if payload.is_active is not None:
+        # Don't allow deactivating self
+        if uid == admin.user_id and not payload.is_active:
+            raise HTTPException(status_code=400, detail="No podés desactivar tu propia cuenta")
+        # Don't allow deactivating the last admin
+        if not payload.is_active and target.get("role") == "admin":
+            if await _count_active_admins() <= 1:
+                raise HTTPException(status_code=400, detail="No se puede desactivar al último administrador activo")
+        update["active"] = payload.is_active
+    if not update:
+        return _public_user(target)
+    update["updated_at"] = now_iso()
+    await db.users.update_one({"user_id": uid}, {"$set": update})
+    d = await db.users.find_one({"user_id": uid}, {"_id": 0})
+    return _public_user(d)
+
+
+@api_router.post("/admin/users/{uid}/activate")
+async def admin_activate(uid: str, admin: User = Depends(require_admin)):
+    return await admin_update_user(uid, AdminUserUpdate(is_active=True), admin=admin)
+
+
+@api_router.post("/admin/users/{uid}/deactivate")
+async def admin_deactivate(uid: str, admin: User = Depends(require_admin)):
+    return await admin_update_user(uid, AdminUserUpdate(is_active=False), admin=admin)
+
+
+@api_router.post("/admin/users/{uid}/reset-password")
+async def admin_reset_password(uid: str, admin: User = Depends(require_admin)):
+    target = await db.users.find_one({"user_id": uid}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    ap = (target.get("auth_provider") or "").lower()
+    if ap not in ("local", "both"):
+        raise HTTPException(status_code=400, detail="Este usuario no usa contraseña local")
+    temp = generate_temp_password(12)
+    await db.users.update_one({"user_id": uid}, {"$set": {
+        "password_hash": hash_password(temp),
+        "updated_at": now_iso(),
+        "password_reset_by": admin.user_id,
+        "password_reset_at": now_iso(),
+    }})
+    logger.info("admin reset password user=%s by=%s", uid, admin.user_id)
+    # Returned ONCE — the UI must show it on a banner; do not store the plain text.
+    return {"ok": True, "temporary_password": temp}
+
+
+@api_router.delete("/admin/users/{uid}")
+async def admin_delete_user(uid: str, admin: User = Depends(require_admin)):
+    target = await db.users.find_one({"user_id": uid}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if uid == admin.user_id:
+        raise HTTPException(status_code=400, detail="No podés eliminar tu propia cuenta")
+    if target.get("role") == "admin":
+        if await _count_active_admins() <= 1:
+            raise HTTPException(status_code=400, detail="No se puede eliminar al último administrador activo")
+    await db.users.update_one({"user_id": uid}, {"$set": {
+        "deleted_at": now_iso(),
+        "active": False,
+        "updated_at": now_iso(),
+    }})
+    await db.user_sessions.delete_many({"user_id": uid})
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Admin · WhatsApp config (DB+env)
+# ---------------------------------------------------------------------------
+
+from whatsapp import wa_config_effective, env_values as _wa_env_values  # noqa: E402
+from whatsapp.storage import per_field_sources, save_db_config, SENSITIVE_FIELDS as _WA_SENSITIVE  # noqa: E402
+from utils.crypto import is_available as crypto_available  # noqa: E402
+
+
+class WhatsAppConfigUpdate(BaseModel):
+    verify_token: Any = "__unset__"
+    access_token: Any = "__unset__"
+    phone_number_id: Any = "__unset__"
+    app_secret: Any = "__unset__"
+    business_account_id: Any = "__unset__"
+    api_version: Any = "__unset__"
+
+
+def _webhook_url(request: Request) -> str:
+    # Compose from the public base URL when reachable; fall back to request.base_url.
+    base = os.environ.get("PUBLIC_BACKEND_URL", "").rstrip("/")
+    if not base:
+        # request.base_url already ends with /
+        base = str(request.base_url).rstrip("/")
+    return f"{base}/api/webhooks/whatsapp"
+
+
+@api_router.get("/admin/whatsapp/config")
+async def admin_wa_config_get(request: Request, admin: User = Depends(require_admin)):
+    env = _wa_env_values()
+    fields = await per_field_sources(db, env)
+    cfg = await wa_config_effective(db)
+    status_doc = await _wa_get_status_doc()
+    return {
+        "configured": cfg.is_configured,
+        "fields": fields,
+        "api_version": cfg.api_version,
+        "webhook_url": _webhook_url(request),
+        "encryption_available": crypto_available(),
+        "last_webhook_at": status_doc.get("last_webhook_at"),
+        "last_error": status_doc.get("last_error"),
+        "last_error_at": status_doc.get("last_error_at"),
+    }
+
+
+@api_router.put("/admin/whatsapp/config")
+async def admin_wa_config_put(payload: WhatsAppConfigUpdate, admin: User = Depends(require_admin)):
+    if not crypto_available():
+        raise HTTPException(
+            status_code=503,
+            detail="APP_ENCRYPTION_KEY no configurado — la configuración por UI está deshabilitada",
+        )
+    # Convert "__unset__" sentinels into "missing"; allow explicit None to clear.
+    updates: dict[str, Any] = {}
+    for f in ("verify_token", "access_token", "phone_number_id", "app_secret", "business_account_id", "api_version"):
+        val = getattr(payload, f)
+        if val == "__unset__":
+            continue
+        updates[f] = val
+    try:
+        await save_db_config(db, updates, updated_by=admin.user_id)
+    except Exception as e:
+        logger.exception("admin_wa_config_put failed: %s", e)
+        raise HTTPException(status_code=500, detail="No se pudo guardar la configuración")
+    # Return the new state (no plain values)
+    env = _wa_env_values()
+    fields = await per_field_sources(db, env)
+    cfg = await wa_config_effective(db)
+    return {"configured": cfg.is_configured, "fields": fields, "api_version": cfg.api_version}
+
+
+@api_router.post("/admin/whatsapp/test-connection")
+async def admin_wa_test_connection(admin: User = Depends(require_admin)):
+    cfg = await wa_config_effective(db)
+    if not (cfg.access_token and cfg.phone_number_id):
+        raise HTTPException(status_code=503, detail="WhatsApp no configurado")
+    url = f"https://graph.facebook.com/{cfg.api_version}/{cfg.phone_number_id}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as hc:
+            r = await hc.get(url, headers={"Authorization": f"Bearer {cfg.access_token}"})
+    except (httpx.TimeoutException, httpx.TransportError) as e:
+        await _wa_record_send_error(code=None, message=f"timeout en test-connection: {e}")
+        return {"ok": False, "error_code": None, "error_message": f"Tiempo de espera agotado: {e}"}
+    if 200 <= r.status_code < 300:
+        data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+        return {
+            "ok": True,
+            "display_phone_number": data.get("display_phone_number") or "",
+            "verified_name": data.get("verified_name") or "",
+        }
+    try:
+        err = (r.json() or {}).get("error") or {}
+    except Exception:
+        err = {}
+    await _wa_record_send_error(code=err.get("code"), message=str(err.get("message") or ""))
+    return {
+        "ok": False,
+        "error_code": err.get("code"),
+        "error_message": str(err.get("message") or f"HTTP {r.status_code}"),
+    }
+
+
+@api_router.post("/admin/whatsapp/rotate-verify-token")
+async def admin_wa_rotate_verify_token(admin: User = Depends(require_admin)):
+    if not crypto_available():
+        raise HTTPException(
+            status_code=503,
+            detail="APP_ENCRYPTION_KEY no configurado — la configuración por UI está deshabilitada",
+        )
+    new_token = secrets_token_urlsafe(24)  # ~32 url-safe chars
+    await save_db_config(db, {"verify_token": new_token}, updated_by=admin.user_id)
+    logger.info("WhatsApp verify_token rotated by=%s", admin.user_id)
+    return {"ok": True, "verify_token": new_token}
+
+
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Users (team / admin)
@@ -752,7 +1219,7 @@ async def whatsapp_webhook_verify(
     hub_verify_token: Optional[str] = Query(default=None, alias="hub.verify_token"),
     hub_challenge: Optional[str] = Query(default=None, alias="hub.challenge"),
 ):
-    cfg = wa_config()
+    cfg = await wa_config_effective(db)
     if hub_mode == "subscribe" and hub_verify_token and cfg.verify_token and hub_verify_token == cfg.verify_token:
         return Response(content=hub_challenge or "", media_type="text/plain", status_code=200)
     raise HTTPException(status_code=403, detail="verify_token mismatch")
@@ -763,7 +1230,7 @@ async def whatsapp_webhook_verify(
 @api_router.post("/webhooks/whatsapp")
 async def whatsapp_webhook_event(request: Request):
     raw = await request.body()
-    cfg = wa_config()
+    cfg = await wa_config_effective(db)
     # Signature check (only enforced when APP_SECRET is configured)
     sig_header = request.headers.get("X-Hub-Signature-256") or request.headers.get("x-hub-signature-256")
     if cfg.app_secret:
@@ -937,7 +1404,7 @@ class WhatsAppSend(BaseModel):
 
 @api_router.post("/conversations/{conv_id}/send-whatsapp")
 async def send_whatsapp(conv_id: str, payload: WhatsAppSend, user: User = Depends(get_current_user)):
-    cfg = wa_config()
+    cfg = await wa_config_effective(db)
     if not cfg.is_configured:
         raise HTTPException(status_code=503, detail="WhatsApp no configurado")
     text = (payload.text or "").strip()
@@ -997,7 +1464,7 @@ async def send_whatsapp(conv_id: str, payload: WhatsAppSend, user: User = Depend
 async def admin_whatsapp_status(user: User = Depends(get_current_user)):
     if user.role not in ("admin", "supervisor"):
         raise HTTPException(status_code=403, detail="Acceso restringido")
-    cfg = wa_config()
+    cfg = await wa_config_effective(db)
     status_doc = await _wa_get_status_doc()
     return {
         "configured": cfg.is_configured,
@@ -1666,6 +2133,44 @@ async def backfill_notifications():
 
 
 app.include_router(api_router)
+
+
+# ---------------------------------------------------------------------------
+# Viewer write-guard middleware: block viewers from any write on /api/*
+# ---------------------------------------------------------------------------
+
+_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_WRITE_EXEMPT_PATHS = {
+    "/api/auth/session", "/api/auth/logout", "/api/auth/login",
+    "/api/auth/password/change",  # users (incl. viewer) can change own password
+    "/api/webhooks/whatsapp",     # external, no logged user
+}
+
+
+@app.middleware("http")
+async def block_viewer_on_writes(request: Request, call_next):
+    method = request.method
+    path = request.url.path
+    if method in _WRITE_METHODS and path.startswith("/api/") and path not in _WRITE_EXEMPT_PATHS:
+        token = request.cookies.get("session_token")
+        if not token:
+            auth = request.headers.get("Authorization", "")
+            if auth.startswith("Bearer "):
+                token = auth[7:]
+        if token:
+            try:
+                session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+                if session:
+                    user_doc = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+                    if user_doc:
+                        role = _normalize_role(user_doc.get("role"))
+                        if role == "viewer":
+                            from fastapi.responses import JSONResponse
+                            return JSONResponse({"detail": "Sin permisos"}, status_code=403)
+            except Exception:
+                pass  # fall through to normal handler
+    return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,

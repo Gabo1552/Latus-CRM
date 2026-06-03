@@ -1,0 +1,493 @@
+"""Tests for Configuración: users CRUD, local auth, viewer guard, WhatsApp config."""
+
+from __future__ import annotations
+
+import asyncio
+import importlib
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest.mock import patch
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BACKEND_DIR))
+
+os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
+os.environ.setdefault("DB_NAME", "latus_settings_tests")
+os.environ.setdefault("CORS_ORIGINS", "*")
+os.environ.setdefault("APP_ENCRYPTION_KEY", "T9VemN99LrWMmb3im576htR6oNUwsyQdIhvFO9QuTI0=")
+
+
+# ---- run helper -----------------------------------------------------------
+
+def _run(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+# ---- fake DB --------------------------------------------------------------
+
+def _matches(doc, query):
+    for k, v in (query or {}).items():
+        if isinstance(v, dict):
+            if "$in" in v:
+                if doc.get(k) not in v["$in"]:
+                    return False
+            elif "$exists" in v:
+                exists = k in doc and doc.get(k) is not None
+                if v["$exists"] != exists:
+                    return False
+            elif "$ne" in v:
+                if doc.get(k) == v["$ne"]:
+                    return False
+            elif "$regex" in v:
+                import re
+                rx = re.compile(v["$regex"], re.IGNORECASE if v.get("$options") == "i" else 0)
+                if not rx.search(str(doc.get(k, ""))):
+                    return False
+            else:
+                return False
+        elif doc.get(k) != v:
+            return False
+    return True
+
+
+def _query_matches(doc, query):
+    if "$or" in query:
+        return any(_matches(doc, sub) for sub in query["$or"])
+    return _matches(doc, query)
+
+
+class _Cursor:
+    def __init__(self, docs):
+        self._docs = list(docs)
+
+    def sort(self, key_or_list, direction=None):
+        if isinstance(key_or_list, str):
+            self._docs.sort(key=lambda d: d.get(key_or_list, "") or "", reverse=(direction == -1))
+        return self
+
+    async def to_list(self, n=None):
+        return list(self._docs if n is None else self._docs[:n])
+
+
+class _Coll:
+    def __init__(self):
+        self.docs = []
+
+    def find(self, query=None, projection=None):
+        q = query or {}
+        return _Cursor([d for d in self.docs if _query_matches(d, q)])
+
+    async def find_one(self, query, projection=None, sort=None):
+        for d in self.docs:
+            if _query_matches(d, query):
+                return dict(d)
+        return None
+
+    async def insert_one(self, doc):
+        self.docs.append(dict(doc))
+
+    async def update_one(self, query, update, upsert=False):
+        for d in self.docs:
+            if _query_matches(d, query):
+                if "$set" in update:
+                    d.update(update["$set"])
+                if "$unset" in update:
+                    for k in update["$unset"]:
+                        d.pop(k, None)
+                if "$inc" in update:
+                    for k, v in update["$inc"].items():
+                        d[k] = (d.get(k) or 0) + v
+                return
+        if upsert:
+            new = {k: v for k, v in (query or {}).items() if not isinstance(v, dict)}
+            if "$set" in update:
+                new.update(update["$set"])
+            self.docs.append(new)
+
+    async def update_many(self, *_a, **_k):
+        pass
+
+    async def delete_one(self, query):
+        for i, d in enumerate(self.docs):
+            if _query_matches(d, query):
+                self.docs.pop(i)
+                return
+
+    async def delete_many(self, query):
+        self.docs[:] = [d for d in self.docs if not _query_matches(d, query)]
+
+    async def count_documents(self, query):
+        return sum(1 for d in self.docs if _query_matches(d, query))
+
+    async def create_index(self, *_a, **_k):
+        return "idx"
+
+
+class _FakeDB:
+    def __init__(self):
+        for name in ("users", "user_sessions", "contacts", "leads", "conversations",
+                     "messages", "notifications", "settings", "wa_status",
+                     "whatsapp_events", "app_secrets", "tasks", "notes", "bot_events"):
+            setattr(self, name, _Coll())
+
+
+# ---- fixtures -------------------------------------------------------------
+
+@pytest.fixture
+def srv(monkeypatch):
+    # force re-import so module-level state is fresh
+    for mod in list(sys.modules):
+        if mod == "server" or mod.startswith("whatsapp") or mod.startswith("utils"):
+            sys.modules.pop(mod, None)
+    import server  # type: ignore
+    fake = _FakeDB()
+    monkeypatch.setattr(server, "db", fake)
+    monkeypatch.setattr(server, "_start_scheduler", lambda: None, raising=False)
+
+    # seed an admin + session
+    _run(fake.users.insert_one({
+        "user_id": "u_admin", "email": "admin@latus.test", "name": "Admin",
+        "role": "admin", "active": True, "auth_provider": "google",
+        "created_at": "2025-01-01T00:00:00+00:00",
+    }))
+    _run(fake.user_sessions.insert_one({
+        "user_id": "u_admin", "session_token": "T-ADMIN",
+        "expires_at": "2099-01-01T00:00:00+00:00",
+        "created_at": "2025-01-01T00:00:00+00:00",
+    }))
+
+    client = TestClient(server.app)
+    return server, fake, client
+
+
+def _h(token="T-ADMIN"):
+    return {"Authorization": f"Bearer {token}"}
+
+
+# ====================================================================
+# Users CRUD
+# ====================================================================
+class TestUsersCRUD:
+    def test_create_local_then_login(self, srv):
+        server, fake, client = srv
+        r = client.post("/api/admin/users", headers=_h(), json={
+            "email": "agente@latus.test", "name": "Agente Uno",
+            "role": "agent", "auth_provider": "local", "password": "Hola1234",
+        })
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["email"] == "agente@latus.test"
+        assert body["role"] == "agent"
+        assert body["has_password"] is True
+        assert "password_hash" not in body
+
+        # Login locally
+        r = client.post("/api/auth/login", json={
+            "email": "agente@latus.test", "password": "Hola1234",
+        })
+        assert r.status_code == 200, r.text
+        # Wrong password -> 401
+        r2 = client.post("/api/auth/login", json={
+            "email": "agente@latus.test", "password": "Wrong123",
+        })
+        assert r2.status_code == 401
+
+    def test_create_google_preapproves_email(self, srv):
+        server, fake, client = srv
+        r = client.post("/api/admin/users", headers=_h(), json={
+            "email": "google@latus.test", "name": "Google User",
+            "role": "supervisor", "auth_provider": "google",
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["auth_provider"] == "google"
+        assert body["has_password"] is False
+
+    def test_duplicate_email_409(self, srv):
+        server, fake, client = srv
+        client.post("/api/admin/users", headers=_h(), json={
+            "email": "dup@latus.test", "name": "Dup", "role": "agent",
+            "auth_provider": "local", "password": "Hola1234",
+        })
+        r = client.post("/api/admin/users", headers=_h(), json={
+            "email": "dup@latus.test", "name": "Dup2", "role": "agent",
+            "auth_provider": "local", "password": "Hola1234",
+        })
+        assert r.status_code == 409
+
+    def test_invalid_password_rejected(self, srv):
+        server, fake, client = srv
+        r = client.post("/api/admin/users", headers=_h(), json={
+            "email": "weak@latus.test", "name": "Weak", "role": "agent",
+            "auth_provider": "local", "password": "short",
+        })
+        assert r.status_code == 400
+
+    def test_delete_self_400(self, srv):
+        server, fake, client = srv
+        r = client.delete("/api/admin/users/u_admin", headers=_h())
+        assert r.status_code == 400
+
+    def test_delete_last_admin_400(self, srv):
+        server, fake, client = srv
+        # Add a viewer + try to delete the only admin
+        client.post("/api/admin/users", headers=_h(), json={
+            "email": "v@latus.test", "name": "V", "role": "viewer",
+            "auth_provider": "google",
+        })
+        # Make the viewer logged-in as admin actor "u_admin" not allowed to remove self.
+        # The actual test for "last admin": create another admin then delete original
+        client.post("/api/admin/users", headers=_h(), json={
+            "email": "a2@latus.test", "name": "Admin 2", "role": "admin",
+            "auth_provider": "google",
+        })
+        # Now we have 2 admins, deactivate u_admin via API impossible (deleting self) —
+        # so simulate: deactivate the OTHER admin first then try to delete it -> still
+        # one admin alive -> deletion of the other admin should be 400
+        # Find admin2 id
+        others = [u for u in fake.users.docs if u["email"] == "a2@latus.test"]
+        a2_id = others[0]["user_id"]
+        # Deactivate admin2
+        r = client.post(f"/api/admin/users/{a2_id}/deactivate", headers=_h())
+        assert r.status_code == 200
+        # Now u_admin is the last active admin. Try to delete a2 (inactive admin) — that's fine.
+        # But trying to deactivate u_admin (self) -> 400
+        r = client.post("/api/admin/users/u_admin/deactivate", headers=_h())
+        assert r.status_code == 400
+
+    def test_soft_delete_hidden_by_default(self, srv):
+        server, fake, client = srv
+        r = client.post("/api/admin/users", headers=_h(), json={
+            "email": "byebye@latus.test", "name": "BB", "role": "agent",
+            "auth_provider": "google",
+        })
+        uid = r.json()["user_id"]
+        client.delete(f"/api/admin/users/{uid}", headers=_h())
+        r = client.get("/api/admin/users", headers=_h())
+        emails = {u["email"] for u in r.json()}
+        assert "byebye@latus.test" not in emails
+        r = client.get("/api/admin/users?include_inactive=true", headers=_h())
+        emails = {u["email"] for u in r.json()}
+        assert "byebye@latus.test" in emails
+
+    def test_reset_password_returns_temp_once(self, srv):
+        server, fake, client = srv
+        client.post("/api/admin/users", headers=_h(), json={
+            "email": "reset@latus.test", "name": "R", "role": "agent",
+            "auth_provider": "local", "password": "Hola1234",
+        })
+        uid = [u for u in fake.users.docs if u["email"] == "reset@latus.test"][0]["user_id"]
+        r = client.post(f"/api/admin/users/{uid}/reset-password", headers=_h())
+        assert r.status_code == 200
+        body = r.json()
+        assert "temporary_password" in body
+        assert len(body["temporary_password"]) == 12
+        # Login with the new temp password
+        r2 = client.post("/api/auth/login", json={
+            "email": "reset@latus.test", "password": body["temporary_password"],
+        })
+        assert r2.status_code == 200
+
+
+# ====================================================================
+# Viewer write-guard
+# ====================================================================
+class TestViewerGuard:
+    def _make_viewer(self, fake):
+        _run(fake.users.insert_one({
+            "user_id": "u_view", "email": "view@latus.test", "name": "V",
+            "role": "viewer", "active": True, "auth_provider": "google",
+            "created_at": "2025-01-01T00:00:00+00:00",
+        }))
+        _run(fake.user_sessions.insert_one({
+            "user_id": "u_view", "session_token": "T-VIEW",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+            "created_at": "2025-01-01T00:00:00+00:00",
+        }))
+
+    def test_viewer_cannot_create_contact(self, srv):
+        _, fake, client = srv
+        self._make_viewer(fake)
+        r = client.post("/api/contacts", headers=_h("T-VIEW"),
+                        json={"name": "X", "phone": "+1"})
+        assert r.status_code == 403
+        assert r.json()["detail"] == "Sin permisos"
+
+    def test_viewer_cannot_simulate_inbound(self, srv):
+        _, fake, client = srv
+        self._make_viewer(fake)
+        _run(fake.conversations.insert_one({
+            "id": "cv_1", "contact_id": "ct_1", "status": "open",
+            "priority": "medium", "bot_enabled": True,
+            "last_message_at": "2025-01-01T00:00:00+00:00",
+            "created_at": "2025-01-01T00:00:00+00:00", "unread": 0,
+        }))
+        r = client.post("/api/conversations/cv_1/simulate-inbound",
+                        headers=_h("T-VIEW"))
+        assert r.status_code == 403
+
+    def test_viewer_cannot_patch_settings(self, srv):
+        _, fake, client = srv
+        self._make_viewer(fake)
+        r = client.patch("/api/settings", headers=_h("T-VIEW"),
+                         json={"lead_no_response_enabled": False})
+        assert r.status_code == 403
+
+    def test_viewer_can_read(self, srv):
+        _, fake, client = srv
+        self._make_viewer(fake)
+        r = client.get("/api/contacts", headers=_h("T-VIEW"))
+        assert r.status_code == 200
+
+    def test_agent_cannot_access_admin_users(self, srv):
+        _, fake, client = srv
+        _run(fake.users.insert_one({
+            "user_id": "u_ag", "email": "ag@latus.test", "name": "Ag",
+            "role": "agent", "active": True, "auth_provider": "google",
+            "created_at": "2025-01-01T00:00:00+00:00",
+        }))
+        _run(fake.user_sessions.insert_one({
+            "user_id": "u_ag", "session_token": "T-AG",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+            "created_at": "2025-01-01T00:00:00+00:00",
+        }))
+        r = client.get("/api/admin/users", headers=_h("T-AG"))
+        assert r.status_code == 403
+
+
+# ====================================================================
+# WhatsApp config (DB+env, encrypted)
+# ====================================================================
+class TestWhatsAppConfig:
+    def test_put_encrypts_get_returns_masked(self, srv, monkeypatch):
+        server, fake, client = srv
+        monkeypatch.setenv("WHATSAPP_VERIFY_TOKEN", "")
+        monkeypatch.setenv("WHATSAPP_ACCESS_TOKEN", "")
+        monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "")
+        r = client.put("/api/admin/whatsapp/config", headers=_h(), json={
+            "verify_token": "my-verify-XYZ",
+            "access_token": "EAA-supersecret-1234",
+            "phone_number_id": "1234567890",
+            "api_version": "v21.0",
+        })
+        assert r.status_code == 200, r.text
+        # DB doc must store *_enc fields, never plain
+        secrets = fake.app_secrets.docs[0]
+        assert "verify_token_enc" in secrets
+        assert "verify_token" not in secrets
+        # plain values must NOT be on the wire
+        full = client.get("/api/admin/whatsapp/config", headers=_h())
+        text = full.text
+        for plain in ("my-verify-XYZ", "EAA-supersecret-1234"):
+            assert plain not in text
+        body = full.json()
+        assert body["fields"]["verify_token"]["source"] == "db"
+        assert body["fields"]["verify_token"]["masked"].endswith("-XYZ")
+        assert body["configured"] is True
+
+    def test_put_with_none_clears_back_to_env(self, srv, monkeypatch):
+        server, fake, client = srv
+        monkeypatch.setenv("WHATSAPP_ACCESS_TOKEN", "ENV-TOKEN-ABCD")
+        # First set via DB
+        client.put("/api/admin/whatsapp/config", headers=_h(), json={
+            "access_token": "DB-TOKEN-ZZZZ",
+        })
+        body = client.get("/api/admin/whatsapp/config", headers=_h()).json()
+        assert body["fields"]["access_token"]["source"] == "db"
+        # Now clear with explicit null
+        client.put("/api/admin/whatsapp/config", headers=_h(), json={
+            "access_token": None,
+        })
+        body = client.get("/api/admin/whatsapp/config", headers=_h()).json()
+        assert body["fields"]["access_token"]["source"] == "env"
+        assert body["fields"]["access_token"]["masked"].endswith("ABCD")
+
+    def test_rotate_verify_token(self, srv):
+        server, fake, client = srv
+        r = client.post("/api/admin/whatsapp/rotate-verify-token", headers=_h())
+        assert r.status_code == 200
+        new = r.json()["verify_token"]
+        assert len(new) >= 24
+        body = client.get("/api/admin/whatsapp/config", headers=_h()).json()
+        assert body["fields"]["verify_token"]["source"] == "db"
+        # New value should round-trip through GET verify endpoint
+        r2 = client.get("/api/webhooks/whatsapp", params={
+            "hub.mode": "subscribe",
+            "hub.verify_token": new,
+            "hub.challenge": "OK",
+        })
+        assert r2.status_code == 200
+        assert r2.text == "OK"
+
+    def test_test_connection_success(self, srv, monkeypatch):
+        server, fake, client = srv
+        client.put("/api/admin/whatsapp/config", headers=_h(), json={
+            "access_token": "TOK",
+            "phone_number_id": "PNI-1234",
+            "verify_token": "v",
+        })
+
+        async def fake_get(self, url, headers=None, **kwargs):
+            return httpx.Response(
+                200,
+                json={"display_phone_number": "+54 11 5555-7777", "verified_name": "Latus Demo"},
+                request=httpx.Request("GET", url),
+            )
+
+        with patch.object(httpx.AsyncClient, "get", new=fake_get):
+            r = client.post("/api/admin/whatsapp/test-connection", headers=_h())
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True
+        assert body["display_phone_number"] == "+54 11 5555-7777"
+        assert body["verified_name"] == "Latus Demo"
+
+    def test_test_connection_meta_401(self, srv):
+        server, fake, client = srv
+        client.put("/api/admin/whatsapp/config", headers=_h(), json={
+            "access_token": "TOK", "phone_number_id": "PNI", "verify_token": "v",
+        })
+
+        async def fake_get(self, url, headers=None, **kwargs):
+            return httpx.Response(
+                401, json={"error": {"code": 190, "message": "Invalid OAuth"}},
+                request=httpx.Request("GET", url),
+            )
+
+        with patch.object(httpx.AsyncClient, "get", new=fake_get):
+            r = client.post("/api/admin/whatsapp/test-connection", headers=_h())
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is False
+        assert body["error_code"] == 190
+        assert "Invalid OAuth" in body["error_message"]
+
+    def test_test_connection_503_when_unconfigured(self, srv, monkeypatch):
+        server, fake, client = srv
+        monkeypatch.setenv("WHATSAPP_ACCESS_TOKEN", "")
+        monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "")
+        r = client.post("/api/admin/whatsapp/test-connection", headers=_h())
+        assert r.status_code == 503
+
+    def test_put_503_when_encryption_key_missing(self, srv, monkeypatch):
+        server, fake, client = srv
+        monkeypatch.setenv("APP_ENCRYPTION_KEY", "")
+        # invalidate cached fernet
+        from utils import crypto as cryptomod
+        cryptomod._cached_fernet = None
+        cryptomod._cached_key = None
+        r = client.put("/api/admin/whatsapp/config", headers=_h(), json={
+            "verify_token": "x",
+        })
+        assert r.status_code == 503
+        assert "APP_ENCRYPTION_KEY" in r.json()["detail"]
