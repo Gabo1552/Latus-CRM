@@ -10,6 +10,16 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Literal, Any
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
+
+from utils.business_hours import (
+    is_within_business_hours,
+    business_seconds_between,
+    DEFAULT_TZ as BH_DEFAULT_TZ,
+    DEFAULT_START as BH_DEFAULT_START,
+    DEFAULT_END as BH_DEFAULT_END,
+    DEFAULT_DAYS as BH_DEFAULT_DAYS,
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -18,7 +28,7 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-app = FastAPI(title="FlowDesk CRM API")
+app = FastAPI(title="Latus CRM API", openapi_url="/api/openapi.json", docs_url="/api/docs", redoc_url="/api/redoc")
 api_router = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -535,14 +545,46 @@ async def mark_all_notifications_read(user: User = Depends(get_current_user)):
 DEFAULT_SETTINGS = {
     "lead_no_response_enabled": True,
     "lead_no_response_threshold_hours": 2,
-    "lead_no_response_business_hours_only": False,  # placeholder for future use
+    "lead_no_response_business_hours_only": False,
+    # Business-hours window (only used when *_business_hours_only is True)
+    "business_hours_start": BH_DEFAULT_START,           # "HH:MM"
+    "business_hours_end": BH_DEFAULT_END,               # "HH:MM"
+    "business_days": list(BH_DEFAULT_DAYS),             # 0=Mon..6=Sun
+    "business_timezone": BH_DEFAULT_TZ,                  # IANA tz, e.g. America/Argentina/Cordoba
 }
+
+
+_HHMM_RE = None  # placeholder if we ever want pre-compiled validation
+
+
+def _validate_hhmm(value: str) -> str:
+    """Ensure HH:MM string; raise ValueError on bad input."""
+    try:
+        hh, mm = value.split(":")
+        h, m = int(hh), int(mm)
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise ValueError
+        return f"{h:02d}:{m:02d}"
+    except Exception:
+        raise ValueError(f"invalid HH:MM string: {value!r}")
+
+
+def _validate_tz(value: str) -> str:
+    try:
+        ZoneInfo(value)
+        return value
+    except Exception:
+        raise ValueError(f"invalid IANA timezone: {value!r}")
 
 
 class SettingsUpdate(BaseModel):
     lead_no_response_enabled: Optional[bool] = None
     lead_no_response_threshold_hours: Optional[int] = None
     lead_no_response_business_hours_only: Optional[bool] = None
+    business_hours_start: Optional[str] = None
+    business_hours_end: Optional[str] = None
+    business_days: Optional[List[int]] = None
+    business_timezone: Optional[str] = None
 
 
 async def get_app_settings() -> dict:
@@ -565,18 +607,50 @@ async def update_settings(payload: SettingsUpdate, admin: User = Depends(require
     update = {k: v for k, v in payload.model_dump().items() if v is not None}
     if "lead_no_response_threshold_hours" in update:
         update["lead_no_response_threshold_hours"] = max(1, int(update["lead_no_response_threshold_hours"]))
+    if "business_hours_start" in update:
+        try:
+            update["business_hours_start"] = _validate_hhmm(update["business_hours_start"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    if "business_hours_end" in update:
+        try:
+            update["business_hours_end"] = _validate_hhmm(update["business_hours_end"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    if "business_timezone" in update:
+        try:
+            update["business_timezone"] = _validate_tz(update["business_timezone"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    if "business_days" in update:
+        days = sorted({int(d) for d in update["business_days"] if 0 <= int(d) <= 6})
+        update["business_days"] = days
     await db.settings.update_one({"key": "app"}, {"$set": {"key": "app", **update}}, upsert=True)
     return await get_app_settings()
 
 
 async def scan_lead_no_response() -> List[dict]:
-    """Idempotently create lead_no_response notifications and return qualifying conversations."""
+    """Idempotently create lead_no_response notifications and return qualifying conversations.
+
+    When ``lead_no_response_business_hours_only`` is enabled the elapsed time
+    is computed as **business seconds** (using the configured business window
+    + timezone + business days) and notifications are deferred until ``now``
+    is itself inside the business window.
+    """
     settings = await get_app_settings()
     qualifying: List[dict] = []
     if not settings.get("lead_no_response_enabled", True):
         return qualifying
     threshold = settings.get("lead_no_response_threshold_hours", 2)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=threshold)
+    threshold_seconds = int(threshold) * 3600
+    business_only = bool(settings.get("lead_no_response_business_hours_only", False))
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(hours=threshold)
+
+    # When business-only is on and we're currently outside business hours,
+    # we still scan (to compute) but we *suppress creation* — alerts are
+    # deferred to the next business-hours tick.
+    inside_business_now = (not business_only) or is_within_business_hours(now_utc, settings)
 
     convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
     contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(2000)}
@@ -597,19 +671,26 @@ async def scan_lead_no_response() -> List[dict]:
         msg = last[0]
         if msg.get("sender_type") != "contact":
             continue
-        # customer message must be older than threshold
         try:
             created = datetime.fromisoformat(msg["created_at"])
         except Exception:
             continue
         if created.tzinfo is None:
             created = created.replace(tzinfo=timezone.utc)
-        if created > cutoff:
-            continue
+
+        if business_only:
+            elapsed = business_seconds_between(created, now_utc, settings)
+            if elapsed < threshold_seconds:
+                continue
+        else:
+            if created > cutoff:
+                continue
 
         cname = contacts.get(c["contact_id"], {}).get("name", "un cliente")
         qualifying.append(c)
-        # _make_notification dedups on unread same type+entity+user
+        # Defer notification creation if business-only and currently outside hours.
+        if not inside_business_now:
+            continue
         await _notify_target(
             c.get("assigned_to"), "lead_no_response",
             f"Lead sin respuesta: {cname}",
@@ -1130,7 +1211,50 @@ async def _seed(force: bool = False):
 async def on_startup():
     await _seed(force=False)
     await backfill_notifications()
-    logger.info("FlowDesk CRM started")
+    _start_scheduler()
+    logger.info("Latus CRM started")
+
+
+# ---------------------------------------------------------------------------
+# Scheduler: lead-no-response scan every 5 minutes
+# ---------------------------------------------------------------------------
+
+_scheduler = None  # singleton at module level — safe-start guard
+
+
+def _start_scheduler():
+    """Idempotently start the APScheduler that re-runs the lead-no-response
+    scan every 5 minutes. Safe across worker restarts (only one per process)."""
+    global _scheduler
+    if _scheduler is not None:
+        return
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.interval import IntervalTrigger
+    except Exception as e:  # pragma: no cover - apscheduler missing
+        logger.warning("APScheduler not available, skipping schedule: %s", e)
+        return
+
+    sched = AsyncIOScheduler(timezone="UTC")
+
+    async def _job():
+        try:
+            await scan_lead_no_response()
+        except Exception:  # pragma: no cover - log only
+            logger.exception("scheduled scan_lead_no_response failed")
+
+    sched.add_job(
+        _job,
+        trigger=IntervalTrigger(minutes=5),
+        id="lead_no_response_scan",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=30),
+    )
+    sched.start()
+    _scheduler = sched
+    logger.info("APScheduler started: lead_no_response_scan every 5m")
 
 
 async def backfill_notifications():
@@ -1164,4 +1288,11 @@ app.add_middleware(
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
+    global _scheduler
+    try:
+        if _scheduler is not None:
+            _scheduler.shutdown(wait=False)
+            _scheduler = None
+    except Exception:  # pragma: no cover
+        pass
     client.close()

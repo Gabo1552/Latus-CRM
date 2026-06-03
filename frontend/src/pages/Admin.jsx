@@ -28,14 +28,26 @@ export default function Admin() {
   const [threshold, setThreshold] = useState(2);
   const [enabled, setEnabled] = useState(true);
   const [businessHours, setBusinessHours] = useState(false);
+  const [bhStart, setBhStart] = useState("09:00");
+  const [bhEnd, setBhEnd] = useState("18:00");
+  const [bhDays, setBhDays] = useState([0, 1, 2, 3, 4]);
+  const [bhTz, setBhTz] = useState("America/Argentina/Cordoba");
 
   useEffect(() => {
     if (settings) {
       setThreshold(settings.lead_no_response_threshold_hours);
       setEnabled(settings.lead_no_response_enabled);
       setBusinessHours(settings.lead_no_response_business_hours_only);
+      if (settings.business_hours_start) setBhStart(settings.business_hours_start);
+      if (settings.business_hours_end) setBhEnd(settings.business_hours_end);
+      if (Array.isArray(settings.business_days)) setBhDays(settings.business_days);
+      if (settings.business_timezone) setBhTz(settings.business_timezone);
     }
   }, [settings]);
+
+  const toggleDay = (d) => {
+    setBhDays((prev) => prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d].sort());
+  };
 
   const update = useMutation({
     mutationFn: ({ id, body }) => api.patch(`/users/${id}`, body),
@@ -48,6 +60,10 @@ export default function Admin() {
       lead_no_response_enabled: enabled,
       lead_no_response_threshold_hours: Number(threshold),
       lead_no_response_business_hours_only: businessHours,
+      business_hours_start: bhStart,
+      business_hours_end: bhEnd,
+      business_days: bhDays,
+      business_timezone: bhTz,
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast.success("Configuración guardada"); },
     onError: () => toast.error("No se pudo guardar"),
@@ -93,11 +109,89 @@ export default function Admin() {
               <Input data-testid="lnr-threshold-input" type="number" min={1} value={threshold} onChange={(e) => setThreshold(e.target.value)} className="rounded-sm mt-1" />
             </div>
             <div className="flex items-center justify-between sm:flex-col sm:items-start gap-2">
-              <Label className="text-xs font-semibold">Solo horario laboral</Label>
+              <Label className="text-xs font-semibold">Activar horario laboral</Label>
               <Switch data-testid="lnr-business-hours-switch" checked={businessHours} onCheckedChange={setBusinessHours} className="data-[state=checked]:bg-[#FF4500]" />
             </div>
           </div>
-          <div className="mt-4">
+
+          {/* Business-hours window — visually de-emphasized when the toggle is off */}
+          <div
+            data-testid="business-hours-panel"
+            className={`mt-5 pt-5 border-t border-zinc-200 transition-opacity ${businessHours ? "opacity-100" : "opacity-50"}`}
+          >
+            <p className="text-xs uppercase tracking-[0.1em] font-bold text-[#52525B] mb-3">Ventana de horario laboral</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 items-end">
+              <div>
+                <Label className="text-xs font-semibold">Hora de inicio</Label>
+                <Input
+                  data-testid="bh-start-input"
+                  type="time"
+                  value={bhStart}
+                  onChange={(e) => setBhStart(e.target.value)}
+                  className="rounded-sm mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-xs font-semibold">Hora de fin</Label>
+                <Input
+                  data-testid="bh-end-input"
+                  type="time"
+                  value={bhEnd}
+                  onChange={(e) => setBhEnd(e.target.value)}
+                  className="rounded-sm mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-xs font-semibold">Zona horaria</Label>
+                <Select value={bhTz} onValueChange={setBhTz}>
+                  <SelectTrigger data-testid="bh-tz-select" className="rounded-sm mt-1 h-10">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="America/Argentina/Cordoba">America/Argentina/Cordoba</SelectItem>
+                    <SelectItem value="America/Argentina/Buenos_Aires">America/Argentina/Buenos_Aires</SelectItem>
+                    <SelectItem value="America/Mexico_City">America/Mexico_City</SelectItem>
+                    <SelectItem value="America/Bogota">America/Bogota</SelectItem>
+                    <SelectItem value="Europe/Madrid">Europe/Madrid</SelectItem>
+                    <SelectItem value="UTC">UTC</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="mt-4">
+              <Label className="text-xs font-semibold">Días laborales</Label>
+              <div data-testid="bh-days-row" className="flex flex-wrap gap-2 mt-2">
+                {[
+                  { v: 0, label: "Lun" },
+                  { v: 1, label: "Mar" },
+                  { v: 2, label: "Mié" },
+                  { v: 3, label: "Jue" },
+                  { v: 4, label: "Vie" },
+                  { v: 5, label: "Sáb" },
+                  { v: 6, label: "Dom" },
+                ].map((d) => {
+                  const active = bhDays.includes(d.v);
+                  return (
+                    <button
+                      key={d.v}
+                      type="button"
+                      data-testid={`bh-day-${d.v}`}
+                      onClick={() => toggleDay(d.v)}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-sm border transition-colors ${
+                        active
+                          ? "bg-[#FF4500] text-white border-[#FF4500]"
+                          : "bg-white text-[#52525B] border-zinc-300 hover:border-[#FF4500]"
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5">
             <Button data-testid="save-settings-button" onClick={() => saveSettings.mutate()} disabled={saveSettings.isPending} className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm font-semibold">
               <Save className="h-4 w-4 mr-1" /> Guardar configuración
             </Button>
