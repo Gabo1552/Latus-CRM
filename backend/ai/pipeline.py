@@ -10,6 +10,7 @@ from typing import Any
 from .llm import call_llm_json, LLMUnavailable
 from .prompts import build_system_prompt, build_summary_only_prompt, DEFAULT_HANDOFF_RULES
 from . import providers as ai_providers
+from . import catalog_search as cs
 
 logger = logging.getLogger(__name__)
 
@@ -175,12 +176,39 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             forced_handoff_reason = "Datos sensibles detectados (DNI/CBU/tarjeta)"
         elif _RX_HUMAN_REQ.search(last_text):
             forced_handoff_reason = "El cliente solicit\u00f3 hablar con un humano"
+        elif cs.detect_negotiation(last_text):
+            # Hard rule: pricing/negotiation goes straight to a human, no LLM call.
+            event["catalog_intent"] = "negotiation"
+            human_reason = "Negociación o pricing — necesita asesor humano"
+            await db.conversations.update_one(
+                {"id": conv_id},
+                {"$set": {"bot_enabled": False, "bot_status": "requiere_humano",
+                          "human_required_reason": human_reason}},
+            )
+            return await _finish(db, event, decision="require_human",
+                                 reason=human_reason)
+
+        # Catalog hook — inject real product data when the message looks commercial
+        cat_intent = cs.detect_commercial_intent(last_text)
+        catalog_block = ""
+        products_returned = 0
+        if cat_intent["is_commercial"]:
+            query = cs.extract_product_query(last_text)
+            products = await cs.search_catalog(db, query, limit=5)
+            products_returned = len(products)
+            catalog_block = cs.format_catalog_for_llm(products)
+        event["catalog_matched"] = bool(catalog_block)
+        event["catalog_intent_type"] = cat_intent.get("intent_type")
+        event["catalog_products_returned"] = products_returned
+        event["raw_input_excerpt"] = (last_text or "")[:240]
 
         # Call LLM unless forced handoff (still call for summary)
         block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
         base = (ai_cfg.get("system_prompt_base") or "").strip()
         biz = settings.get("business_instructions") or ""
         merged_biz = (base + "\n\n" + biz).strip() if base else biz
+        if catalog_block:
+            merged_biz = (merged_biz + "\n\n" + catalog_block).strip()
         sp = build_system_prompt(tone=settings["tone"],
                                  business_instructions=merged_biz,
                                  faqs=settings["faqs"],
