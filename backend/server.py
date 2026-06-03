@@ -32,25 +32,63 @@ from whatsapp import (
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# --- Required envs (fail loudly with a clear message, not a KeyError) -----
-def _required_env(name: str, default: str | None = None) -> str:
-    val = os.environ.get(name) or default
-    if not val:
-        # Logger isn't configured yet — write directly to stderr for clarity.
-        import sys
-        sys.stderr.write(
-            f"FATAL: required env var {name} is not set. "
-            f"Set it in backend/.env or via the deploy environment.\n"
-        )
-        raise RuntimeError(f"missing required env var: {name}")
-    return val
+
+# ---------------------------------------------------------------------------
+# Lazy DB initialization
+# ---------------------------------------------------------------------------
+# CRITICAL: ``MONGO_URL`` / ``DB_NAME`` MUST NOT be required at import time.
+# If they were, missing env in a deploy would kill uvicorn before any phase
+# log can be written, yielding the "empty logs + restart loop" pattern.
+# Instead we expose lazy proxies that resolve the env on first ``await`` and
+# fail with a clear, loggable error — but never block ``import server``.
+
+class _DBProxy:
+    """Lazy proxy for the active Motor database. Initializes on first access."""
+
+    _client: Optional[AsyncIOMotorClient] = None
+    _db = None
+    _init_err: Optional[Exception] = None
+
+    @classmethod
+    def _resolve(cls):
+        if cls._db is not None:
+            return cls._db
+        if cls._init_err is not None:
+            raise cls._init_err
+        try:
+            mongo_url = (os.environ.get("MONGO_URL") or "").strip()
+            db_name = (os.environ.get("DB_NAME") or "").strip()
+            if not mongo_url or not db_name:
+                raise RuntimeError(
+                    "MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy."
+                )
+            cls._client = AsyncIOMotorClient(mongo_url)
+            cls._db = cls._client[db_name]
+            return cls._db
+        except Exception as e:
+            cls._init_err = e
+            raise
+
+    @classmethod
+    def is_ready(cls) -> bool:
+        return cls._db is not None and cls._init_err is None
+
+    @classmethod
+    def close(cls):
+        if cls._client is not None:
+            try:
+                cls._client.close()
+            except Exception:  # pragma: no cover
+                pass
+
+    def __getattr__(self, name):
+        return getattr(self.__class__._resolve(), name)
+
+    def __getitem__(self, key):
+        return self.__class__._resolve()[key]
 
 
-mongo_url = _required_env("MONGO_URL")
-db_name = _required_env("DB_NAME")
-# motor accepts both ``mongodb://`` and ``mongodb+srv://`` (Atlas).
-client = AsyncIOMotorClient(mongo_url)
-db = client[db_name]
+db = _DBProxy()
 
 app = FastAPI(title="Latus CRM API", openapi_url="/api/openapi.json", docs_url="/api/docs", redoc_url="/api/redoc")
 api_router = APIRouter(prefix="/api")
@@ -2178,23 +2216,31 @@ async def _seed(force: bool = False):
 
 @app.on_event("startup")
 async def on_startup():
-    """Best-effort startup. NEVER crash the process; log and continue."""
-    # Each step is wrapped so one failure doesn't take down the pod.
-    for step_name, step in (
-        ("_seed", lambda: _seed(force=False)),
-        ("backfill_notifications", backfill_notifications),
-        ("_ensure_indexes", _ensure_indexes),
-        ("_migrate_promote_first_google_admin", _migrate_promote_first_google_admin),
-    ):
+    """Best-effort, non-blocking startup.
+
+    NEVER crash the process, NEVER block the event loop for more than a few
+    milliseconds. Heavy / DB-touching work is scheduled as background tasks
+    so ``/api/health`` is responsive immediately for K8s liveness probes.
+    """
+    async def _bg_step(step_name: str, coro):
         try:
-            await step()
+            await coro
         except Exception:  # pragma: no cover - logged for ops
-            logger.exception("startup step '%s' failed (continuing)", step_name)
+            logger.exception("background startup step '%s' failed", step_name)
+
+    # Schedule (but DO NOT await) the DB-touching jobs.
+    asyncio.create_task(_bg_step("_seed", _seed(force=False)))
+    asyncio.create_task(_bg_step("backfill_notifications", backfill_notifications()))
+    asyncio.create_task(_bg_step("_ensure_indexes", _ensure_indexes()))
+    asyncio.create_task(_bg_step("_migrate_promote_first_google_admin",
+                                 _migrate_promote_first_google_admin()))
+
+    # Scheduler is sync and doesn't touch DB — fine to start in foreground.
     try:
         _start_scheduler()
     except Exception:  # pragma: no cover
         logger.exception("startup step '_start_scheduler' failed (continuing)")
-    logger.info("Latus CRM started")
+    logger.info("Latus CRM started (background init tasks scheduled)")
 
 
 # ---------------------------------------------------------------------------
@@ -2216,11 +2262,12 @@ async def health_ready():
     db_ok = True
     db_error = None
     try:
-        # ``ping`` is a no-op command supported by Mongo since forever.
+        # If MONGO_URL is missing, ``db.command`` will trigger _DBProxy init
+        # which raises a clean RuntimeError — captured below.
         await asyncio.wait_for(db.command("ping"), timeout=3.0)
     except Exception as e:  # pragma: no cover - exercised in deploy
         db_ok = False
-        db_error = type(e).__name__
+        db_error = f"{type(e).__name__}: {str(e)[:160]}"
     return {"ok": db_ok, "db": "up" if db_ok else f"down ({db_error})",
             "version": APP_VERSION}
 
@@ -2411,4 +2458,7 @@ async def shutdown_db_client():
             _scheduler = None
     except Exception:  # pragma: no cover
         pass
-    client.close()
+    try:
+        _DBProxy.close()
+    except Exception:  # pragma: no cover
+        pass
