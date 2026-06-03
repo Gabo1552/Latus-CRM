@@ -1118,6 +1118,375 @@ function BotIATab() {
 
 
 // =============================================================================
+// AI & AUTOMATIZACIÓN TAB (Phase 1 — multi-provider config)
+// =============================================================================
+const PROVIDER_LABELS = {
+  emergent:       "Emergent (incluido)",
+  openai:         "OpenAI",
+  anthropic:      "Anthropic (Claude)",
+  gemini:         "Google Gemini",
+  openrouter:     "OpenRouter",
+  custom_openai:  "Otro (compatible OpenAI)",
+};
+
+function AIAutoTab() {
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ["admin-ai-provider"],
+    queryFn: () => api.get("/admin/ai-provider").then((r) => r.data),
+  });
+  const [draft, setDraft] = useState(null);
+  const [pendingKey, setPendingKey] = useState(""); // staged new key, sent on save
+  const [keyAction, setKeyAction] = useState("keep"); // 'keep' | 'replace' | 'clear'
+  useEffect(() => {
+    if (q.data && draft === null) {
+      setDraft({ ...q.data });
+      setPendingKey("");
+      setKeyAction("keep");
+    }
+  }, [q.data, draft]);
+
+  const save = useMutation({
+    mutationFn: (payload) => api.put("/admin/ai-provider", payload),
+    onSuccess: (r) => {
+      setDraft({ ...r.data });
+      setPendingKey("");
+      setKeyAction("keep");
+      qc.invalidateQueries({ queryKey: ["admin-ai-provider"] });
+      toast.success("Cambios guardados");
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "No se pudieron guardar los cambios"),
+  });
+
+  const test = useMutation({
+    mutationFn: () => api.post("/admin/ai-provider/test").then((r) => r.data),
+    onSuccess: (d) => {
+      if (d.ok) toast.success(`Conexión OK · ${d.latency_ms}ms`);
+      else toast.error(`No funcionó: ${d.error}`);
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Error al probar la conexión"),
+  });
+
+  if (q.isPending || !draft) return <div className="text-[#52525B]">Cargando…</div>;
+
+  const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
+  const providers = draft.supported_providers || Object.keys(PROVIDER_LABELS);
+  const needsKey = draft.provider !== "emergent";
+  const needsBaseUrl = draft.provider === "custom_openai";
+  const suggestionsList = (draft.model_suggestions || {})[draft.provider] || [];
+  const temp = Number(draft.temperature ?? 0.2);
+  const maxTok = Number(draft.max_tokens ?? 900);
+  const minConf = Number(draft.min_confidence_for_auto_reply ?? 0.7);
+  const tempBad = !(temp >= 0 && temp <= 2);
+  const maxTokBad = !(maxTok >= 100 && maxTok <= 4096);
+  const minConfBad = !(minConf >= 0 && minConf <= 1);
+  const keyMissing = needsKey && keyAction !== "replace" && !draft.api_key_configured;
+
+  const onSave = () => {
+    if (tempBad)   { toast.error("La temperatura debe estar entre 0 y 2"); return; }
+    if (maxTokBad) { toast.error("El máximo de tokens debe estar entre 100 y 4096"); return; }
+    if (minConfBad){ toast.error("El umbral de confianza debe estar entre 0 y 1"); return; }
+    if (needsKey && keyAction === "clear") {
+      toast.error("Para este proveedor necesitás una API Key"); return;
+    }
+    if (needsKey && !draft.api_key_configured && keyAction !== "replace") {
+      toast.error("Ingresá la API Key del proveedor"); return;
+    }
+    if (needsBaseUrl && !(draft.base_url || "").trim()) {
+      toast.error("Para 'Otro (compatible OpenAI)' la URL base es obligatoria"); return;
+    }
+    const payload = {
+      provider: draft.provider,
+      model: draft.model,
+      base_url: draft.base_url || "",
+      temperature: temp,
+      max_tokens: maxTok,
+      system_prompt_base: draft.system_prompt_base || "",
+      ai_enabled: !!draft.ai_enabled,
+      whatsapp_auto_reply_enabled: !!draft.whatsapp_auto_reply_enabled,
+      auto_handoff_enabled: !!draft.auto_handoff_enabled,
+      min_confidence_for_auto_reply: minConf,
+    };
+    if (keyAction === "replace") payload.api_key = pendingKey;
+    if (keyAction === "clear")   payload.api_key = null;
+    save.mutate(payload);
+  };
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(q.data) || keyAction !== "keep";
+
+  return (
+    <div className="space-y-6" data-testid="ai-auto-tab">
+      <div className="bg-white border border-zinc-200 rounded-sm p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <Sparkles className="h-5 w-5 text-[#FF4500]" />
+          <h2 className="text-xl font-bold tracking-tight text-[#0A0A0A]">IA y automatización</h2>
+        </div>
+        <p className="text-sm text-[#52525B] mb-5">
+          Elegí qué proveedor de IA usa el asistente, ajustá costos/calidad y controlá
+          la automatización en WhatsApp.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {/* AI enabled */}
+          <div className="flex items-start justify-between gap-4 p-3 border border-zinc-200 rounded-sm md:col-span-2">
+            <div>
+              <Label className="text-sm font-bold text-[#0A0A0A]">IA activa</Label>
+              <p className="text-xs text-[#52525B] mt-0.5">
+                Apaga completamente las llamadas al proveedor (resumen, sugerencias y bot).
+              </p>
+            </div>
+            <Switch
+              data-testid="ai-setting-enabled"
+              checked={!!draft.ai_enabled}
+              onCheckedChange={(v) => set({ ai_enabled: v })}
+            />
+          </div>
+
+          {/* Provider */}
+          <div className="p-3 border border-zinc-200 rounded-sm">
+            <Label className="text-sm font-bold text-[#0A0A0A]">Proveedor</Label>
+            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+              Por defecto se usa Emergent con la clave universal. Configurá tu propio
+              proveedor para usar tu cuenta directa.
+            </p>
+            <Select value={draft.provider} onValueChange={(v) => {
+              set({ provider: v });
+              setKeyAction("keep");
+            }}>
+              <SelectTrigger data-testid="ai-setting-provider" className="rounded-sm h-9 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {providers.map((p) => (
+                  <SelectItem key={p} value={p}>{PROVIDER_LABELS[p] || p}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Model */}
+          <div className="p-3 border border-zinc-200 rounded-sm">
+            <Label className="text-sm font-bold text-[#0A0A0A]">Modelo</Label>
+            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+              Nombre del modelo (validado por el proveedor).
+            </p>
+            <Input
+              data-testid="ai-setting-model"
+              list="ai-model-suggestions"
+              value={draft.model || ""}
+              onChange={(e) => set({ model: e.target.value })}
+              className="rounded-sm h-9"
+              placeholder="gpt-4o-mini"
+            />
+            <datalist id="ai-model-suggestions">
+              {suggestionsList.map((m) => <option key={m} value={m} />)}
+            </datalist>
+          </div>
+
+          {/* API key */}
+          {needsKey && (
+            <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
+              <Label className="text-sm font-bold text-[#0A0A0A]">API Key</Label>
+              <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+                Se guarda cifrada y nunca se muestra en claro. Estado actual:{" "}
+                {draft.api_key_configured
+                  ? <span className="font-mono text-[#16A34A]">{draft.api_key_masked || "configurada"}</span>
+                  : <span className="font-mono text-[#FF4500]">no configurada</span>}
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  data-testid="ai-setting-apikey"
+                  type="password"
+                  placeholder={draft.api_key_configured ? "Dejar igual o reemplazar…" : "Pegá la API key del proveedor"}
+                  value={pendingKey}
+                  onChange={(e) => {
+                    setPendingKey(e.target.value);
+                    setKeyAction(e.target.value ? "replace" : "keep");
+                  }}
+                  className="rounded-sm h-9 flex-1 font-mono"
+                />
+                {draft.api_key_configured && (
+                  <Button
+                    data-testid="ai-setting-apikey-clear"
+                    variant="outline"
+                    onClick={() => { setPendingKey(""); setKeyAction("clear"); }}
+                    className="rounded-sm h-9"
+                  >
+                    <Trash2 className="h-3.5 w-3.5 mr-1" /> Limpiar
+                  </Button>
+                )}
+              </div>
+              {keyMissing && (
+                <p className="text-[11px] text-[#DC2626] mt-1">
+                  Este proveedor necesita una API Key.
+                </p>
+              )}
+              {keyAction === "clear" && (
+                <p className="text-[11px] text-[#FF4500] mt-1">
+                  Al guardar se borrará la API Key actual.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Base URL */}
+          {needsBaseUrl && (
+            <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
+              <Label className="text-sm font-bold text-[#0A0A0A]">URL base</Label>
+              <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+                Endpoint compatible con OpenAI (ej. <span className="font-mono">https://api.together.xyz/v1</span>).
+              </p>
+              <Input
+                data-testid="ai-setting-baseurl"
+                value={draft.base_url || ""}
+                onChange={(e) => set({ base_url: e.target.value })}
+                className="rounded-sm h-9 font-mono"
+                placeholder="https://…/v1"
+              />
+            </div>
+          )}
+
+          {/* Temperature */}
+          <div className="p-3 border border-zinc-200 rounded-sm">
+            <div className="flex items-center justify-between mb-1">
+              <Label className="text-sm font-bold text-[#0A0A0A]">Temperatura</Label>
+              <span data-testid="ai-setting-temp-value" className="text-sm font-mono font-bold text-[#FF4500]">
+                {temp.toFixed(1)}
+              </span>
+            </div>
+            <p className="text-xs text-[#52525B] mb-2">
+              0 = determinístico, 2 = muy creativo. Recomendado: 0.2 – 0.5.
+            </p>
+            <input
+              data-testid="ai-setting-temp"
+              type="range" min="0" max="2" step="0.1"
+              value={temp}
+              onChange={(e) => set({ temperature: parseFloat(e.target.value) })}
+              className="w-full accent-[#FF4500]"
+            />
+            {tempBad && <p className="text-[11px] text-[#DC2626] mt-1">Debe estar entre 0 y 2.</p>}
+          </div>
+
+          {/* Max tokens */}
+          <div className="p-3 border border-zinc-200 rounded-sm">
+            <Label className="text-sm font-bold text-[#0A0A0A]">Máximo de tokens por respuesta</Label>
+            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+              Límite de tokens generados (100 a 4096).
+            </p>
+            <Input
+              data-testid="ai-setting-maxtokens"
+              type="number" min="100" max="4096"
+              value={maxTok}
+              onChange={(e) => set({ max_tokens: parseInt(e.target.value, 10) || 0 })}
+              className="rounded-sm h-9"
+            />
+            {maxTokBad && <p className="text-[11px] text-[#DC2626] mt-1">Debe estar entre 100 y 4096.</p>}
+          </div>
+
+          {/* Min confidence */}
+          <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
+            <div className="flex items-center justify-between mb-1">
+              <Label className="text-sm font-bold text-[#0A0A0A]">Umbral mínimo de confianza para responder automáticamente</Label>
+              <span data-testid="ai-setting-conf-value" className="text-sm font-mono font-bold text-[#FF4500]">
+                {minConf.toFixed(2)}
+              </span>
+            </div>
+            <p className="text-xs text-[#52525B] mb-2">
+              Si la confianza del bot es menor a este valor, deriva a humano en vez de responder.
+            </p>
+            <input
+              data-testid="ai-setting-conf"
+              type="range" min="0" max="1" step="0.05"
+              value={minConf}
+              onChange={(e) => set({ min_confidence_for_auto_reply: parseFloat(e.target.value) })}
+              className="w-full accent-[#FF4500]"
+            />
+            {minConfBad && <p className="text-[11px] text-[#DC2626] mt-1">Debe estar entre 0 y 1.</p>}
+          </div>
+
+          {/* Switches: auto-reply + auto-handoff */}
+          <div className="p-3 border border-zinc-200 rounded-sm flex items-start justify-between gap-3">
+            <div>
+              <Label className="text-sm font-bold text-[#0A0A0A]">Respuesta automática por WhatsApp</Label>
+              <p className="text-xs text-[#52525B] mt-0.5">
+                Si está apagado, el bot detecta intent y resume, pero no envía mensajes.
+              </p>
+            </div>
+            <Switch
+              data-testid="ai-setting-autoreply"
+              checked={!!draft.whatsapp_auto_reply_enabled}
+              onCheckedChange={(v) => set({ whatsapp_auto_reply_enabled: v })}
+            />
+          </div>
+          <div className="p-3 border border-zinc-200 rounded-sm flex items-start justify-between gap-3">
+            <div>
+              <Label className="text-sm font-bold text-[#0A0A0A]">Handoff automático a humano</Label>
+              <p className="text-xs text-[#52525B] mt-0.5">
+                Si está apagado, el bot no cierra la conversación al solicitar humano; solo notifica.
+              </p>
+            </div>
+            <Switch
+              data-testid="ai-setting-autohandoff"
+              checked={!!draft.auto_handoff_enabled}
+              onCheckedChange={(v) => set({ auto_handoff_enabled: v })}
+            />
+          </div>
+
+          {/* System prompt base */}
+          <div className="p-3 border border-zinc-200 rounded-sm md:col-span-2">
+            <Label className="text-sm font-bold text-[#0A0A0A]">Prompt base del asistente</Label>
+            <p className="text-xs text-[#52525B] mt-0.5 mb-2">
+              Texto que se antepone a las instrucciones del bot. Útil para personalidad/branding global.
+            </p>
+            <Textarea
+              data-testid="ai-setting-promptbase"
+              value={draft.system_prompt_base || ""}
+              onChange={(e) => set({ system_prompt_base: e.target.value })}
+              className="rounded-sm min-h-[110px] font-mono text-xs"
+              placeholder="Sos el asistente oficial de Latus. Tu objetivo es ayudar al cliente y derivar a un humano cuando sea necesario."
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 mt-6 pt-4 border-t border-zinc-200">
+          <Button
+            data-testid="ai-test-button"
+            variant="outline"
+            onClick={() => test.mutate()}
+            disabled={test.isPending || !draft.ai_enabled || keyMissing}
+            className="rounded-sm"
+          >
+            {test.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : <CheckCircle2 className="h-3.5 w-3.5 mr-1" />}
+            Probar IA
+          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              data-testid="ai-settings-reset"
+              variant="outline"
+              onClick={() => { setDraft({ ...q.data }); setPendingKey(""); setKeyAction("keep"); }}
+              disabled={!dirty}
+              className="rounded-sm"
+            >
+              Descartar cambios
+            </Button>
+            <Button
+              data-testid="ai-settings-save"
+              onClick={onSave}
+              disabled={!dirty || save.isPending}
+              className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm"
+            >
+              {save.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+              Guardar
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// =============================================================================
 // Page shell
 // =============================================================================
 export default function Configuracion() {
@@ -1198,10 +1567,22 @@ export default function Configuracion() {
           >
             <Bot className="h-4 w-4 inline mr-1.5" /> Bot IA
           </button>
+          <button
+            data-testid="tab-ai-auto"
+            onClick={() => setTab("ai")}
+            className={`px-4 py-2.5 -mb-px text-sm font-bold border-b-2 transition-colors ${
+              tab === "ai"
+                ? "border-[#FF4500] text-[#0A0A0A]"
+                : "border-transparent text-[#52525B] hover:text-[#0A0A0A]"
+            }`}
+          >
+            <Sparkles className="h-4 w-4 inline mr-1.5" /> IA y automatización
+          </button>
         </div>
         {tab === "users" && <UsersTab me={user} />}
         {tab === "whatsapp" && <WhatsAppTab />}
         {tab === "bot" && <BotIATab />}
+        {tab === "ai" && <AIAutoTab />}
       </div>
     </AppLayout>
   );

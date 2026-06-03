@@ -9,6 +9,7 @@ from typing import Any
 
 from .llm import call_llm_json, LLMUnavailable
 from .prompts import build_system_prompt, build_summary_only_prompt, DEFAULT_HANDOFF_RULES
+from . import providers as ai_providers
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ async def regenerate_summary(db, conv_id: str) -> dict:
     block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
     try:
         parsed, raw = await call_llm_json(
+            db=db,
             system_prompt=build_summary_only_prompt(),
             user_messages_block=block or "(sin mensajes)",
             model="gpt-4o-mini",
@@ -85,15 +87,21 @@ async def suggest_reply(db, conv_id: str) -> dict:
     conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
     if not conv: return {"draft": "", "confidence": 0.0, "error": "conv not found"}
     settings = await _load_bot_settings(db)
+    # Merge global ai_provider.system_prompt_base into business_instructions
+    ai_cfg = await ai_providers.load_settings(db)
+    base = (ai_cfg.get("system_prompt_base") or "").strip()
+    biz = settings.get("business_instructions") or ""
+    merged_biz = (base + "\n\n" + biz).strip() if base else biz
     msgs = await db.messages.find({"conversation_id": conv_id}, {"_id": 0}) \
         .sort("created_at", -1).to_list(settings["recent_messages_context_max"])
     msgs.reverse()
     block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
     sp = build_system_prompt(tone=settings["tone"],
-                             business_instructions=settings["business_instructions"],
+                             business_instructions=merged_biz,
                              faqs=settings["faqs"], handoff_rules=settings["handoff_rules"])
     try:
-        parsed, _ = await call_llm_json(system_prompt=sp, user_messages_block=block,
+        parsed, _ = await call_llm_json(db=db, system_prompt=sp,
+                                        user_messages_block=block,
                                         model=settings["model"])
     except LLMUnavailable as e:
         return {"draft": "", "confidence": 0.0, "error": str(e)}
@@ -135,6 +143,11 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         if not conv:
             return await _finish(db, event, decision="no_action",
                                  reason="conversation not found")
+        # Global AI provider settings (multi-provider config)
+        ai_cfg = await ai_providers.load_settings(db)
+        if not ai_cfg.get("ai_enabled", True):
+            return await _finish(db, event, decision="no_action",
+                                 reason="ia_desactivada")
         settings = await _load_bot_settings(db)
 
         # Guard: should bot run?
@@ -159,16 +172,22 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
 
         # Call LLM unless forced handoff (still call for summary)
         block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
+        base = (ai_cfg.get("system_prompt_base") or "").strip()
+        biz = settings.get("business_instructions") or ""
+        merged_biz = (base + "\n\n" + biz).strip() if base else biz
         sp = build_system_prompt(tone=settings["tone"],
-                                 business_instructions=settings["business_instructions"],
+                                 business_instructions=merged_biz,
                                  faqs=settings["faqs"],
                                  handoff_rules=settings["handoff_rules"])
         parsed: dict = {}
         raw = ""
+        # Model override: emergent uses bot_settings.model; other providers use
+        # the provider-configured model.
+        model_override = settings["model"] if ai_cfg.get("provider") == "emergent" else None
         try:
-            parsed, raw = await call_llm_json(system_prompt=sp,
+            parsed, raw = await call_llm_json(db=db, system_prompt=sp,
                                               user_messages_block=block or "(sin mensajes)",
-                                              model=settings["model"])
+                                              model=model_override)
         except LLMUnavailable as e:
             return await _finish(db, event, decision="no_action",
                                  reason=f"LLM no disponible: {e}",
@@ -191,11 +210,23 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             reply = ""
             human_reason = forced_handoff_reason
 
-        # Apply confidence floor: reply requires confidence >= threshold
-        thresh = float(settings.get("confidence_threshold") or 0.70)
+        # Apply confidence floor: reply requires confidence >= threshold.
+        # Prefer the global ai_provider.min_confidence_for_auto_reply if set,
+        # fallback to bot_settings.confidence_threshold for backwards compat.
+        thresh = float(
+            ai_cfg.get("min_confidence_for_auto_reply")
+            if ai_cfg.get("min_confidence_for_auto_reply") is not None
+            else settings.get("confidence_threshold") or 0.70
+        )
         if decision == "reply_with_bot" and confidence < thresh:
             decision = "require_human"
             human_reason = human_reason or f"Confianza baja ({confidence:.2f} < {thresh:.2f})"
+
+        # Global WhatsApp auto-reply switch: degrade reply_with_bot → update_status_only
+        if decision == "reply_with_bot" and not ai_cfg.get("whatsapp_auto_reply_enabled", True):
+            event["auto_reply_suppressed"] = True
+            decision = "update_status_only"
+            reply = ""
 
         # Execute decision
         conv_set: dict[str, Any] = {"detected_intent": intent or None,
@@ -235,12 +266,17 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                 conv_set["bot_status"] = "requiere_humano"
                 conv_set["human_required_reason"] = "Bot no pudo enviar respuesta automática"
         elif decision == "require_human":
-            conv_set["bot_enabled"] = False
-            conv_set["bot_status"] = "requiere_humano"
-            conv_set["human_required_reason"] = human_reason or "Derivación solicitada por el bot"
+            if ai_cfg.get("auto_handoff_enabled", True):
+                conv_set["bot_enabled"] = False
+                conv_set["bot_status"] = "requiere_humano"
+                conv_set["human_required_reason"] = human_reason or "Derivación solicitada por el bot"
+            else:
+                # Auto-handoff disabled — just notify, keep bot armed
+                event["auto_handoff_suppressed"] = True
+                conv_set["human_required_reason"] = human_reason or "Derivación sugerida por el bot"
             notif_payload = ("handoff_required",
                              f"Derivación a humano · {conv.get('contact_id','')}",
-                             conv_set["human_required_reason"][:160])
+                             (conv_set.get("human_required_reason") or "")[:160])
             event["decision"] = "require_human"
         elif decision == "update_status_only":
             event["decision"] = "update_status_only"

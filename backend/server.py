@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, Body
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -1874,6 +1874,50 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
     await db.bot_settings.update_one({"_id": "default"},
                                      {"$set": {"_id": "default", **update}}, upsert=True)
     return await admin_get_bot_settings(admin)
+
+
+# ---------------------------------------------------------------------------
+# AI provider settings (multi-provider configuration)
+# ---------------------------------------------------------------------------
+
+
+@api_router.get("/admin/ai-provider")
+async def admin_get_ai_provider(admin: User = Depends(require_admin)):
+    from ai import providers as ai_providers
+    s = await ai_providers.load_settings(db)
+    # never leak the encrypted blob or the plain key
+    masked = ""
+    if s.get("api_key_configured"):
+        raw = await ai_providers._resolve_api_key(db)
+        masked = ai_providers.mask_key(raw)
+    return {
+        **{k: s[k] for k in ai_providers.DEFAULTS.keys()},
+        "api_key_configured": s.get("api_key_configured", False),
+        "api_key_masked": masked,
+        "model_suggestions": ai_providers.MODEL_SUGGESTIONS,
+        "supported_providers": list(ai_providers.SUPPORTED_PROVIDERS),
+        "updated_at": s.get("updated_at"),
+        "updated_by": s.get("updated_by"),
+    }
+
+
+@api_router.put("/admin/ai-provider")
+async def admin_put_ai_provider(payload: dict = Body(...),
+                                admin: User = Depends(require_admin)):
+    from ai import providers as ai_providers
+    current = await ai_providers.load_settings(db)
+    try:
+        clean = ai_providers.validate_patch(payload, current)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await ai_providers.save_settings(db, clean, user_id=admin.user_id)
+    return await admin_get_ai_provider(admin)
+
+
+@api_router.post("/admin/ai-provider/test")
+async def admin_test_ai_provider(admin: User = Depends(require_admin)):
+    from ai import providers as ai_providers
+    return await ai_providers.test_provider_connectivity(db)
 
 
 async def _can_use_bot_for_conv(conv: dict, user: User) -> bool:

@@ -1,63 +1,47 @@
-"""Thin wrapper around Emergent's universal LLM key via emergentintegrations."""
+"""Backwards-compatible LLM JSON helper.
+
+Routes through the configurable multi-provider client in :mod:`providers`. The
+public API (``call_llm_json``, ``LLMUnavailable``) is kept identical so the
+existing pipeline and tests don't need to change.
+"""
 from __future__ import annotations
 
 import json
 import logging
-import os
-import uuid
 from typing import Any
+
+from .providers import LLMUnavailable, get_provider  # re-exported
 
 logger = logging.getLogger(__name__)
 
-
-class LLMUnavailable(Exception):
-    pass
+__all__ = ["LLMUnavailable", "call_llm_json"]
 
 
 async def call_llm_json(
     *,
+    db,
     system_prompt: str,
     user_messages_block: str,
-    model: str = "gpt-4o-mini",
-) -> dict[str, Any]:
-    """Call the LLM and return its parsed JSON object.
+    model: str | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Call the configured LLM and return ``(parsed_json, raw_text)``.
 
-    Uses ``emergentintegrations`` (Emergent universal key) so a single env var
-    ``EMERGENT_LLM_KEY`` covers OpenAI/Anthropic/Google models.
+    ``model`` overrides the configured one (used when bot_settings.model is
+    pinned per-conversation).
     """
-    key = (os.environ.get("EMERGENT_LLM_KEY") or "").strip()
-    if not key:
-        raise LLMUnavailable("EMERGENT_LLM_KEY no configurado")
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-    except Exception as e:  # pragma: no cover
-        raise LLMUnavailable(f"emergentintegrations no disponible: {e}") from e
-
-    provider = "openai" if model.lower().startswith("gpt") else "anthropic"
-    try:
-        chat = (LlmChat(api_key=key, session_id=f"latus-bot-{uuid.uuid4().hex[:8]}",
-                        system_message=system_prompt)
-                .with_model(provider, model)
-                .with_params(max_tokens=900, temperature=0.2))
-        resp = await chat.send_message(UserMessage(text=user_messages_block))
-    except LLMUnavailable:
-        raise
-    except Exception as e:
-        logger.warning("LLM call failed: %s", e)
-        raise LLMUnavailable(f"llamada al LLM falló: {e}") from e
-    raw = resp if isinstance(resp, str) else getattr(resp, "text", str(resp))
-    return _parse_json_response(raw), (raw or "")[:8000]
+    provider = await get_provider(db, override_model=model)
+    res = await provider.chat(system_prompt=system_prompt,
+                              user_block=user_messages_block)
+    return _parse_json_response(res.content), (res.content or "")[:8000]
 
 
 def _parse_json_response(raw: str) -> dict[str, Any]:
     s = (raw or "").strip()
-    # strip code fences if any
     if s.startswith("```"):
         s = s.strip("`")
         if s.lower().startswith("json"):
             s = s[4:]
         s = s.strip()
-    # find the first { and the last }
     i, j = s.find("{"), s.rfind("}")
     if i >= 0 and j > i:
         s = s[i:j + 1]
