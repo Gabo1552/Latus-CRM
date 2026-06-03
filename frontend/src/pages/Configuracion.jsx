@@ -1091,7 +1091,7 @@ function BotIATab() {
           <Button
             data-testid="bot-settings-save"
             onClick={onSave}
-            disabled={!dirty || save.isPending || threshInvalid || ctxInvalid}
+            disabled={!dirty || save.isPending}
             className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm"
           >
             {save.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : null}

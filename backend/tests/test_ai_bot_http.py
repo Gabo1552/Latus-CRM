@@ -75,8 +75,10 @@ class TestBotConversation:
         r = requests.post(f"{BASE_URL}/api/conversations/{conv_id}/summary/regenerate",
                           headers=ADMIN, timeout=60)
         assert r.status_code == 200, r.text
-        # body should be a dict (even if LLM errored gracefully)
-        assert isinstance(r.json(), dict)
+        body = r.json()
+        assert isinstance(body, dict)
+        assert "summary" in body, f"summary key missing: {body}"
+        assert isinstance(body["summary"], str)
 
     def test_suggest_reply(self, conv_id):
         r = requests.post(f"{BASE_URL}/api/conversations/{conv_id}/bot/suggest-reply",
@@ -84,8 +86,9 @@ class TestBotConversation:
         assert r.status_code == 200, r.text
         body = r.json()
         assert isinstance(body, dict)
-        # Should contain a draft key (may be empty if no LLM key)
-        assert "draft" in body or "reply" in body or "error" in body
+        assert "draft" in body, f"draft key missing: {body}"
+        assert "confidence" in body, f"confidence key missing: {body}"
+        assert "intent" in body, f"intent key missing: {body}"
 
 
 # ---- regression: pre-existing endpoints still work -----------------------

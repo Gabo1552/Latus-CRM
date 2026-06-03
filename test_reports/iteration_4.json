@@ -1,0 +1,36 @@
+{
+  "summary": "Retest after fixes confirms BOTH critical regressions are resolved. Backend: pytest /app/backend/tests/test_ai_bot_http.py = 11/12 PASS. POST /api/conversations/{id}/summary/regenerate now returns 200 with {summary: string} and POST /api/conversations/{id}/bot/suggest-reply returns 200 with {draft, confidence, intent}. No more LlmChat.with_max_tokens AttributeError in /var/log/supervisor/backend.err.log (now calls .with_params(...) correctly). Frontend: Configuracion /Bot IA tab — ctxmax=2 click on Guardar surfaces red Spanish toast 'Los mensajes de contexto deben estar entre 3 y 50' and NO PATCH is fired (verified via response listener); restoring ctxmax=12 fires PATCH 200 with 'Cambios guardados' toast; modifying threshold and saving also fires PATCH 200 with 'Cambios guardados' toast. Inbox AI panel — bot-panel renders, bot-suggest-button click yields 200 response and bot-suggestion-textarea populated (draft_len=132, confidence=0.8, intent='seguimiento_pedido'); bot-suggestion-use copies the draft verbatim into message-input; bot-suggestion-discard removes the textarea. Regression endpoints GET /api/conversations and GET /api/conversations/{id} also return 200. The only remaining backend failure (POST /api/conversations/{id}/messages 500 ObjectId) is the pre-existing serialization bug explicitly marked OUT OF SCOPE by the task.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/conversations/{id}/messages", "issue": "(OUT OF SCOPE per task) Still returns 500 because msg_doc mutated by Motor.insert_one keeps ObjectId _id. Documented in iteration_3 and explicitly excluded from this retest."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_ai_bot_http.py",
+    "/app/test_reports/pytest/pytest_ai_bot_http.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "/app/backend/ai/llm.py now wraps any non-LLMUnavailable Exception into LLMUnavailable (broad except after the LlmChat builder). Good defensive programming — pipeline.regenerate_summary / suggest_reply already handle LLMUnavailable gracefully so the endpoints stay 200 even if the SDK shape changes again.",
+    "Note: call_llm_json now returns a tuple (dict, raw_str) — verify all callers (pipeline.py) destructure it accordingly. From the green tests this appears correct, but worth a code-grep before next release.",
+    "Configuracion BotIATab: 'Guardar cambios' button is correctly disabled when form is pristine (no changes) — small UX gotcha for testing (sending the same value won't trigger a PATCH). Could surface a tooltip 'No hay cambios' for clarity.",
+    "server.py still ~2600 lines — split into routers/* recommended (carry-over from iteration_3).",
+    "Pre-existing send_message ObjectId leak remains and was explicitly marked out of scope; should be fixed in a follow-up because every POST /messages from the UI will 500."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_ai_bot_http.py — tightened test_summary_regenerate (asserts 'summary' is a string) and test_suggest_reply (asserts 'draft','confidence','intent' all present)."
+  ],
+  "success_rate": {"backend": "92% (11/12, only out-of-scope POST /messages still 500)", "frontend": "100% (all in-scope flows verified)"},
+  "test_credentials": "Bearer test_session_admin_persist (admin@latus.test). Cookie session_token=test_session_admin_persist (sameSite=None, secure) on lead-scan-scheduler.preview.emergentagent.com.",
+  "seed_data_creation": "Bot-settings now persisted with confidence_threshold=0.55 and recent_messages_context_max=12 (toggled to 15 then back to 12 during UI test).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Both LLM endpoints and the ctxmax client-side validation are now fully fixed. To re-verify: pytest /app/backend/tests/test_ai_bot_http.py -v. Expected: 11 PASS, 1 FAIL (test_post_message — pre-existing ObjectId leak in server.py send_message, out of scope here). For UI, open /configuracion as admin (cookie session_token=test_session_admin_persist), Bot IA tab → set ctxmax=2 → click Guardar → red toast 'Los mensajes de contexto deben estar entre 3 y 50' without a network PATCH. Inbox: click any conversation, right sidebar shows bot-panel, click bot-suggest-button → bot-suggestion-textarea populated → bot-suggestion-use copies into message-input → bot-suggestion-discard clears it.",
+  "rca of the issue": "Fix verified: /app/backend/ai/llm.py now builds LlmChat with .with_model(...).with_params(max_tokens=900, temperature=0.2) and wraps any Exception (except LLMUnavailable) into LLMUnavailable, so AttributeError no longer reaches FastAPI and both bot endpoints stay 200 with the contractual payloads. Backend logs confirm 'POST /api/conversations/conv_efc7965dee54/summary/regenerate HTTP/1.1 200 OK' and '/bot/suggest-reply HTTP/1.1 200 OK' with LiteLLM gpt-4o-mini provider invocations succeeding. Frontend Configuracion.jsx no longer disables the save button on ctxInvalid, so the click reaches the onSave handler which toasts the Spanish error and aborts the PATCH (verified: page.expect_response timed out on PATCH when ctxmax=2, and toast 'Los mensajes de contexto deben estar entre 3 y 50' was shown)."
+}

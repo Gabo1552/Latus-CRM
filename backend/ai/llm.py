@@ -34,11 +34,17 @@ async def call_llm_json(
         raise LLMUnavailable(f"emergentintegrations no disponible: {e}") from e
 
     provider = "openai" if model.lower().startswith("gpt") else "anthropic"
-    chat = (LlmChat(api_key=key, session_id=f"latus-bot-{uuid.uuid4().hex[:8]}",
-                    system_message=system_prompt)
-            .with_model(provider, model)
-            .with_max_tokens(900))
-    resp = await chat.send_message(UserMessage(text=user_messages_block))
+    try:
+        chat = (LlmChat(api_key=key, session_id=f"latus-bot-{uuid.uuid4().hex[:8]}",
+                        system_message=system_prompt)
+                .with_model(provider, model)
+                .with_params(max_tokens=900, temperature=0.2))
+        resp = await chat.send_message(UserMessage(text=user_messages_block))
+    except LLMUnavailable:
+        raise
+    except Exception as e:
+        logger.warning("LLM call failed: %s", e)
+        raise LLMUnavailable(f"llamada al LLM falló: {e}") from e
     raw = resp if isinstance(resp, str) else getattr(resp, "text", str(resp))
     return _parse_json_response(raw), (raw or "")[:8000]
 
