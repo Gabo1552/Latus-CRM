@@ -55,12 +55,31 @@ export default function Inbox() {
   }, [active?.messages?.length]);
 
   const sendMsg = useMutation({
-    mutationFn: () => api.post(`/conversations/${activeId}/messages`, { body: draft, sender_type: "agent" }),
+    mutationFn: async () => {
+      const isWa = active?.channel === "whatsapp";
+      const waConfigured = waStatus?.configured === true;
+      if (isWa && waConfigured) {
+        return api.post(`/conversations/${activeId}/send-whatsapp`, { text: draft });
+      }
+      return api.post(`/conversations/${activeId}/messages`, { body: draft, sender_type: "agent" });
+    },
     onSuccess: () => {
       setDraft("");
       qc.invalidateQueries({ queryKey: ["conversation", activeId] });
       qc.invalidateQueries({ queryKey: ["conversations"] });
     },
+    onError: (e) => {
+      const detail = e?.response?.data?.detail;
+      if (detail === "WhatsApp no configurado") toast.error("WhatsApp no configurado");
+      else toast.error("No se pudo enviar el mensaje");
+    },
+  });
+
+  // WhatsApp integration status (cheap; cached). Drives badges + composer mode.
+  const { data: waStatus } = useQuery({
+    queryKey: ["wa-status"],
+    queryFn: () => api.get("/admin/whatsapp/status").then((r) => r.data).catch(() => ({ configured: false })),
+    staleTime: 60_000,
   });
 
   const patchConv = useMutation({
@@ -165,7 +184,14 @@ export default function Inbox() {
                 <div className="flex items-center gap-3">
                   <Avatar src={active.contact?.avatar} name={active.contact?.name} size={38} />
                   <div>
-                    <p className="font-bold text-[#0A0A0A] leading-tight">{active.contact?.name}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold text-[#0A0A0A] leading-tight">{active.contact?.name}</p>
+                      {active.channel === "whatsapp" && (
+                        <span data-testid="channel-badge-whatsapp" className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wide uppercase text-[#FF4500] bg-[#FFF7ED] border border-[#FED7AA] rounded-sm px-1.5 py-px">
+                          WhatsApp
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-[#52525B]">{active.contact?.phone}</p>
                   </div>
                 </div>
@@ -201,6 +227,13 @@ export default function Inbox() {
                 {active.messages?.map((m) => {
                   const isCustomer = m.sender_type === "contact";
                   const isBot = m.sender_type === "bot";
+                  const isOutbound = !isCustomer;
+                  const ds = m.delivery_status;
+                  const dsLabel = ds === "sent" ? "Enviado"
+                    : ds === "delivered" ? "Entregado"
+                    : ds === "read" ? "Leído"
+                    : ds === "failed" ? "Falló"
+                    : null;
                   return (
                     <div key={m.id} className={`flex ${isCustomer ? "justify-start" : "justify-end"}`}>
                       <div className={`max-w-[70%] rounded-sm px-3.5 py-2 ${
@@ -213,6 +246,18 @@ export default function Inbox() {
                           </div>
                         )}
                         <p className={`text-sm ${isCustomer || isBot ? "text-[#0A0A0A]" : "text-white"}`}>{m.body}</p>
+                        {isOutbound && dsLabel && (
+                          <div
+                            data-testid={`delivery-status-${m.id}`}
+                            className={`text-[10px] font-semibold mt-1 text-right ${
+                              ds === "failed"
+                                ? "text-yellow-200"
+                                : isBot ? "text-[#52525B]" : "text-orange-100"
+                            }`}
+                          >
+                            {dsLabel}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -224,16 +269,26 @@ export default function Inbox() {
                 {!active.bot_enabled && (
                   <p className="text-[11px] font-semibold text-[#FF4500] mb-2 flex items-center gap-1"><UserIcon className="h-3 w-3" /> Traspaso a humano activo — estás respondiendo como agente</p>
                 )}
+                {active.channel === "whatsapp" && waStatus && !waStatus.configured && (
+                  <p data-testid="wa-not-configured-banner" className="text-[11px] font-semibold text-[#FF4500] mb-2">
+                    WhatsApp no configurado — el envío real está deshabilitado. Podés seguir usando &quot;+ Respuesta del cliente&quot; como simulador.
+                  </p>
+                )}
                 <div className="flex items-end gap-2">
                   <Textarea
                     data-testid="message-input"
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (draft.trim()) sendMsg.mutate(); } }}
-                    placeholder="Escribí una respuesta…"
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (draft.trim() && !(active.channel === "whatsapp" && waStatus && !waStatus.configured)) sendMsg.mutate(); } }}
+                    placeholder={active.channel === "whatsapp" && waStatus?.configured ? "Escribí una respuesta de WhatsApp…" : "Escribí una respuesta…"}
                     className="rounded-sm resize-none min-h-[44px] max-h-32"
                   />
-                  <Button data-testid="send-message-button" disabled={!draft.trim() || sendMsg.isPending} onClick={() => sendMsg.mutate()} className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm h-11 px-4">
+                  <Button
+                    data-testid="send-message-button"
+                    disabled={!draft.trim() || sendMsg.isPending || (active.channel === "whatsapp" && waStatus && !waStatus.configured)}
+                    onClick={() => sendMsg.mutate()}
+                    className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm h-11 px-4"
+                  >
                     <Send className="h-4 w-4" />
                   </Button>
                 </div>

@@ -24,6 +24,11 @@ export default function Admin() {
   const { user: me } = useAuth();
   const { data: users = [] } = useQuery({ queryKey: ["users"], queryFn: () => api.get("/users").then((r) => r.data) });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => api.get("/settings").then((r) => r.data) });
+  const { data: waStatus } = useQuery({
+    queryKey: ["wa-status"],
+    queryFn: () => api.get("/admin/whatsapp/status").then((r) => r.data).catch(() => null),
+    refetchInterval: 30_000,
+  });
 
   const [threshold, setThreshold] = useState(2);
   const [enabled, setEnabled] = useState(true);
@@ -195,6 +200,85 @@ export default function Admin() {
             <Button data-testid="save-settings-button" onClick={() => saveSettings.mutate()} disabled={saveSettings.isPending} className="bg-[#FF4500] hover:bg-[#E63E00] rounded-sm font-semibold">
               <Save className="h-4 w-4 mr-1" /> Guardar configuración
             </Button>
+          </div>
+        </div>
+
+        {/* Integración de WhatsApp */}
+        <div className="bg-white border border-zinc-200 rounded-sm p-5" data-testid="whatsapp-integration-card">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="inline-flex items-center justify-center h-4 w-4 rounded-sm bg-[#FF4500] text-white text-[10px] font-bold">W</span>
+            <h3 className="text-lg font-bold tracking-tight text-[#0A0A0A]">Integración de WhatsApp</h3>
+          </div>
+          <p className="text-sm text-[#52525B] mb-4">
+            Estado actual del canal WhatsApp Cloud API. Las credenciales se gestionan vía variables de entorno del servidor.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div>
+              <p className="text-xs uppercase tracking-[0.1em] font-bold text-[#52525B] mb-2">Estado</p>
+              {waStatus === null ? (
+                <span className="text-sm text-[#52525B]">Sin información</span>
+              ) : waStatus?.configured ? (
+                <span data-testid="wa-status-configured" className="inline-flex items-center gap-2 text-sm font-bold text-[#16A34A] bg-[#F0FDF4] border border-[#BBF7D0] rounded-sm px-2.5 py-1">
+                  <span className="h-2 w-2 rounded-full bg-[#16A34A]" /> WhatsApp conectado
+                </span>
+              ) : (
+                <span data-testid="wa-status-not-configured" className="inline-flex items-center gap-2 text-sm font-bold text-[#FF4500] bg-[#FFF7ED] border border-[#FED7AA] rounded-sm px-2.5 py-1">
+                  <span className="h-2 w-2 rounded-full bg-[#FF4500]" /> WhatsApp no configurado
+                </span>
+              )}
+              {waStatus?.phone_number_id_masked && (
+                <p className="text-[11px] text-[#52525B] mt-2">Phone Number ID: <span className="font-mono">{waStatus.phone_number_id_masked}</span></p>
+              )}
+              {waStatus?.api_version && (
+                <p className="text-[11px] text-[#52525B] mt-1">API: <span className="font-mono">{waStatus.api_version}</span></p>
+              )}
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.1em] font-bold text-[#52525B] mb-2">Variables configuradas</p>
+              <ul data-testid="wa-checklist" className="space-y-1 text-sm">
+                {[
+                  ["phone_number_id", "Phone Number ID"],
+                  ["access_token", "Access Token"],
+                  ["verify_token", "Verify Token"],
+                  ["app_secret", "App Secret"],
+                  ["business_account_id", "Business Account ID"],
+                ].map(([key, label]) => {
+                  const ok = !!waStatus?.checklist?.[key];
+                  return (
+                    <li key={key} className="flex items-center gap-2">
+                      <span className={`inline-flex items-center justify-center h-4 w-4 rounded-sm text-[10px] font-bold ${ok ? "bg-[#DCFCE7] text-[#16A34A]" : "bg-zinc-100 text-[#52525B]"}`}>
+                        {ok ? "✓" : "—"}
+                      </span>
+                      <span className={ok ? "text-[#0A0A0A]" : "text-[#52525B]"}>{label} configurado</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          </div>
+          <div className="mt-5 pt-4 border-t border-zinc-200 grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div>
+              <p className="text-xs uppercase tracking-[0.1em] font-bold text-[#52525B] mb-1">Último webhook recibido</p>
+              <p data-testid="wa-last-webhook" className="text-sm text-[#0A0A0A] font-mono">
+                {waStatus?.last_webhook_at ? new Date(waStatus.last_webhook_at).toLocaleString("es-AR") : "Nunca"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.1em] font-bold text-[#52525B] mb-1">Último error de WhatsApp</p>
+              {waStatus?.last_error ? (
+                <div data-testid="wa-last-error" className="text-sm">
+                  <span className="font-mono text-[#FF4500] font-bold">
+                    {waStatus.last_error.code != null ? `#${waStatus.last_error.code}` : "—"}
+                  </span>
+                  <span className="text-[#0A0A0A]"> {(waStatus.last_error.message || "").slice(0, 180)}</span>
+                  {waStatus.last_error_at && (
+                    <p className="text-[11px] text-[#52525B] mt-0.5">{new Date(waStatus.last_error_at).toLocaleString("es-AR")}</p>
+                  )}
+                </div>
+              ) : (
+                <p data-testid="wa-last-error" className="text-sm text-[#52525B]">Sin errores</p>
+              )}
+            </div>
           </div>
         </div>
 

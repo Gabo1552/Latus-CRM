@@ -20,6 +20,13 @@ from utils.business_hours import (
     DEFAULT_END as BH_DEFAULT_END,
     DEFAULT_DAYS as BH_DEFAULT_DAYS,
 )
+from whatsapp import (
+    wa_config,
+    verify_signature,
+    parse_inbound_value,
+    send_text_message,
+    WhatsAppSendError,
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -706,6 +713,303 @@ async def run_lead_no_response_scan(user: User = Depends(get_current_user)):
     return {"created_for": len(qualifying)}
 
 # ---------------------------------------------------------------------------
+# WhatsApp Cloud API integration
+# ---------------------------------------------------------------------------
+
+# ``wa_status_doc`` tracks last_webhook_at and last_error for the Admin panel.
+async def _wa_record_event(*, error: dict | None = None) -> None:
+    update = {"last_webhook_at": now_iso()}
+    if error is not None:
+        update["last_error"] = error
+        update["last_error_at"] = now_iso()
+    await db.wa_status.update_one({"key": "wa"}, {"$set": {"key": "wa", **update}}, upsert=True)
+
+
+async def _wa_record_send_error(*, code: int | None, message: str) -> None:
+    await db.wa_status.update_one(
+        {"key": "wa"},
+        {"$set": {"key": "wa", "last_error": {"code": code, "message": message, "source": "send"},
+                  "last_error_at": now_iso()}},
+        upsert=True,
+    )
+
+
+async def _wa_get_status_doc() -> dict:
+    doc = await db.wa_status.find_one({"key": "wa"}, {"_id": 0}) or {}
+    return {
+        "last_webhook_at": doc.get("last_webhook_at"),
+        "last_error": doc.get("last_error"),
+        "last_error_at": doc.get("last_error_at"),
+    }
+
+
+# ---- Verification (GET) ---------------------------------------------------
+
+@api_router.get("/webhooks/whatsapp")
+async def whatsapp_webhook_verify(
+    request: Request,
+    hub_mode: Optional[str] = Query(default=None, alias="hub.mode"),
+    hub_verify_token: Optional[str] = Query(default=None, alias="hub.verify_token"),
+    hub_challenge: Optional[str] = Query(default=None, alias="hub.challenge"),
+):
+    cfg = wa_config()
+    if hub_mode == "subscribe" and hub_verify_token and cfg.verify_token and hub_verify_token == cfg.verify_token:
+        return Response(content=hub_challenge or "", media_type="text/plain", status_code=200)
+    raise HTTPException(status_code=403, detail="verify_token mismatch")
+
+
+# ---- Inbound events (POST) ------------------------------------------------
+
+@api_router.post("/webhooks/whatsapp")
+async def whatsapp_webhook_event(request: Request):
+    raw = await request.body()
+    cfg = wa_config()
+    # Signature check (only enforced when APP_SECRET is configured)
+    sig_header = request.headers.get("X-Hub-Signature-256") or request.headers.get("x-hub-signature-256")
+    if cfg.app_secret:
+        if not verify_signature(cfg.app_secret, raw, sig_header):
+            logger.warning("WhatsApp webhook signature mismatch")
+            raise HTTPException(status_code=403, detail="invalid signature")
+    else:
+        logger.warning("WhatsApp APP_SECRET not configured - signature verification skipped (dev mode)")
+
+    # Parse body. Never propagate 5xx for malformed payloads.
+    try:
+        payload = await request.json()
+    except Exception as e:
+        logger.warning("WhatsApp webhook invalid JSON: %s", e)
+        await _wa_record_event(error={"source": "webhook", "message": f"invalid json: {e}"})
+        return {"ok": True}
+
+    try:
+        await _process_whatsapp_payload(payload)
+        await _wa_record_event()
+    except Exception:
+        logger.exception("WhatsApp webhook processing failed")
+        await _wa_record_event(error={"source": "webhook", "message": "processing error"})
+    # Always 200 so Meta does not retry storms
+    return {"ok": True}
+
+
+async def _process_whatsapp_payload(payload: dict) -> None:
+    object_kind = (payload or {}).get("object")
+    if object_kind not in (None, "whatsapp_business_account"):
+        logger.info("WhatsApp webhook ignored object=%s", object_kind)
+    for entry in (payload.get("entry") or []):
+        for change in (entry.get("changes") or []):
+            value = change.get("value") or {}
+            messages, statuses, errors = parse_inbound_value(value)
+            # Errors first (Meta sometimes ships errors alongside events)
+            for err in errors:
+                logger.warning("WhatsApp event error payload: %s", _truncate(err, 300))
+                await db.whatsapp_events.insert_one({
+                    "id": new_id("wae"), "kind": "error", "payload": err,
+                    "created_at": now_iso(),
+                })
+                await _wa_record_event(error={
+                    "code": err.get("code"),
+                    "message": str(err.get("message") or err.get("title") or "Error de WhatsApp")[:240],
+                    "source": "webhook",
+                })
+            for m in messages:
+                await _ingest_inbound_message(m)
+            for st in statuses:
+                await _ingest_status_update(st)
+
+
+def _truncate(obj: Any, n: int) -> str:
+    s = str(obj)
+    return s if len(s) <= n else s[:n] + "..."
+
+
+# ---- Inbound ingestion ----------------------------------------------------
+
+async def _upsert_whatsapp_contact(wa_id: str, profile_name: str) -> dict:
+    """Find or create a contact for a wa_id. Sets ``whatsapp_id`` and uses the
+    profile name when we don't already have one."""
+    if not wa_id:
+        raise ValueError("wa_id required")
+    contact = await db.contacts.find_one({"whatsapp_id": wa_id}, {"_id": 0})
+    if not contact:
+        # legacy fallback: match by phone with + prefix
+        contact = await db.contacts.find_one({"phone": f"+{wa_id}"}, {"_id": 0})
+        if not contact:
+            contact = await db.contacts.find_one({"phone": wa_id}, {"_id": 0})
+    if contact:
+        upd: dict[str, Any] = {"whatsapp_id": wa_id}
+        if profile_name and not contact.get("name"):
+            upd["name"] = profile_name
+        await db.contacts.update_one({"id": contact["id"]}, {"$set": upd})
+        contact = await db.contacts.find_one({"id": contact["id"]}, {"_id": 0})
+        return contact
+    # create new contact
+    new_contact = Contact(
+        name=profile_name or f"+{wa_id}",
+        phone=f"+{wa_id}",
+    ).model_dump()
+    new_contact["whatsapp_id"] = wa_id
+    await db.contacts.insert_one(new_contact)
+    return new_contact
+
+
+async def _get_or_create_whatsapp_conversation(contact: dict, *, phone_number_id: str) -> dict:
+    channel_external_id = f"{phone_number_id}:{contact.get('whatsapp_id') or contact.get('phone') or contact['id']}"
+    conv = await db.conversations.find_one(
+        {"channel": "whatsapp", "channel_external_id": channel_external_id},
+        {"_id": 0},
+    )
+    if not conv:
+        # Fallback: existing conv for the same contact (e.g. came from seed/demo)
+        conv = await db.conversations.find_one(
+            {"contact_id": contact["id"]}, {"_id": 0}, sort=[("created_at", -1)],
+        )
+    if conv:
+        # Make sure channel metadata is set on the conv
+        await db.conversations.update_one(
+            {"id": conv["id"]},
+            {"$set": {"channel": "whatsapp", "channel_external_id": channel_external_id}},
+        )
+        return await db.conversations.find_one({"id": conv["id"]}, {"_id": 0})
+    # New conversation + lead
+    new_conv = Conversation(contact_id=contact["id"]).model_dump()
+    new_conv["channel"] = "whatsapp"
+    new_conv["channel_external_id"] = channel_external_id
+    # Auto-create a lead just like the demo flow does
+    new_lead = Lead(
+        contact_id=contact["id"],
+        title=f"Lead WhatsApp · {contact.get('name', '')}".strip(" ·"),
+        source="WhatsApp",
+    ).model_dump()
+    await db.leads.insert_one(new_lead)
+    new_conv["lead_id"] = new_lead["id"]
+    await db.conversations.insert_one(new_conv)
+    return new_conv
+
+
+async def _ingest_inbound_message(m) -> None:
+    """Persist one inbound WhatsApp message + notify via shared inbound helper."""
+    # Idempotency check up front (cheap)
+    existing = await db.messages.find_one({"external_message_id": m.message_id}, {"_id": 0})
+    if existing:
+        return
+    contact = await _upsert_whatsapp_contact(m.wa_id, m.profile_name)
+    conv = await _get_or_create_whatsapp_conversation(contact, phone_number_id=m.phone_number_id)
+    body = m.text or f"[{m.message_type}]"
+    await _handle_inbound_message(
+        conv, body,
+        external_message_id=m.message_id,
+        message_type=m.message_type,
+        raw_payload=m.raw,
+        timestamp_iso=m.timestamp,
+    )
+
+
+async def _ingest_status_update(st) -> None:
+    target = await db.messages.find_one({"external_message_id": st.message_id}, {"_id": 0})
+    if not target:
+        await db.whatsapp_events.insert_one({
+            "id": new_id("wae"), "kind": "orphan_status",
+            "payload": st.raw, "created_at": now_iso(),
+        })
+        return
+    upd: dict[str, Any] = {
+        "delivery_status": st.status,
+        "status_updated_at": st.timestamp or now_iso(),
+    }
+    if st.status == "failed":
+        if st.error_code is not None:
+            upd["whatsapp_error_code"] = st.error_code
+        if st.error_message:
+            upd["whatsapp_error_message"] = st.error_message
+        await _wa_record_event(error={
+            "code": st.error_code,
+            "message": (st.error_message or "Falló el envío")[:240],
+            "source": "status",
+        })
+    await db.messages.update_one({"id": target["id"]}, {"$set": upd})
+
+
+# ---- Outbound send --------------------------------------------------------
+
+class WhatsAppSend(BaseModel):
+    text: str
+
+
+@api_router.post("/conversations/{conv_id}/send-whatsapp")
+async def send_whatsapp(conv_id: str, payload: WhatsAppSend, user: User = Depends(get_current_user)):
+    cfg = wa_config()
+    if not cfg.is_configured:
+        raise HTTPException(status_code=503, detail="WhatsApp no configurado")
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Texto vacío")
+
+    conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0})
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    wa_id = contact.get("whatsapp_id") or (contact.get("phone") or "").lstrip("+").replace(" ", "")
+    if not wa_id:
+        raise HTTPException(status_code=400, detail="Contacto sin teléfono de WhatsApp")
+
+    try:
+        result = await send_text_message(cfg, wa_id, text)
+    except WhatsAppSendError as e:
+        await _wa_record_send_error(code=e.error_code, message=e.error_message or "")
+        # Map 503 (config missing) preserved; other errors -> 502
+        status = 503 if e.status_code == 503 else 502
+        detail = "WhatsApp no configurado" if status == 503 else "No se pudo enviar el mensaje"
+        raise HTTPException(status_code=status, detail=detail)
+
+    # Persist outbound message
+    external_id = ""
+    try:
+        external_id = (result.get("messages") or [{}])[0].get("id") or ""
+    except Exception:
+        external_id = ""
+    msg = Message(
+        conversation_id=conv_id,
+        sender_type="agent",
+        sender_name=user.name,
+        body=text,
+    )
+    msg_doc = msg.model_dump()
+    msg_doc["direction"] = "outbound"
+    msg_doc["delivery_status"] = "sent"
+    if external_id:
+        msg_doc["external_message_id"] = external_id
+    msg_doc["message_type"] = "text"
+    msg_doc["channel"] = "whatsapp"
+    await db.messages.insert_one(msg_doc)
+    await db.conversations.update_one(
+        {"id": conv_id},
+        {"$set": {"last_message": text, "last_message_at": now_iso(),
+                  "channel": "whatsapp"}},
+    )
+    return msg_doc
+
+
+# ---- Admin status endpoint ------------------------------------------------
+
+@api_router.get("/admin/whatsapp/status")
+async def admin_whatsapp_status(user: User = Depends(get_current_user)):
+    if user.role not in ("admin", "supervisor"):
+        raise HTTPException(status_code=403, detail="Acceso restringido")
+    cfg = wa_config()
+    status_doc = await _wa_get_status_doc()
+    return {
+        "configured": cfg.is_configured,
+        "checklist": cfg.checklist(),
+        "api_version": cfg.api_version,
+        "phone_number_id_masked": cfg.masked_phone_id(),
+        "last_webhook_at": status_doc.get("last_webhook_at"),
+        "last_error": status_doc.get("last_error"),
+        "last_error_at": status_doc.get("last_error_at"),
+    }
+
+# ---------------------------------------------------------------------------
 # Conversations & Messages
 # ---------------------------------------------------------------------------
 
@@ -758,7 +1062,14 @@ async def send_message(conv_id: str, payload: MessageCreate, user: User = Depend
         sender_name=sender_name,
         body=payload.body,
     )
-    await db.messages.insert_one(msg.model_dump())
+    msg_doc = msg.model_dump()
+    # Outbound messages from agents/bot start with delivery_status="sent" (manual channel)
+    if payload.sender_type in ("agent", "bot"):
+        msg_doc["direction"] = "outbound"
+        msg_doc["delivery_status"] = "sent"
+    elif payload.sender_type == "contact":
+        msg_doc["direction"] = "inbound"
+    await db.messages.insert_one(msg_doc)
     set_fields = {"last_message": payload.body, "last_message_at": now_iso()}
     if payload.sender_type == "contact":
         await db.conversations.update_one({"id": conv_id}, {"$inc": {"unread": 1}, "$set": set_fields})
@@ -770,7 +1081,75 @@ async def send_message(conv_id: str, payload: MessageCreate, user: User = Depend
         )
     else:
         await db.conversations.update_one({"id": conv_id}, {"$set": set_fields})
-    return msg
+    return msg_doc
+
+
+# ---------------------------------------------------------------------------
+# Shared inbound handler (used by simulate-inbound and the WhatsApp webhook)
+# ---------------------------------------------------------------------------
+
+async def _handle_inbound_message(
+    conv: dict,
+    body: str,
+    *,
+    external_message_id: str | None = None,
+    message_type: str = "text",
+    raw_payload: dict | None = None,
+    timestamp_iso: str | None = None,
+) -> dict | None:
+    """Insert an inbound (sender_type=contact) message into ``conv`` reusing the
+    same notification + unread + last_message_at semantics as the demo
+    "+ Respuesta del cliente" button.
+
+    Idempotency: when ``external_message_id`` is provided and already exists,
+    returns ``None`` and performs no writes.
+    """
+    # Idempotency check (sparse unique index on external_message_id; we also
+    # defensively check before insert to short-circuit).
+    if external_message_id:
+        existing = await db.messages.find_one(
+            {"external_message_id": external_message_id}, {"_id": 0}
+        )
+        if existing:
+            return None
+
+    contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0})
+    msg = Message(
+        conversation_id=conv["id"],
+        sender_type="contact",
+        sender_name=contact["name"] if contact else "Cliente",
+        body=body,
+    )
+    msg_doc = msg.model_dump()
+    msg_doc["direction"] = "inbound"
+    if external_message_id:
+        msg_doc["external_message_id"] = external_message_id
+    msg_doc["message_type"] = message_type
+    if raw_payload:
+        msg_doc["raw_payload"] = raw_payload
+    if timestamp_iso:
+        msg_doc["created_at"] = timestamp_iso
+    try:
+        await db.messages.insert_one(msg_doc)
+    except Exception as e:  # most likely DuplicateKeyError from sparse unique idx
+        logger.info("inbound dedup hit (%s) for external_message_id=%s",
+                    type(e).__name__, external_message_id)
+        return None
+
+    set_fields: dict[str, Any] = {"last_message": body, "last_message_at": now_iso()}
+    # Re-open conversations that were resolved when the customer writes back
+    if conv.get("status") == "resolved":
+        set_fields["status"] = "open"
+    await db.conversations.update_one(
+        {"id": conv["id"]}, {"$inc": {"unread": 1}, "$set": set_fields},
+    )
+    cname = contact["name"] if contact else "Cliente"
+    await _notify_target(
+        conv.get("assigned_to"), "new_message",
+        f"Nuevo mensaje de {cname}", body[:120],
+        "conversation", conv["id"], conv.get("priority", "medium"),
+    )
+    return msg_doc
 
 
 @api_router.post("/conversations/{conv_id}/simulate-inbound")
@@ -779,7 +1158,6 @@ async def simulate_inbound(conv_id: str, user: User = Depends(get_current_user))
     conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0})
     samples = [
         "Hola, te escribo para hacer seguimiento — ¿alguna novedad?",
         "¿Me podés pasar de nuevo los precios, por favor?",
@@ -788,15 +1166,8 @@ async def simulate_inbound(conv_id: str, user: User = Depends(get_current_user))
         "Tengo una pregunta sobre la propuesta.",
     ]
     body = samples[len(conv.get("last_message", "")) % len(samples)]
-    msg = Message(conversation_id=conv_id, sender_type="contact",
-                  sender_name=contact["name"] if contact else "Cliente", body=body)
-    await db.messages.insert_one(msg.model_dump())
-    await db.conversations.update_one(
-        {"id": conv_id}, {"$inc": {"unread": 1}, "$set": {"last_message": body, "last_message_at": now_iso()}})
-    cname = contact["name"] if contact else "Cliente"
-    await _notify_target(conv.get("assigned_to"), "new_message",
-                         f"Nuevo mensaje de {cname}", body[:120], "conversation", conv_id, conv.get("priority", "medium"))
-    return msg
+    msg_doc = await _handle_inbound_message(conv, body)
+    return msg_doc or {"ok": True, "deduped": True}
 
 
 @api_router.patch("/conversations/{conv_id}")
@@ -1211,8 +1582,27 @@ async def _seed(force: bool = False):
 async def on_startup():
     await _seed(force=False)
     await backfill_notifications()
+    await _ensure_indexes()
     _start_scheduler()
     logger.info("Latus CRM started")
+
+
+async def _ensure_indexes() -> None:
+    """Idempotently create indexes needed by WhatsApp idempotency."""
+    try:
+        await db.messages.create_index(
+            "external_message_id", unique=True, sparse=True,
+            name="ux_messages_external_id",
+        )
+        await db.conversations.create_index(
+            [("channel", 1), ("channel_external_id", 1)],
+            sparse=True, name="ix_conversations_channel",
+        )
+        await db.contacts.create_index(
+            "whatsapp_id", sparse=True, name="ix_contacts_whatsapp_id",
+        )
+    except Exception as e:  # pragma: no cover - best-effort
+        logger.warning("ensure_indexes failed: %s", e)
 
 
 # ---------------------------------------------------------------------------
