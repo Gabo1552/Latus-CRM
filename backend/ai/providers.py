@@ -37,12 +37,13 @@ KEY_REQUIRED_PROVIDERS = ("openai", "anthropic", "gemini", "openrouter", "custom
 MODEL_SUGGESTIONS: dict[str, list[str]] = {
     "emergent":      ["gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet-20241022"],
     "openai":        ["gpt-5.5-pro", "gpt-5.5-instant", "gpt-5.4", "gpt-5.4-mini", "gpt-4o", "gpt-4o-mini"],
-    "anthropic":     ["claude-4.8-opus", "claude-4.7-opus", "claude-4.6-sonnet", "claude-4.5-haiku",
+    "anthropic":     ["claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5",
                       "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
     "gemini":        ["gemini-3.5-flash", "gemini-3.1-pro", "gemini-3.1-flash-lite",
                       "gemini-2.0-flash", "gemini-1.5-pro"],
-    "openrouter":    ["openai/gpt-5.5-pro", "openai/gpt-5.4-mini", "anthropic/claude-4.6-sonnet",
-                      "google/gemini-3.5-flash", "deepseek/deepseek-chat", "deepseek/deepseek-reasoner"],
+    "openrouter":    ["openai/gpt-5.5-pro", "openai/gpt-5.4-mini", "anthropic/claude-opus-4-7",
+                      "anthropic/claude-sonnet-4-6", "google/gemini-3.5-flash",
+                      "deepseek/deepseek-chat", "deepseek/deepseek-reasoner"],
     "custom_openai": ["gpt-4o-mini"],
 }
 

@@ -16,10 +16,24 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_PRICING: dict[str, dict[str, float]] = {
+    # OpenAI GPT-5 family
+    "gpt-5.5-pro":                 {"input": 2.000,  "output": 8.000},
+    "gpt-5.5-instant":             {"input": 0.150,  "output": 0.600},
+    "gpt-5.4":                     {"input": 1.000,  "output": 4.000},
+    "gpt-5.4-mini":                {"input": 0.100,  "output": 0.400},
     "gpt-4o-mini":                 {"input": 0.150,  "output": 0.600},
     "gpt-4o":                      {"input": 2.500,  "output": 10.000},
+    # Anthropic Claude 4/3.5 family
+    "claude-opus-4-8":             {"input": 15.000, "output": 75.000},
+    "claude-opus-4-7":             {"input": 15.000, "output": 75.000},
+    "claude-sonnet-4-6":           {"input": 3.000,  "output": 15.000},
+    "claude-haiku-4-5":            {"input": 0.500,  "output": 2.500},
     "claude-3-5-sonnet-20241022":  {"input": 3.000,  "output": 15.000},
     "claude-3-5-haiku-20241022":   {"input": 0.800,  "output": 4.000},
+    # Google Gemini family
+    "gemini-3.5-flash":            {"input": 0.075,  "output": 0.300},
+    "gemini-3.1-pro":              {"input": 1.250,  "output": 5.000},
+    "gemini-3.1-flash-lite":       {"input": 0.035,  "output": 0.140},
     "gemini-1.5-pro":              {"input": 1.250,  "output": 5.000},
     "gemini-1.5-flash":            {"input": 0.075,  "output": 0.300},
 }
