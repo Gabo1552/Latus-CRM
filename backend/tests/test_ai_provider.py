@@ -25,7 +25,7 @@ os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
 os.environ.setdefault("DB_NAME", "latus_aiprov_tests")
 os.environ.setdefault("CORS_ORIGINS", "*")
 os.environ.setdefault("APP_ENCRYPTION_KEY", "T9VemN99LrWMmb3im576htR6oNUwsyQdIhvFO9QuTI0=")
-os.environ.setdefault("EMERGENT_LLM_KEY", "test-emergent-key-not-used")
+os.environ.setdefault("LATUS_LLM_KEY", "test-key-not-used")
 
 
 # Reuse the FakeDB from the simulate-inbound suite to avoid duplication
@@ -72,7 +72,7 @@ class TestAIProviderConfig:
         r = client.get("/api/admin/ai-provider", headers=_h("T-ADMIN"))
         assert r.status_code == 200, r.text
         d = r.json()
-        assert d["provider"] == "emergent"
+        assert d["provider"] == "built_in"
         assert d["api_key_configured"] is False
         assert d["api_key_masked"] == ""
         # never expose api_key
@@ -101,11 +101,11 @@ class TestAIProviderConfig:
 
     def test_put_clear_key(self, srv):
         _, _, client = srv
-        # set then clear (and switch back to emergent since clear is disallowed for openai)
+        # set then clear (and switch back to built_in since clear is disallowed for openai)
         client.put("/api/admin/ai-provider", headers=_h("T-ADMIN"),
                    json={"provider": "openai", "api_key": "sk-x"})
         r = client.put("/api/admin/ai-provider", headers=_h("T-ADMIN"),
-                       json={"provider": "emergent", "api_key": None})
+                       json={"provider": "built_in", "api_key": None})
         assert r.status_code == 200, r.text
         d = r.json()
         assert d["api_key_configured"] is False
@@ -142,7 +142,7 @@ class TestAIProviderConfig:
     def test_rbac_agent_403(self, srv):
         _, _, client = srv
         assert client.put("/api/admin/ai-provider", headers=_h("T-AGENT"),
-                          json={"provider": "emergent"}).status_code == 403
+                          json={"provider": "built_in"}).status_code == 403
         assert client.get("/api/admin/ai-provider",
                           headers=_h("T-VIEWER")).status_code == 403
 

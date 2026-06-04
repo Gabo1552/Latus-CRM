@@ -17,7 +17,7 @@ import requests
 
 BASE_URL = os.environ.get(
     'REACT_APP_BACKEND_URL',
-    'https://lead-scan-scheduler.preview.emergentagent.com'
+    'https://lead-scan-scheduler.preview.latusagent.com'
 ).rstrip('/')
 
 ADMIN_TOKEN = "test_session_admin_persist"

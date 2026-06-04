@@ -932,7 +932,7 @@ function BotIATab({ setTab }) {
           {/* Model */}
           <div className="p-3 border border-[#E9E6DC] rounded-sm">
             <Label className="text-sm font-bold text-[#0B1B26]">Modelo</Label>
-            {aiProviderQ.data?.provider !== "emergent" ? (
+            {aiProviderQ.data?.provider !== "built_in" ? (
               <>
                 <p className="text-xs text-[#888888] mt-0.5 mb-2">
                   El modelo utilizado para generar respuestas.
@@ -961,7 +961,7 @@ function BotIATab({ setTab }) {
             ) : (
               <>
                 <p className="text-xs text-[#888888] mt-0.5 mb-2">
-                  El modelo que genera las respuestas (usando el proveedor Emergent).
+                  El modelo que genera las respuestas (usando el proveedor incorporado).
                 </p>
                 <Select value={draft.model || "gpt-4o-mini"} onValueChange={(v) => set({ model: v })}>
                   <SelectTrigger data-testid="bot-setting-model" className="rounded-sm h-9 text-sm">
@@ -1177,7 +1177,7 @@ function BotIATab({ setTab }) {
           <Lightbulb className="h-3.5 w-3.5 text-[#0E8DDB]" /> Cómo funciona el bot
         </summary>
         <ul className="list-disc pl-5 space-y-1 mt-3 text-xs text-[#888888]">
-          <li>Cada mensaje entrante del cliente en WhatsApp dispara una llamada al modelo configurado en <b>EMERGENT_LLM_KEY</b>.</li>
+          <li>Cada mensaje entrante del cliente en WhatsApp dispara una llamada al modelo configurado en el sistema.</li>
           <li>El bot decide si responder, derivar a humano, actualizar estado del lead, o no hacer nada.</li>
           <li>Si detecta DNI/CBU/tarjeta o si el cliente pide hablar con un humano, deriva sin contestar.</li>
           <li>Si la confianza es menor al umbral configurado, deriva a humano.</li>
@@ -1193,7 +1193,7 @@ function BotIATab({ setTab }) {
 // AI & AUTOMATIZACIÓN TAB (Phase 1 — multi-provider config)
 // =============================================================================
 const PROVIDER_LABELS = {
-  emergent:       "Emergent (incluido)",
+  built_in:       "Sistema (incluido)",
   openai:         "OpenAI",
   anthropic:      "Anthropic (Claude)",
   gemini:         "Google Gemini",
@@ -1243,7 +1243,7 @@ function AIAutoTab() {
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const providers = draft.supported_providers || Object.keys(PROVIDER_LABELS);
-  const needsKey = draft.provider !== "emergent";
+  const needsKey = draft.provider !== "built_in";
   const needsBaseUrl = draft.provider === "custom_openai";
   const suggestionsList = (draft.model_suggestions || {})[draft.provider] || [];
   const temp = Number(draft.temperature ?? 0.2);
@@ -1318,7 +1318,7 @@ function AIAutoTab() {
           <div className="p-3 border border-[#E9E6DC] rounded-sm">
             <Label className="text-sm font-bold text-[#0B1B26]">Proveedor</Label>
             <p className="text-xs text-[#888888] mt-0.5 mb-2">
-              Por defecto se usa Emergent con la clave universal. Configurá tu propio
+              Por defecto se usa el sistema incorporado con la clave universal. Configurá tu propio
               proveedor para usar tu cuenta directa.
             </p>
             <Select value={draft.provider} onValueChange={(v) => {

@@ -17,7 +17,7 @@ os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
 os.environ.setdefault("DB_NAME", "latus_aiusage_tests")
 os.environ.setdefault("CORS_ORIGINS", "*")
 os.environ.setdefault("APP_ENCRYPTION_KEY", "T9VemN99LrWMmb3im576htR6oNUwsyQdIhvFO9QuTI0=")
-os.environ.setdefault("EMERGENT_LLM_KEY", "test-key")
+os.environ.setdefault("LATUS_LLM_KEY", "test-key")
 
 from test_simulate_inbound import _FakeDB, _run  # type: ignore
 
@@ -252,9 +252,9 @@ class TestPipelineEndToEnd:
         class _Res:
             content = '{"intent":"precios","confidence":0.9,"decision":"no_action","reply":"","summary":"x"}'
             model = "gpt-4o-mini"; prompt_tokens = 50; completion_tokens = 30
-            latency_ms = 80; provider = "emergent"
+            latency_ms = 80; provider = "built_in"
         async def fake_chat(self, **k): return _Res()
-        monkeypatch.setattr(providers.EmergentProvider, "chat", fake_chat)
+        monkeypatch.setattr(providers.BuiltInProvider, "chat", fake_chat)
 
         _run(pmod.process_inbound(fake, "conv9", "wamid.9", wa_send=None))
         logs = [l for l in fake.ai_usage_logs.docs if l["purpose"] == "bot_pipeline"]

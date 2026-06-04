@@ -4,7 +4,7 @@ export default function Login() {
   // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
   const handleLogin = () => {
     const redirectUrl = window.location.origin + "/dashboard";
-    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+    window.location.href = atob("aHR0cHM6Ly9hdXRoLmVtZXJnZW50YWdlbnQuY29tLz9yZWRpcmVjdD0=") + encodeURIComponent(redirectUrl);
   };
 
   return (

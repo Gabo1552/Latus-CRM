@@ -528,8 +528,8 @@ class TestWebhookUrl:
             "/api/admin/whatsapp/config",
             headers={
                 **_h(),
-                "host": "internal.cluster-8.preview.emergentcf.cloud",
-                "x-forwarded-host": "internal.cluster-8.preview.emergentcf.cloud",
+                "host": "internal.cluster-8.preview.latuscf.cloud",
+                "x-forwarded-host": "internal.cluster-8.preview.latuscf.cloud",
                 "x-forwarded-proto": "http",
             },
         )
@@ -545,8 +545,8 @@ class TestWebhookUrl:
             "/api/admin/whatsapp/config",
             headers={
                 **_h(),
-                "host": "lead-scan-scheduler.cluster-8.preview.emergentcf.cloud",
-                "x-forwarded-host": "lead-scan-scheduler.cluster-8.preview.emergentcf.cloud",
+                "host": "lead-scan-scheduler.cluster-8.preview.latuscf.cloud",
+                "x-forwarded-host": "lead-scan-scheduler.cluster-8.preview.latuscf.cloud",
                 "x-forwarded-proto": "http",
             },
         )
@@ -562,13 +562,13 @@ class TestWebhookUrl:
             "/api/admin/whatsapp/config",
             headers={
                 **_h(),
-                "host": "lead-scan-scheduler.preview.emergentagent.com",
-                "x-forwarded-host": "lead-scan-scheduler.preview.emergentagent.com",
+                "host": "lead-scan-scheduler.preview.latusagent.com",
+                "x-forwarded-host": "lead-scan-scheduler.preview.latusagent.com",
                 "x-forwarded-proto": "http",  # lying upstream
             },
         )
         body = r.json()
-        assert body["webhook_url"].startswith("https://lead-scan-scheduler.preview.emergentagent.com/")
+        assert body["webhook_url"].startswith("https://lead-scan-scheduler.preview.latusagent.com/")
 
 
 # ====================================================================

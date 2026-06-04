@@ -15,7 +15,7 @@ os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
 os.environ.setdefault("DB_NAME", "latus_catbot_tests")
 os.environ.setdefault("CORS_ORIGINS", "*")
 os.environ.setdefault("APP_ENCRYPTION_KEY", "T9VemN99LrWMmb3im576htR6oNUwsyQdIhvFO9QuTI0=")
-os.environ.setdefault("EMERGENT_LLM_KEY", "test-key")
+os.environ.setdefault("LATUS_LLM_KEY", "test-key")
 
 from test_simulate_inbound import _FakeDB, _run  # type: ignore
 

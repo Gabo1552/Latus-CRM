@@ -69,7 +69,7 @@ async def regenerate_summary(db, conv_id: str, *, user_id: str | None = None) ->
     msgs.reverse()
     block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
     ai_cfg = await ai_providers.load_settings(db)
-    model_override = "gpt-4o-mini" if ai_cfg.get("provider") == "emergent" else None
+    model_override = "gpt-4o-mini" if ai_cfg.get("provider") == "built_in" else None
     try:
         parsed, raw = await call_llm_json(
             db=db,
@@ -137,7 +137,7 @@ async def suggest_reply(db, conv_id: str, *, user_id: str | None = None) -> dict
                              faqs=settings["faqs"], handoff_rules=settings["handoff_rules"],
                              bot_name=settings.get("bot_name", "Bot"),
                              client_info=client_info)
-    model_override = settings["model"] if ai_cfg.get("provider") == "emergent" else None
+    model_override = settings["model"] if ai_cfg.get("provider") == "built_in" else None
     try:
         parsed, _ = await call_llm_json(db=db, system_prompt=sp,
                                         user_messages_block=block,
@@ -253,9 +253,9 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                                  client_info=client_info)
         parsed: dict = {}
         raw = ""
-        # Model override: emergent uses bot_settings.model; other providers use
+        # Model override: built_in uses bot_settings.model; other providers use
         # the provider-configured model.
-        model_override = settings["model"] if ai_cfg.get("provider") == "emergent" else None
+        model_override = settings["model"] if ai_cfg.get("provider") == "built_in" else None
         try:
             parsed, raw = await call_llm_json(db=db, system_prompt=sp,
                                               user_messages_block=block or "(sin mensajes)",

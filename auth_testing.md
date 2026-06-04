@@ -1,4 +1,4 @@
-# Auth-Gated App Testing Playbook (Emergent Google Auth)
+# Auth-Gated App Testing Playbook (Google Auth)
 
 ## Step 1: Create Test User & Session
 ```

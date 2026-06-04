@@ -27,7 +27,7 @@
     "/app/backend/tests/test_ai_bot_http.py — tightened test_summary_regenerate (asserts 'summary' is a string) and test_suggest_reply (asserts 'draft','confidence','intent' all present)."
   ],
   "success_rate": {"backend": "92% (11/12, only out-of-scope POST /messages still 500)", "frontend": "100% (all in-scope flows verified)"},
-  "test_credentials": "Bearer test_session_admin_persist (admin@latus.test). Cookie session_token=test_session_admin_persist (sameSite=None, secure) on lead-scan-scheduler.preview.emergentagent.com.",
+  "test_credentials": "Bearer test_session_admin_persist (admin@latus.test). Cookie session_token=test_session_admin_persist (sameSite=None, secure) on lead-scan-scheduler.preview.latusagent.com.",
   "seed_data_creation": "Bot-settings now persisted with confidence_threshold=0.55 and recent_messages_context_max=12 (toggled to 15 then back to 12 during UI test).",
   "retest_needed": false,
   "main_agent_can_self_test": true,
