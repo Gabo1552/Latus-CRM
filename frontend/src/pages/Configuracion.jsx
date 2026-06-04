@@ -1250,7 +1250,9 @@ function AIAutoTab() {
               proveedor para usar tu cuenta directa.
             </p>
             <Select value={draft.provider} onValueChange={(v) => {
-              set({ provider: v });
+              const newSuggestions = (draft.model_suggestions || {})[v] || [];
+              const defaultModel = newSuggestions[0] || "";
+              set({ provider: v, model: defaultModel });
               setKeyAction("keep");
             }}>
               <SelectTrigger data-testid="ai-setting-provider" className="rounded-sm h-9 text-sm">
@@ -1268,19 +1270,52 @@ function AIAutoTab() {
           <div className="p-3 border border-[#E9E6DC] rounded-sm">
             <Label className="text-sm font-bold text-[#0B1B26]">Modelo</Label>
             <p className="text-xs text-[#888888] mt-0.5 mb-2">
-              Nombre del modelo (validado por el proveedor).
+              Seleccioná un modelo o ingresá uno personalizado.
             </p>
-            <Input
-              data-testid="ai-setting-model"
-              list="ai-model-suggestions"
-              value={draft.model || ""}
-              onChange={(e) => set({ model: e.target.value })}
-              className="rounded-sm h-9"
-              placeholder="gpt-4o-mini"
-            />
-            <datalist id="ai-model-suggestions">
-              {suggestionsList.map((m) => <option key={m} value={m} />)}
-            </datalist>
+            {suggestionsList.length > 0 ? (
+              <div className="space-y-2">
+                <Select
+                  value={suggestionsList.includes(draft.model) ? draft.model : "custom"}
+                  onValueChange={(v) => {
+                    if (v === "custom") {
+                      if (suggestionsList.includes(draft.model)) {
+                        set({ model: "" });
+                      }
+                    } else {
+                      set({ model: v });
+                    }
+                  }}
+                >
+                  <SelectTrigger data-testid="ai-setting-model-select" className="rounded-sm h-9 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {suggestionsList.map((m) => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                    <SelectItem value="custom">Otro modelo (personalizado)</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                {(!suggestionsList.includes(draft.model) || draft.model === "") && (
+                  <Input
+                    data-testid="ai-setting-model-custom"
+                    value={draft.model || ""}
+                    onChange={(e) => set({ model: e.target.value })}
+                    className="rounded-sm h-9 mt-2 font-mono"
+                    placeholder="Escribí el identificador del modelo..."
+                  />
+                )}
+              </div>
+            ) : (
+              <Input
+                data-testid="ai-setting-model"
+                value={draft.model || ""}
+                onChange={(e) => set({ model: e.target.value })}
+                className="rounded-sm h-9 font-mono"
+                placeholder="Identificador del modelo"
+              />
+            )}
           </div>
 
           {/* API key */}
