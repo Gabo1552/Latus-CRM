@@ -30,6 +30,8 @@ DEFAULT_BOT_SETTINGS = {
     "handoff_rules": DEFAULT_HANDOFF_RULES,
     "tone": "profesional, cercano, conciso",
     "model": "gpt-4o-mini",
+    "bot_name": "Bot",
+    "include_client_info": True,
 }
 
 # Sensitive data patterns (Argentinian DNI, CBU, credit card-like)
@@ -66,12 +68,14 @@ async def regenerate_summary(db, conv_id: str, *, user_id: str | None = None) ->
         .sort("created_at", -1).to_list(20)
     msgs.reverse()
     block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
+    ai_cfg = await ai_providers.load_settings(db)
+    model_override = "gpt-4o-mini" if ai_cfg.get("provider") == "emergent" else None
     try:
         parsed, raw = await call_llm_json(
             db=db,
             system_prompt=build_summary_only_prompt(),
             user_messages_block=block or "(sin mensajes)",
-            model="gpt-4o-mini",
+            model=model_override,
             purpose="summary_regen",
             conversation_id=conv_id,
             user_id=user_id,
@@ -85,6 +89,33 @@ async def regenerate_summary(db, conv_id: str, *, user_id: str | None = None) ->
             {"$set": {"summary": summary, "last_summary_at": _now_iso()}},
         )
     return {"summary": summary, "last_summary_at": _now_iso()}
+ 
+ 
+async def _compile_client_info(db, conv, settings: dict) -> str | None:
+    if not settings.get("include_client_info", True) or not conv:
+        return None
+    contact_doc = await db.contacts.find_one({"id": conv.get("contact_id")})
+    lead_doc = await db.leads.find_one({"id": conv.get("lead_id")}) if conv.get("lead_id") else None
+    
+    info_lines = []
+    if contact_doc:
+        if contact_doc.get("name"):
+            info_lines.append(f"- Nombre: {contact_doc['name']}")
+        if contact_doc.get("phone"):
+            info_lines.append(f"- Teléfono: {contact_doc['phone']}")
+        if contact_doc.get("email"):
+            info_lines.append(f"- Email: {contact_doc['email']}")
+        if contact_doc.get("company"):
+            info_lines.append(f"- Empresa: {contact_doc['company']}")
+        if contact_doc.get("notes"):
+            info_lines.append(f"- Notas en CRM: {contact_doc['notes']}")
+    if lead_doc:
+        if lead_doc.get("status"):
+            info_lines.append(f"- Estado del Lead: {lead_doc['status']}")
+        if lead_doc.get("value"):
+            info_lines.append(f"- Valor estimado: {lead_doc['value']}")
+    
+    return "\n".join(info_lines) if info_lines else None
 
 
 async def suggest_reply(db, conv_id: str, *, user_id: str | None = None) -> dict:
@@ -100,13 +131,17 @@ async def suggest_reply(db, conv_id: str, *, user_id: str | None = None) -> dict
         .sort("created_at", -1).to_list(settings["recent_messages_context_max"])
     msgs.reverse()
     block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
+    client_info = await _compile_client_info(db, conv, settings)
     sp = build_system_prompt(tone=settings["tone"],
                              business_instructions=merged_biz,
-                             faqs=settings["faqs"], handoff_rules=settings["handoff_rules"])
+                             faqs=settings["faqs"], handoff_rules=settings["handoff_rules"],
+                             bot_name=settings.get("bot_name", "Bot"),
+                             client_info=client_info)
+    model_override = settings["model"] if ai_cfg.get("provider") == "emergent" else None
     try:
         parsed, _ = await call_llm_json(db=db, system_prompt=sp,
                                         user_messages_block=block,
-                                        model=settings["model"],
+                                        model=model_override,
                                         purpose="suggest_reply",
                                         conversation_id=conv_id,
                                         user_id=user_id)
@@ -209,10 +244,13 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         merged_biz = (base + "\n\n" + biz).strip() if base else biz
         if catalog_block:
             merged_biz = (merged_biz + "\n\n" + catalog_block).strip()
+        client_info = await _compile_client_info(db, conv, settings)
         sp = build_system_prompt(tone=settings["tone"],
                                  business_instructions=merged_biz,
                                  faqs=settings["faqs"],
-                                 handoff_rules=settings["handoff_rules"])
+                                 handoff_rules=settings["handoff_rules"],
+                                 bot_name=settings.get("bot_name", "Bot"),
+                                 client_info=client_info)
         parsed: dict = {}
         raw = ""
         # Model override: emergent uses bot_settings.model; other providers use
@@ -279,7 +317,7 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                     "id": "msg_" + uuid.uuid4().hex[:12],
                     "conversation_id": conv_id,
                     "sender_type": "bot",
-                    "sender_name": "Bot",
+                    "sender_name": settings.get("bot_name", "Bot"),
                     "body": reply,
                     "direction": "outbound",
                     "delivery_status": "sent",

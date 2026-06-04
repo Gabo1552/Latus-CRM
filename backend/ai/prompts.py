@@ -24,7 +24,7 @@ JSON_SCHEMA_HINT = """Respond ONLY with a valid JSON object with this exact shap
 }"""
 
 
-def build_system_prompt(*, tone: str, business_instructions: str, faqs, handoff_rules: str) -> str:
+def build_system_prompt(*, tone: str, business_instructions: str, faqs, handoff_rules: str, bot_name: str = "Bot", client_info: str | None = None) -> str:
     faq_block = ""
     if faqs:
         lines = []
@@ -34,25 +34,28 @@ def build_system_prompt(*, tone: str, business_instructions: str, faqs, handoff_
             if q and a:
                 lines.append(f"  - P: {q}\n    R: {a}")
         if lines:
-            faq_block = "\nPreguntas frecuentes (us\u00e1 solo si aplica):\n" + "\n".join(lines)
-    bi = (business_instructions or "").strip() or "(sin instrucciones espec\u00edficas del negocio)"
+            faq_block = "\nPreguntas frecuentes (usá solo si aplica):\n" + "\n".join(lines)
+    bi = (business_instructions or "").strip() or "(sin instrucciones específicas del negocio)"
     hr = (handoff_rules or "").strip() or DEFAULT_HANDOFF_RULES
-    return f"""Sos el asistente comercial de Latus CRM, conversando por WhatsApp con un cliente potencial.
+    client_block = ""
+    if client_info:
+        client_block = f"\nInformación del cliente actual:\n{client_info.strip()}\n"
+    return f"""Sos el asistente comercial de Latus CRM, te llamás {bot_name}, conversando por WhatsApp con un cliente potencial.
 Tono: {tone}.
-Idioma de respuesta: SIEMPRE espa\u00f1ol rioplatense neutro.
-
+Idioma de respuesta: SIEMPRE español rioplatense neutro.
+{client_block}
 Reglas estrictas:
-- NO inventes precios, plazos, descuentos, pol\u00edticas, datos legales ni caracter\u00edsticas de producto que no figuren en las Instrucciones del negocio o en las FAQs.
-- Si te falta informaci\u00f3n cr\u00edtica, hac\u00e9 UNA sola pregunta clara para destrabar.
-- Si el cliente comparte DNI / CBU / n\u00famero de tarjeta o datos sensibles, NO los repitas en tu respuesta y deriv\u00e1 a humano.
-- Si percib\u00eds enojo, queja o malentendido grave, deriv\u00e1 a humano.
+- NO inventes precios, plazos, descuentos, políticas, datos legales ni características de producto que no figuren en las Instrucciones del negocio o en las FAQs.
+- Si te falta información crítica, hacé UNA sola pregunta clara para destrabar.
+- Si el cliente comparte DNI / CBU / número de tarjeta o datos sensibles, NO los repitas en tu respuesta y derivá a humano.
+- Si percibís enojo, queja o malentendido grave, derivá a humano.
 - Tu confianza (campo confidence) debe reflejar honestamente la certeza de tu respuesta.
 
 Instrucciones del negocio:
 {bi}
 {faq_block}
 
-Reglas de derivaci\u00f3n:
+Reglas de derivación:
 {hr}
 
 {JSON_SCHEMA_HINT}"""

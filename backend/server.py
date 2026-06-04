@@ -1853,9 +1853,11 @@ class BotSettingsUpdate(BaseModel):
     handoff_rules: Optional[str] = None
     tone: Optional[str] = None
     model: Optional[str] = None
+    bot_name: Optional[str] = None
+    include_client_info: Optional[bool] = None
 
 
-_ALLOWED_BOT_MODELS = {"gpt-4o-mini", "gpt-4o"}
+_ALLOWED_BOT_MODELS = {"gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet-20241022"}
 
 
 @api_router.get("/admin/bot-settings")
@@ -1881,6 +1883,15 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
         update["recent_messages_context_max"] = v
     if "model" in update and update["model"] not in _ALLOWED_BOT_MODELS:
         raise HTTPException(400, f"model debe ser uno de {sorted(_ALLOWED_BOT_MODELS)}")
+    if "bot_name" in update:
+        bn = (update["bot_name"] or "").strip()
+        if not bn:
+            raise HTTPException(400, "El nombre del bot no puede estar vacío")
+        if len(bn) > 60:
+            raise HTTPException(400, "El nombre del bot es demasiado largo (máx 60 caracteres)")
+        update["bot_name"] = bn
+    if "include_client_info" in update:
+        update["include_client_info"] = bool(update["include_client_info"])
     update["updated_at"] = now_iso()
     update["updated_by"] = admin.user_id
     await db.bot_settings.update_one({"_id": "default"},

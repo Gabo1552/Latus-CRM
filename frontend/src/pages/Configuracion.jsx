@@ -836,11 +836,16 @@ function WhatsAppTab() {
 // =============================================================================
 // BOT IA TAB
 // =============================================================================
-function BotIATab() {
+function BotIATab({ setTab }) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["admin-bot-settings"],
     queryFn: () => api.get("/admin/bot-settings").then((r) => r.data),
+  });
+
+  const aiProviderQ = useQuery({
+    queryKey: ["admin-ai-provider"],
+    queryFn: () => api.get("/admin/ai-provider").then((r) => r.data),
   });
 
   const [draft, setDraft] = useState(null);
@@ -856,7 +861,7 @@ function BotIATab() {
     onError: (e) => toast.error(e?.response?.data?.detail || "No se pudieron guardar los cambios"),
   });
 
-  if (q.isPending || !draft) return <div className="text-[#888888]">Cargando…</div>;
+  if (q.isPending || aiProviderQ.isPending || !draft) return <div className="text-[#888888]">Cargando…</div>;
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const faqs = Array.isArray(draft.faqs) ? draft.faqs : [];
@@ -875,6 +880,10 @@ function BotIATab() {
       toast.error("Los mensajes de contexto deben estar entre 3 y 50");
       return;
     }
+    if (!(draft.bot_name || "").trim()) {
+      toast.error("El nombre del bot no puede estar vacío");
+      return;
+    }
     const payload = {
       bot_enabled_default: !!draft.bot_enabled_default,
       confidence_threshold: thresh,
@@ -883,6 +892,8 @@ function BotIATab() {
       handoff_rules: draft.handoff_rules || "",
       tone: draft.tone || "",
       model: draft.model || "gpt-4o-mini",
+      bot_name: (draft.bot_name || "").trim(),
+      include_client_info: !!draft.include_client_info,
       faqs: faqs
         .map((f) => ({ q: (f.q || "").trim(), a: (f.a || "").trim() }))
         .filter((f) => f.q && f.a),
@@ -921,18 +932,79 @@ function BotIATab() {
           {/* Model */}
           <div className="p-3 border border-[#E9E6DC] rounded-sm">
             <Label className="text-sm font-bold text-[#0B1B26]">Modelo</Label>
+            {aiProviderQ.data?.provider !== "emergent" ? (
+              <>
+                <p className="text-xs text-[#888888] mt-0.5 mb-2">
+                  El modelo utilizado para generar respuestas.
+                </p>
+                <div className="bg-[#F9F9F7] border border-[#E9E6DC] rounded-sm p-2 flex items-center justify-between text-sm">
+                  <div>
+                    <span className="font-mono text-[#0B1B26] font-bold">{aiProviderQ.data?.model || "Configurado por proveedor"}</span>
+                    <p className="text-[11px] text-[#888888] mt-0.5">
+                      Proveedor: <span className="font-semibold text-[#0B1B26]">{PROVIDER_LABELS[aiProviderQ.data?.provider] || aiProviderQ.data?.provider}</span>
+                    </p>
+                  </div>
+                  <span className="text-[11px] font-bold text-[#0E8DDB] bg-[#E9E6DC] px-2 py-0.5 rounded-sm">Activo</span>
+                </div>
+                <p className="text-[11px] text-[#888888] mt-2">
+                  Este modelo se gestiona globalmente en la pestaña{" "}
+                  <button
+                    type="button"
+                    onClick={() => setTab("ai")}
+                    className="text-[#0E8DDB] font-bold hover:underline font-semibold"
+                  >
+                    IA y automatización
+                  </button>
+                  .
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-[#888888] mt-0.5 mb-2">
+                  El modelo que genera las respuestas (usando el proveedor Emergent).
+                </p>
+                <Select value={draft.model || "gpt-4o-mini"} onValueChange={(v) => set({ model: v })}>
+                  <SelectTrigger data-testid="bot-setting-model" className="rounded-sm h-9 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="gpt-4o-mini">gpt-4o-mini (recomendado)</SelectItem>
+                    <SelectItem value="gpt-4o">gpt-4o (más preciso)</SelectItem>
+                    <SelectItem value="claude-3-5-sonnet-20241022">claude-3-5-sonnet-20241022</SelectItem>
+                  </SelectContent>
+                </Select>
+              </>
+            )}
+          </div>
+
+          {/* Nombre del Bot */}
+          <div className="p-3 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Nombre del Bot</Label>
             <p className="text-xs text-[#888888] mt-0.5 mb-2">
-              El modelo de OpenAI que genera las respuestas.
+              El nombre con el que se identificará el asistente en el chat y en las instrucciones.
             </p>
-            <Select value={draft.model || "gpt-4o-mini"} onValueChange={(v) => set({ model: v })}>
-              <SelectTrigger data-testid="bot-setting-model" className="rounded-sm h-9 text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="gpt-4o-mini">gpt-4o-mini (recomendado)</SelectItem>
-                <SelectItem value="gpt-4o">gpt-4o (más preciso, más caro)</SelectItem>
-              </SelectContent>
-            </Select>
+            <Input
+              data-testid="bot-setting-name"
+              value={draft.bot_name || ""}
+              onChange={(e) => set({ bot_name: e.target.value })}
+              className="rounded-sm h-9"
+              placeholder="Ej.: Asistente Latus, Carlos, etc."
+            />
+          </div>
+
+          {/* Contexto del cliente enriquecido */}
+          <div className="flex items-start justify-between gap-4 p-3 border border-[#E9E6DC] rounded-sm">
+            <div>
+              <Label className="text-sm font-bold text-[#0B1B26]">Contexto del cliente enriquecido</Label>
+              <p className="text-xs text-[#888888] mt-0.5">
+                Inyecta el nombre, teléfono, email, notas del CRM y estado del lead al contexto del bot para respuestas personalizadas.
+              </p>
+            </div>
+            <Switch
+              data-testid="bot-setting-include-client-info"
+              checked={!!draft.include_client_info}
+              onCheckedChange={(v) => set({ include_client_info: v })}
+            />
           </div>
 
           {/* Confidence threshold */}
@@ -1616,7 +1688,7 @@ export default function Configuracion() {
         </div>
         {tab === "users" && <UsersTab me={user} />}
         {tab === "whatsapp" && <WhatsAppTab />}
-        {tab === "bot" && <BotIATab />}
+        {tab === "bot" && <BotIATab setTab={setTab} />}
         {tab === "ai" && <AIAutoTab />}
       </div>
     </AppLayout>
