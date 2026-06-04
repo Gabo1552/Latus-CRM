@@ -36,11 +36,14 @@ KEY_REQUIRED_PROVIDERS = ("openai", "anthropic", "gemini", "openrouter", "custom
 # accepts any string so admins can paste a fresh model name without a release).
 MODEL_SUGGESTIONS: dict[str, list[str]] = {
     "emergent":      ["gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet-20241022"],
-    "openai":        ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"],
-    "anthropic":     ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"],
-    "gemini":        ["gemini-1.5-pro", "gemini-1.5-flash"],
-    "openrouter":    ["openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet",
-                      "google/gemini-pro-1.5"],
+    "openai":        ["gpt-4o-mini", "gpt-4o", "o3-mini", "o1", "o1-mini", "gpt-4-turbo"],
+    "anthropic":     ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest",
+                      "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"],
+    "gemini":        ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-pro",
+                      "gemini-1.5-pro", "gemini-1.5-flash"],
+    "openrouter":    ["openai/gpt-4o-mini", "openai/gpt-4o", "anthropic/claude-3.5-sonnet",
+                      "google/gemini-2.5-flash", "google/gemini-2.0-flash",
+                      "deepseek/deepseek-chat", "deepseek/deepseek-reasoner"],
     "custom_openai": ["gpt-4o-mini"],
 }
 
