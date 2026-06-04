@@ -41,6 +41,7 @@ export default function Inbox() {
   const { data: convs = [] } = useQuery({
     queryKey: ["conversations", filters],
     queryFn: () => api.get("/conversations", { params }).then((r) => r.data),
+    refetchInterval: 3000,
   });
 
   useEffect(() => {
@@ -51,6 +52,7 @@ export default function Inbox() {
     queryKey: ["conversation", activeId],
     queryFn: () => api.get(`/conversations/${activeId}`).then((r) => r.data),
     enabled: !!activeId,
+    refetchInterval: 3000,
   });
 
   useEffect(() => { setSuggestionDraft(""); setSuggestionMeta(null); }, [activeId]);
@@ -74,7 +76,7 @@ export default function Inbox() {
     },
     onError: (e) => {
       const detail = e?.response?.data?.detail;
-      if (detail === "WhatsApp no configurado") toast.error("WhatsApp no configurado");
+      if (detail) toast.error(detail);
       else toast.error("No se pudo enviar el mensaje");
     },
   });

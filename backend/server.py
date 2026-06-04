@@ -1524,13 +1524,22 @@ async def _ingest_inbound_message(m) -> None:
     contact = await _upsert_whatsapp_contact(m.wa_id, m.profile_name)
     conv = await _get_or_create_whatsapp_conversation(contact, phone_number_id=m.phone_number_id)
     body = m.text or f"[{m.message_type}]"
-    await _handle_inbound_message(
+    msg_doc = await _handle_inbound_message(
         conv, body,
         external_message_id=m.message_id,
         message_type=m.message_type,
         raw_payload=m.raw,
         timestamp_iso=m.timestamp,
     )
+    if msg_doc and msg_doc.get("external_message_id"):
+        from ai.pipeline import process_inbound as _bot_proc, conversation_bot_should_run as _should
+        fresh = await db.conversations.find_one({"id": conv["id"]}, {"_id": 0}) or conv
+        if _should(fresh):
+            asyncio.create_task(_bot_proc(
+                db, conv["id"],
+                msg_doc["external_message_id"],
+                wa_send=_bot_wa_send,
+            ))
 
 
 async def _ingest_status_update(st) -> None:
@@ -1579,7 +1588,7 @@ async def send_whatsapp(conv_id: str, payload: WhatsAppSend, user: User = Depend
     contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0})
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
-    wa_id = contact.get("whatsapp_id") or (contact.get("phone") or "").lstrip("+").replace(" ", "")
+    wa_id = contact.get("whatsapp_id") or "".join(c for c in (contact.get("phone") or "") if c.isdigit())
     if not wa_id:
         raise HTTPException(status_code=400, detail="Contacto sin teléfono de WhatsApp")
 
@@ -1589,7 +1598,10 @@ async def send_whatsapp(conv_id: str, payload: WhatsAppSend, user: User = Depend
         await _wa_record_send_error(code=e.error_code, message=e.error_message or "")
         # Map 503 (config missing) preserved; other errors -> 502
         status = 503 if e.status_code == 503 else 502
-        detail = "WhatsApp no configurado" if status == 503 else "No se pudo enviar el mensaje"
+        detail = (
+            "WhatsApp no configurado" if status == 503
+            else f"No se pudo enviar el mensaje: {e.error_message or 'Error desconocido'}"
+        )
         raise HTTPException(status_code=status, detail=detail)
 
     # Persist outbound message
@@ -1822,7 +1834,7 @@ async def _bot_wa_send(conv: dict, text: str) -> dict:
     if not cfg.is_configured:
         raise RuntimeError("WhatsApp no configurado")
     contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0}) or {}
-    wa_id = contact.get("whatsapp_id") or (contact.get("phone") or "").lstrip("+").replace(" ", "")
+    wa_id = contact.get("whatsapp_id") or "".join(c for c in (contact.get("phone") or "") if c.isdigit())
     if not wa_id:
         raise RuntimeError("Contacto sin teléfono WhatsApp")
     return await send_text_message(cfg, wa_id, text)
