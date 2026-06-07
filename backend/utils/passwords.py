@@ -11,22 +11,25 @@ import time
 from collections import defaultdict
 from typing import Tuple
 
-from passlib.context import CryptContext
-
-_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+import bcrypt
 
 _PWD_RE = re.compile(r"^(?=.*[A-Z])(?=.*\d).{8,128}$")
 
 
 def hash_password(plain: str) -> str:
-    return _pwd_ctx.hash(plain)
+    plain_bytes = plain.encode("utf-8")
+    salt = bcrypt.gensalt()
+    hashed_bytes = bcrypt.hashpw(plain_bytes, salt)
+    return hashed_bytes.decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     if not plain or not hashed:
         return False
     try:
-        return _pwd_ctx.verify(plain, hashed)
+        plain_bytes = plain.encode("utf-8")
+        hashed_bytes = hashed.encode("utf-8")
+        return bcrypt.checkpw(plain_bytes, hashed_bytes)
     except Exception:
         return False
 

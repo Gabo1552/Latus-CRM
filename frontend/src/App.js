@@ -20,7 +20,7 @@ function Protected({ children }) {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#F9F9F7]">
-        <div className="h-10 w-10 border-2 border-[#FF4500] border-t-transparent rounded-full animate-spin" />
+        <div className="h-10 w-10 border-2 border-[#0E8DDB] border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
