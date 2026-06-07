@@ -3042,17 +3042,17 @@ async def block_viewer_on_writes(request: Request, call_next):
     return await call_next(request)
 
 
+origins = [
+    "https://latus-crm.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173"
+]
 raw_origins = os.environ.get('CORS_ORIGINS', '')
 if raw_origins:
-    origins = [o.strip().rstrip('/') for o in raw_origins.split(',') if o.strip()]
-else:
-    origins = [
-        "https://latus-crm.vercel.app",
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173"
-    ]
+    extra = [o.strip().rstrip('/') for o in raw_origins.split(',') if o.strip()]
+    origins.extend(extra)
 
 app.add_middleware(
     CORSMiddleware,
