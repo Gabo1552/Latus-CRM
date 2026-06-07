@@ -2632,9 +2632,9 @@ async def _seed(force: bool = False):
     seed_enabled = (os.environ.get("LATUS_SEED_DEMO", "").strip().lower()
                     in ("1", "true", "yes", "on"))
     if not force:
-        user_count = await db.users.count_documents({})
-        if user_count == 0:
-            logger.info("Empty database detected. Bootstrapping default admin user (admin@latus.test).")
+        admin_count = await db.users.count_documents({"role": "admin", "active": True, "deleted_at": None})
+        if admin_count == 0:
+            logger.info("No active admin users found. Bootstrapping default local admin user (admin@latus.test).")
             await db.users.update_one(
                 {"user_id": "user_local_admin"},
                 {"$set": {
@@ -2651,11 +2651,8 @@ async def _seed(force: bool = False):
                 }},
                 upsert=True
             )
-            if not seed_enabled:
-                logger.info("_seed skipped: LATUS_SEED_DEMO not set (only seeded default admin)")
-                return
-        elif not seed_enabled:
-            logger.info("_seed skipped: DB not empty and LATUS_SEED_DEMO not set")
+        if not seed_enabled:
+            logger.info("_seed skipped: LATUS_SEED_DEMO not set")
             return
     if force:
         for coll in ["contacts", "leads", "conversations", "messages", "tasks", "notes", "tags", "bot_events", "notifications"]:
