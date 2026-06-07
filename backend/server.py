@@ -2633,11 +2633,29 @@ async def _seed(force: bool = False):
                     in ("1", "true", "yes", "on"))
     if not force:
         user_count = await db.users.count_documents({})
-        if user_count > 0 and not seed_enabled:
+        if user_count == 0:
+            logger.info("Empty database detected. Bootstrapping default admin user (admin@latus.test).")
+            await db.users.update_one(
+                {"user_id": "user_local_admin"},
+                {"$set": {
+                    "user_id": "user_local_admin",
+                    "email": "admin@latus.test",
+                    "name": "Administrador Local",
+                    "role": "admin",
+                    "active": True,
+                    "auth_provider": "local",
+                    "password_hash": hash_password("Latus1234"),
+                    "is_demo": False,
+                    "created_at": now_iso(),
+                    "updated_at": now_iso()
+                }},
+                upsert=True
+            )
+            if not seed_enabled:
+                logger.info("_seed skipped: LATUS_SEED_DEMO not set (only seeded default admin)")
+                return
+        elif not seed_enabled:
             logger.info("_seed skipped: DB not empty and LATUS_SEED_DEMO not set")
-            return
-        if not seed_enabled and user_count == 0:
-            logger.info("_seed skipped: LATUS_SEED_DEMO not set (set to true to seed an empty DB)")
             return
     if force:
         for coll in ["contacts", "leads", "conversations", "messages", "tasks", "notes", "tags", "bot_events", "notifications"]:
