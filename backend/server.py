@@ -1976,20 +1976,14 @@ async def admin_debug_anthropic(admin: User = Depends(require_admin)):
     except Exception as e:
         return {"error_get_provider": str(e)}
         
-    url = "https://api.anthropic.com/v1/messages"
-    payload = {
-        "model": provider.model,
-        "max_tokens": 100,
-        "messages": [{"role": "user", "content": "Hello"}],
-    }
+    url = "https://api.anthropic.com/v1/models"
     headers = {
         "x-api-key": provider.api_key,
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01"
     }
     try:
         async with httpx.AsyncClient(timeout=10.0) as cli:
-            r = await cli.post(url, headers=headers, json=payload)
+            r = await cli.get(url, headers=headers)
             return {
                 "status_code": r.status_code,
                 "headers": dict(r.headers),
