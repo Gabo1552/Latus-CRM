@@ -8,7 +8,11 @@ import asyncio
 import logging
 import uuid
 import httpx
+import ssl
+import smtplib
+import hashlib
 from pathlib import Path
+from email.message import EmailMessage
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Literal, Any
 from datetime import datetime, timezone, timedelta
@@ -102,6 +106,10 @@ SYSTEM_LLM_KEY = (
     or os.environ.get('SYSTEM_LLM_KEY')
     or os.environ.get(base64.b64decode(b'RU1FUkdFTlRfTExNX0tFWQ==').decode('utf-8'))
 )
+RESEND_API_KEY = (os.environ.get("RESEND_API_KEY") or "").strip()
+RESEND_FROM_EMAIL = (os.environ.get("RESEND_FROM_EMAIL") or "").strip().lower()
+RESEND_FROM_NAME = (os.environ.get("RESEND_FROM_NAME") or "Latus CRM").strip()
+APP_BASE_URL = (os.environ.get("APP_BASE_URL") or "").strip().rstrip("/")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -554,6 +562,19 @@ class ChangePasswordBody(BaseModel):
     new_password: str
 
 
+class ForgotPasswordBody(BaseModel):
+    email: str
+
+
+class ResetPasswordBody(BaseModel):
+    token: str
+    new_password: str
+
+
+class SendTestEmailBody(BaseModel):
+    to_email: str
+
+
 async def _issue_session(user_id: str, response: Response) -> str:
     """Create a 7-day session for the given user and set the cookie."""
     session_token = secrets_token_urlsafe(48)
@@ -574,6 +595,172 @@ async def _issue_session(user_id: str, response: Response) -> str:
 def secrets_token_urlsafe(n: int = 32) -> str:
     import secrets as _s
     return _s.token_urlsafe(n)
+
+
+def _hash_reset_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _build_password_email_html(*, title: str, intro: str, cta_label: str,
+                               cta_url: str, footer: str) -> str:
+    return f"""
+    <div style="font-family:Arial,sans-serif;background:#f9f9f7;padding:24px;color:#0B1B26">
+      <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #E9E6DC;padding:32px">
+        <h1 style="margin:0 0 16px;font-size:24px">{title}</h1>
+        <p style="margin:0 0 24px;line-height:1.6">{intro}</p>
+        <p style="margin:0 0 24px">
+          <a href="{cta_url}" style="display:inline-block;background:#0E8DDB;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:4px;font-weight:700">
+            {cta_label}
+          </a>
+        </p>
+        <p style="margin:0 0 16px;line-height:1.6">Si el botón no funciona, copiá este enlace en tu navegador:</p>
+        <p style="margin:0 0 24px;word-break:break-all;color:#0E8DDB">{cta_url}</p>
+        <p style="margin:0;color:#666666;line-height:1.6">{footer}</p>
+      </div>
+    </div>
+    """.strip()
+
+
+async def send_email_via_settings(*, to_email: str, subject: str, html_body: str,
+                                  text_body: str) -> bool:
+    settings = await get_app_settings()
+    if not settings.get("smtp_enabled"):
+        return False
+    host = (settings.get("smtp_host") or "").strip()
+    from_email = (settings.get("smtp_from_email") or "").strip()
+    if not host or not from_email:
+        logger.warning("smtp enabled but host/from_email missing")
+        return False
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f'{settings.get("smtp_from_name") or "Latus CRM"} <{from_email}>'
+    msg["To"] = to_email
+    msg.set_content(text_body)
+    msg.add_alternative(html_body, subtype="html")
+
+    def _send():
+        use_ssl = bool(settings.get("smtp_use_ssl"))
+        use_tls = bool(settings.get("smtp_use_tls"))
+        port = int(settings.get("smtp_port") or (465 if use_ssl else 587))
+        username = settings.get("smtp_username") or ""
+        password = settings.get("smtp_password") or ""
+        if use_ssl:
+            server = smtplib.SMTP_SSL(host, port, timeout=20, context=ssl.create_default_context())
+        else:
+            server = smtplib.SMTP(host, port, timeout=20)
+        with server:
+            if use_tls and not use_ssl:
+                server.starttls(context=ssl.create_default_context())
+            if username:
+                server.login(username, password)
+            server.send_message(msg)
+
+    try:
+        await asyncio.to_thread(_send)
+        return True
+    except Exception:
+        logger.exception("failed to send email to %s", to_email)
+        return False
+
+
+def _resolve_app_base_url(settings: dict, request: Request | None = None) -> str:
+    configured = _normalize_optional_url(settings.get("app_base_url"))
+    if configured:
+        return configured
+    origin = (request.headers.get("origin") if request else "") or ""
+    if origin.startswith("http://") or origin.startswith("https://"):
+        return origin.rstrip("/")
+    return "http://localhost:3000"
+
+
+async def create_password_reset_token(*, user_id: str, purpose: str = "reset_password",
+                                      expires_minutes: int = 60) -> tuple[str, str]:
+    token = secrets_token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
+    await db.password_reset_tokens.update_many(
+        {"user_id": user_id, "purpose": purpose, "used_at": None},
+        {"$set": {"revoked_at": now_iso()}},
+    )
+    await db.password_reset_tokens.insert_one({
+        "id": new_id("prt"),
+        "user_id": user_id,
+        "purpose": purpose,
+        "token_hash": _hash_reset_token(token),
+        "created_at": now_iso(),
+        "expires_at": expires_at.isoformat(),
+        "used_at": None,
+        "revoked_at": None,
+    })
+    return token, expires_at.isoformat()
+
+
+async def send_password_setup_email(*, user_doc: dict, request: Request | None = None) -> bool:
+    settings = await get_app_settings()
+    app_base = _resolve_app_base_url(settings, request)
+    token, _ = await create_password_reset_token(user_id=user_doc["user_id"], purpose="welcome_password")
+    reset_url = f"{app_base}/?reset_token={token}"
+    return await send_email_via_settings(
+        to_email=user_doc["email"],
+        subject="Tu acceso a Latus CRM",
+        html_body=_build_password_email_html(
+            title="Tu cuenta ya esta lista",
+            intro=f"Hola {user_doc.get('name') or user_doc['email']}, tu usuario fue creado en Latus CRM. Usá este enlace para definir tu contraseña y entrar al sistema.",
+            cta_label="Definir contraseña",
+            cta_url=reset_url,
+            footer="Si no esperabas este correo, podés ignorarlo. El enlace vence en 60 minutos.",
+        ),
+        text_body=(
+            f"Hola {user_doc.get('name') or user_doc['email']}, tu cuenta en Latus CRM fue creada. "
+            f"Definí tu contraseña desde este enlace: {reset_url} . El enlace vence en 60 minutos."
+        ),
+    )
+
+
+async def send_password_recovery_email(*, user_doc: dict, request: Request | None = None) -> bool:
+    settings = await get_app_settings()
+    app_base = _resolve_app_base_url(settings, request)
+    token, _ = await create_password_reset_token(user_id=user_doc["user_id"], purpose="reset_password")
+    reset_url = f"{app_base}/?reset_token={token}"
+    return await send_email_via_settings(
+        to_email=user_doc["email"],
+        subject="Recuperá tu contraseña de Latus CRM",
+        html_body=_build_password_email_html(
+            title="Recuperación de contraseña",
+            intro=f"Hola {user_doc.get('name') or user_doc['email']}, recibimos un pedido para cambiar tu contraseña de Latus CRM.",
+            cta_label="Crear nueva contraseña",
+            cta_url=reset_url,
+            footer="Si no pediste este cambio, podés ignorar este email. El enlace vence en 60 minutos.",
+        ),
+        text_body=(
+            f"Recibimos un pedido para cambiar tu contraseña de Latus CRM. "
+            f"Usá este enlace para crear una nueva: {reset_url} . Si no fuiste vos, ignorá este mensaje."
+        ),
+    )
+
+
+async def send_welcome_email(*, user_doc: dict, auth_provider: str,
+                             request: Request | None = None) -> bool:
+    if auth_provider in ("local", "both"):
+        return await send_password_setup_email(user_doc=user_doc, request=request)
+    settings = await get_app_settings()
+    app_base = _resolve_app_base_url(settings, request)
+    login_url = f"{app_base}/"
+    return await send_email_via_settings(
+        to_email=user_doc["email"],
+        subject="Tu usuario de Latus CRM fue creado",
+        html_body=_build_password_email_html(
+            title="Bienvenido a Latus CRM",
+            intro=f"Hola {user_doc.get('name') or user_doc['email']}, tu cuenta fue creada correctamente. Ya podés ingresar con el método configurado por tu administrador.",
+            cta_label="Ir al login",
+            cta_url=login_url,
+            footer="Si no esperabas este correo, comunicate con tu administrador.",
+        ),
+        text_body=(
+            f"Hola {user_doc.get('name') or user_doc['email']}, tu cuenta en Latus CRM ya fue creada. "
+            f"Podés ingresar desde {login_url}"
+        ),
+    )
 
 
 @api_router.post("/auth/login", response_model=User)
@@ -621,6 +808,52 @@ async def auth_change_password(payload: ChangePasswordBody, user: User = Depends
         {"user_id": user.user_id},
         {"$set": {"password_hash": hash_password(payload.new_password), "updated_at": now_iso()}},
     )
+    return {"ok": True}
+
+
+@api_router.post("/auth/password/forgot")
+async def auth_forgot_password(payload: ForgotPasswordBody, request: Request):
+    email = (payload.email or "").lower().strip()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Email inválido")
+    user = await db.users.find_one({"email": email, "deleted_at": None, "active": True}, {"_id": 0})
+    if user:
+        ap = (user.get("auth_provider") or "google").lower()
+        if ap in ("local", "both"):
+            await send_password_recovery_email(user_doc=user, request=request)
+    return {"ok": True, "message": "Si el email existe, te enviamos instrucciones para recuperar tu acceso."}
+
+
+@api_router.post("/auth/password/reset")
+async def auth_reset_password(payload: ResetPasswordBody):
+    if not payload.token:
+        raise HTTPException(status_code=400, detail="Token inválido")
+    ok, msg = validate_password_policy(payload.new_password)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    doc = await db.password_reset_tokens.find_one({
+        "token_hash": _hash_reset_token(payload.token),
+        "used_at": None,
+        "revoked_at": None,
+    }, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=400, detail="El enlace de recuperación es inválido o ya fue usado")
+    expires_at = doc.get("expires_at")
+    expires_dt = datetime.fromisoformat(expires_at) if isinstance(expires_at, str) else expires_at
+    if not expires_dt or expires_dt < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="El enlace de recuperación venció")
+    user = await db.users.find_one({"user_id": doc["user_id"], "deleted_at": None, "active": True}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=400, detail="Usuario no disponible")
+    ap = (user.get("auth_provider") or "google").lower()
+    if ap not in ("local", "both"):
+        raise HTTPException(status_code=400, detail="Este usuario no usa contraseña local")
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"password_hash": hash_password(payload.new_password), "updated_at": now_iso()}},
+    )
+    await db.password_reset_tokens.update_one({"id": doc["id"]}, {"$set": {"used_at": now_iso()}})
+    await db.user_sessions.delete_many({"user_id": user["user_id"]})
     return {"ok": True}
 
 
@@ -799,7 +1032,8 @@ async def admin_get_user(uid: str, admin: User = Depends(require_perm("manage_us
 
 
 @api_router.post("/admin/users")
-async def admin_create_user(payload: AdminUserCreate, admin: User = Depends(require_perm("manage_users"))):
+async def admin_create_user(payload: AdminUserCreate, request: Request,
+                            admin: User = Depends(require_perm("manage_users"))):
     email = (payload.email or "").lower().strip()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Email inválido")
@@ -838,7 +1072,8 @@ async def admin_create_user(payload: AdminUserCreate, admin: User = Depends(requ
     if password_hash:
         doc["password_hash"] = password_hash
     await db.users.insert_one(doc)
-    return _public_user(doc)
+    email_sent = await send_welcome_email(user_doc=doc, auth_provider=ap, request=request)
+    return {**_public_user(doc), "email_sent": email_sent}
 
 
 async def _count_active_admins() -> int:
@@ -897,7 +1132,8 @@ async def admin_deactivate(uid: str, admin: User = Depends(require_perm("manage_
 
 
 @api_router.post("/admin/users/{uid}/reset-password")
-async def admin_reset_password(uid: str, admin: User = Depends(require_perm("manage_users"))):
+async def admin_reset_password(uid: str, request: Request,
+                               admin: User = Depends(require_perm("manage_users"))):
     target = await db.users.find_one({"user_id": uid}, {"_id": 0})
     if not target:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -912,8 +1148,8 @@ async def admin_reset_password(uid: str, admin: User = Depends(require_perm("man
         "password_reset_at": now_iso(),
     }})
     logger.info("admin reset password user=%s by=%s", uid, admin.user_id)
-    # Returned ONCE — the UI must show it on a banner; do not store the plain text.
-    return {"ok": True, "temporary_password": temp}
+    email_sent = await send_password_recovery_email(user_doc=target, request=request)
+    return {"ok": True, "temporary_password": None if email_sent else temp, "email_sent": email_sent}
 
 
 @api_router.delete("/admin/users/{uid}")
@@ -1405,6 +1641,28 @@ DEFAULT_SETTINGS = {
         {"key": "done", "label": "Completada", "is_done": True},
     ],
     "catalog_categories": [],
+    "smtp_enabled": bool(RESEND_API_KEY and RESEND_FROM_EMAIL),
+    "smtp_host": "smtp.resend.com" if RESEND_API_KEY else "",
+    "smtp_port": 465 if RESEND_API_KEY else 587,
+    "smtp_username": "resend" if RESEND_API_KEY else "",
+    "smtp_password": RESEND_API_KEY,
+    "smtp_from_email": RESEND_FROM_EMAIL,
+    "smtp_from_name": RESEND_FROM_NAME,
+    "smtp_use_tls": False if RESEND_API_KEY else True,
+    "smtp_use_ssl": True if RESEND_API_KEY else False,
+    "app_base_url": APP_BASE_URL,
+}
+
+PUBLIC_SETTINGS_KEYS = {
+    "lead_no_response_enabled",
+    "lead_no_response_threshold_hours",
+    "lead_no_response_business_hours_only",
+    "business_hours_start",
+    "business_hours_end",
+    "business_days",
+    "business_timezone",
+    "task_statuses",
+    "catalog_categories",
 }
 
 
@@ -1441,6 +1699,16 @@ class SettingsUpdate(BaseModel):
     business_timezone: Optional[str] = None
     task_statuses: Optional[List[dict[str, Any]]] = None
     catalog_categories: Optional[List[str]] = None
+    smtp_enabled: Optional[bool] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_from_email: Optional[str] = None
+    smtp_from_name: Optional[str] = None
+    smtp_use_tls: Optional[bool] = None
+    smtp_use_ssl: Optional[bool] = None
+    app_base_url: Optional[str] = None
 
 
 def _slugify_config_key(value: str) -> str:
@@ -1487,6 +1755,15 @@ def _task_status_map(settings: dict) -> dict[str, dict[str, Any]]:
     return {item["key"]: item for item in settings.get("task_statuses", [])}
 
 
+def _normalize_optional_url(value: str | None) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if not (text.startswith("http://") or text.startswith("https://")):
+        raise ValueError("La URL base debe empezar con http:// o https://")
+    return text.rstrip("/")
+
+
 async def validate_task_status(status: str) -> str:
     settings = await get_app_settings()
     allowed = _task_status_map(settings)
@@ -1498,6 +1775,18 @@ async def validate_task_status(status: str) -> str:
 async def get_task_done_statuses() -> set[str]:
     settings = await get_app_settings()
     return {item["key"] for item in settings.get("task_statuses", []) if item.get("is_done")}
+
+
+def _public_settings_view(settings: dict) -> dict:
+    return {key: settings.get(key) for key in PUBLIC_SETTINGS_KEYS}
+
+
+def _admin_settings_view(settings: dict) -> dict:
+    return {
+        **settings,
+        "smtp_password": "",
+        "smtp_password_configured": bool(settings.get("smtp_password")),
+    }
 
 
 async def get_app_settings() -> dict:
@@ -1514,10 +1803,15 @@ async def get_app_settings() -> dict:
 
 @api_router.get("/settings")
 async def read_settings(user: User = Depends(get_current_user)):
-    return await get_app_settings()
+    return _public_settings_view(await get_app_settings())
 
 
-@api_router.patch("/settings")
+@api_router.get("/admin/settings")
+async def read_admin_settings(admin: User = Depends(require_perm("manage_settings"))):
+    return _admin_settings_view(await get_app_settings())
+
+
+@api_router.patch("/admin/settings")
 async def update_settings(payload: SettingsUpdate, admin: User = Depends(require_perm("manage_settings"))):
     update = {k: v for k, v in payload.model_dump().items() if v is not None}
     if "lead_no_response_threshold_hours" in update:
@@ -1544,8 +1838,51 @@ async def update_settings(payload: SettingsUpdate, admin: User = Depends(require
         update["task_statuses"] = _normalize_task_statuses(update["task_statuses"])
     if "catalog_categories" in update:
         update["catalog_categories"] = _normalize_catalog_categories(update["catalog_categories"])
+    if "smtp_port" in update:
+        update["smtp_port"] = max(1, int(update["smtp_port"]))
+    if "smtp_host" in update:
+        update["smtp_host"] = (update["smtp_host"] or "").strip()
+    if "smtp_username" in update:
+        update["smtp_username"] = (update["smtp_username"] or "").strip()
+    if "smtp_from_email" in update:
+        update["smtp_from_email"] = (update["smtp_from_email"] or "").strip().lower()
+    if "smtp_from_name" in update:
+        update["smtp_from_name"] = (update["smtp_from_name"] or "").strip() or "Latus CRM"
+    if "app_base_url" in update:
+        try:
+            update["app_base_url"] = _normalize_optional_url(update["app_base_url"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    if "smtp_use_ssl" in update and update.get("smtp_use_ssl"):
+        update["smtp_use_tls"] = False
+    if "smtp_use_tls" in update and update.get("smtp_use_tls"):
+        update["smtp_use_ssl"] = False
+    if "smtp_password" in update and update["smtp_password"] == "":
+        update.pop("smtp_password")
     await db.settings.update_one({"key": "app"}, {"$set": {"key": "app", **update}}, upsert=True)
-    return await get_app_settings()
+    return _admin_settings_view(await get_app_settings())
+
+
+@api_router.post("/admin/settings/email/test")
+async def send_test_email(payload: SendTestEmailBody, admin: User = Depends(require_perm("manage_settings"))):
+    to_email = (payload.to_email or "").strip().lower()
+    if not to_email or "@" not in to_email:
+        raise HTTPException(status_code=400, detail="Email de destino inválido")
+    ok = await send_email_via_settings(
+        to_email=to_email,
+        subject="Prueba de email de Latus CRM",
+        html_body=_build_password_email_html(
+            title="SMTP configurado correctamente",
+            intro="Este es un correo de prueba enviado desde la configuración de Latus CRM.",
+            cta_label="Abrir CRM",
+            cta_url=_resolve_app_base_url(await get_app_settings()),
+            footer=f"Enviado por {admin.name or admin.email}. Si lo recibiste, Resend ya quedó conectado.",
+        ),
+        text_body="Este es un correo de prueba enviado desde la configuración de Latus CRM.",
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail="No se pudo enviar el email de prueba. Revisá la clave, el remitente y el dominio verificado en Resend.")
+    return {"ok": True}
 
 
 async def scan_lead_no_response() -> List[dict]:
@@ -3301,6 +3638,8 @@ async def _ensure_indexes() -> None:
         await db.products.create_index("name", name="ix_products_name")
         await db.products.create_index("category", name="ix_products_category")
         await db.products.create_index("tags", name="ix_products_tags")
+        await db.password_reset_tokens.create_index("token_hash", unique=True, name="ux_password_reset_token_hash")
+        await db.password_reset_tokens.create_index("expires_at", name="ix_password_reset_expires")
     except Exception as e:  # pragma: no cover - best-effort
         logger.warning("ensure_indexes failed: %s", e)
 
@@ -3376,6 +3715,7 @@ _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _WRITE_EXEMPT_PATHS = {
     "/api/auth/session", "/api/auth/logout", "/api/auth/login",
     "/api/auth/password/change",  # users (incl. viewer) can change own password
+    "/api/auth/password/forgot", "/api/auth/password/reset",
     "/api/webhooks/whatsapp",     # external, no logged user
 }
 

@@ -16,6 +16,11 @@ export const LOGIN = {
 	passwordInput: 'login-password-input',
 	submitButton: 'login-submit-button',
 	forgotPasswordLink: 'login-forgot-password-link',
+	forgotPasswordEmailInput: 'forgot-password-email-input',
+	forgotPasswordSubmitButton: 'forgot-password-submit-button',
+	resetPasswordInput: 'reset-password-input',
+	resetPasswordConfirmInput: 'reset-password-confirm-input',
+	resetPasswordSubmitButton: 'reset-password-submit-button',
 	registerLink: 'login-register-link',
 };
 

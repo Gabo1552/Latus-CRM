@@ -142,7 +142,7 @@ function UsersTab({ me }) {
     mutationFn: (uid) => api.post(`/admin/users/${uid}/reset-password`).then((r) => r.data),
     onSuccess: (data, uid) => {
       const user = (usersQ.data || []).find((u) => u.user_id === uid);
-      setResetDialog({ user, tempPwd: data.temporary_password });
+      setResetDialog({ user, tempPwd: data.temporary_password, emailSent: data.email_sent });
     },
     onError: (e) => toast.error(e?.response?.data?.detail || "No se pudo resetear"),
   });
@@ -342,18 +342,24 @@ function UsersTab({ me }) {
       <Dialog open={!!resetDialog} onOpenChange={(o) => !o && setResetDialog(null)}>
         <DialogContent className="rounded-sm">
           <DialogHeader>
-            <DialogTitle>Contraseña temporal generada</DialogTitle>
+            <DialogTitle>{resetDialog?.emailSent ? "Email de recuperación enviado" : "Contraseña temporal generada"}</DialogTitle>
           </DialogHeader>
           <div className="bg-[#FEF9C3] border-l-4 border-[#EAB308] p-3 text-sm">
-            <p className="font-bold flex items-center gap-2 mb-2"><AlertTriangle className="h-4 w-4" /> Copiala ahora, no se vuelve a mostrar.</p>
-            <p className="text-[#888888] mb-2">
-              Compartila con <b>{resetDialog?.user?.name}</b> ({resetDialog?.user?.email})
-              por un canal seguro. Al iniciar sesión, recomendales cambiarla.
+            <p className="font-bold flex items-center gap-2 mb-2">
+              <AlertTriangle className="h-4 w-4" />
+              {resetDialog?.emailSent ? "Se mandó un enlace seguro por email." : "Copiala ahora, no se vuelve a mostrar."}
             </p>
-            <div className="flex items-center gap-2 bg-white border border-[#E9E6DC] rounded-sm px-3 py-2">
-              <code data-testid="temp-password" className="flex-1 font-mono text-[#0B1B26] text-sm">{resetDialog?.tempPwd}</code>
-              <CopyButton value={resetDialog?.tempPwd || ""} />
-            </div>
+            <p className="text-[#888888] mb-2">
+              {resetDialog?.emailSent
+                ? <>Se envió un correo a <b>{resetDialog?.user?.name}</b> ({resetDialog?.user?.email}) para que defina una nueva contraseña.</>
+                : <>Compartila con <b>{resetDialog?.user?.name}</b> ({resetDialog?.user?.email}) por un canal seguro. Al iniciar sesión, recomendales cambiarla.</>}
+            </p>
+            {resetDialog?.tempPwd && (
+              <div className="flex items-center gap-2 bg-white border border-[#E9E6DC] rounded-sm px-3 py-2">
+                <code data-testid="temp-password" className="flex-1 font-mono text-[#0B1B26] text-sm">{resetDialog?.tempPwd}</code>
+                <CopyButton value={resetDialog?.tempPwd || ""} />
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button onClick={() => setResetDialog(null)} className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm">
@@ -396,8 +402,15 @@ function UserFormDialog({ open, mode, initialUser, onClose, onSaved }) {
         password: ["local", "both"].includes(authProvider) ? password : undefined,
       });
     },
-    onSuccess: () => {
-      toast.success(isEdit ? "Usuario actualizado" : "Usuario creado");
+    onSuccess: (res) => {
+      const emailSent = !!res?.data?.email_sent;
+      toast.success(
+        isEdit
+          ? "Usuario actualizado"
+          : emailSent
+            ? "Usuario creado y email enviado"
+            : "Usuario creado",
+      );
       onSaved?.();
     },
     onError: (e) => toast.error(e?.response?.data?.detail || "No se pudo guardar"),
@@ -1896,8 +1909,8 @@ function RolesTab() {
 function CRMConfigTab() {
   const qc = useQueryClient();
   const settingsQ = useQuery({
-    queryKey: ["settings"],
-    queryFn: () => api.get("/settings").then((r) => r.data),
+    queryKey: ["admin-settings"],
+    queryFn: () => api.get("/admin/settings").then((r) => r.data),
   });
   const [taskDraft, setTaskDraft] = useState([]);
   const [taskLabel, setTaskLabel] = useState("");
@@ -1913,12 +1926,13 @@ function CRMConfigTab() {
   }, [settingsQ.data]);
 
   const save = useMutation({
-    mutationFn: () => api.patch("/settings", {
+    mutationFn: () => api.patch("/admin/settings", {
       task_statuses: taskDraft,
       catalog_categories: categoryDraft,
     }),
     onSuccess: () => {
       toast.success("Configuración actualizada");
+      qc.invalidateQueries({ queryKey: ["admin-settings"] });
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["catalog-categories"] });
       qc.invalidateQueries({ queryKey: ["tasks"] });
@@ -2088,6 +2102,183 @@ function CRMConfigTab() {
 
 
 // =============================================================================
+// EMAIL SETTINGS TAB
+// =============================================================================
+function EmailSettingsTab() {
+  const qc = useQueryClient();
+  const settingsQ = useQuery({
+    queryKey: ["admin-settings"],
+    queryFn: () => api.get("/admin/settings").then((r) => r.data),
+  });
+  const [draft, setDraft] = useState(null);
+  const [testEmail, setTestEmail] = useState("");
+
+  useEffect(() => {
+    if (settingsQ.data) {
+      setDraft({
+        smtp_enabled: !!settingsQ.data.smtp_enabled,
+        smtp_host: settingsQ.data.smtp_host || "",
+        smtp_port: settingsQ.data.smtp_port || 587,
+        smtp_username: settingsQ.data.smtp_username || "",
+        smtp_password: "",
+        smtp_from_email: settingsQ.data.smtp_from_email || "",
+        smtp_from_name: settingsQ.data.smtp_from_name || "Latus CRM",
+        smtp_use_tls: settingsQ.data.smtp_use_tls !== false,
+        smtp_use_ssl: !!settingsQ.data.smtp_use_ssl,
+        app_base_url: settingsQ.data.app_base_url || "",
+      });
+    }
+  }, [settingsQ.data]);
+
+  const save = useMutation({
+    mutationFn: () => api.patch("/admin/settings", draft),
+    onSuccess: () => {
+      toast.success("Configuración de email guardada");
+      qc.invalidateQueries({ queryKey: ["admin-settings"] });
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "No se pudo guardar la configuración SMTP"),
+  });
+  const sendTest = useMutation({
+    mutationFn: () => api.post("/admin/settings/email/test", { to_email: testEmail }),
+    onSuccess: () => toast.success("Email de prueba enviado"),
+    onError: (e) => toast.error(e?.response?.data?.detail || "No se pudo enviar el email de prueba"),
+  });
+
+  if (!draft) {
+    return <div className="text-sm text-[#888888]">Cargando configuración…</div>;
+  }
+
+  const dirty = JSON.stringify({
+    ...draft,
+    smtp_password: "",
+  }) !== JSON.stringify({
+    smtp_enabled: !!settingsQ.data?.smtp_enabled,
+    smtp_host: settingsQ.data?.smtp_host || "",
+    smtp_port: settingsQ.data?.smtp_port || 587,
+    smtp_username: settingsQ.data?.smtp_username || "",
+    smtp_password: "",
+    smtp_from_email: settingsQ.data?.smtp_from_email || "",
+    smtp_from_name: settingsQ.data?.smtp_from_name || "Latus CRM",
+    smtp_use_tls: settingsQ.data?.smtp_use_tls !== false,
+    smtp_use_ssl: !!settingsQ.data?.smtp_use_ssl,
+    app_base_url: settingsQ.data?.app_base_url || "",
+  }) || !!draft.smtp_password;
+
+  const setField = (key, value) => setDraft((prev) => ({ ...prev, [key]: value }));
+
+  return (
+    <div data-testid="email-settings-tab" className="space-y-6">
+      <div className="bg-white border border-[#E9E6DC] rounded-sm p-5 space-y-5">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-bold text-[#0B1B26]">SMTP del CRM</h3>
+            <p className="text-sm text-[#888888] mt-0.5">Usado para bienvenida de usuarios y recuperación de contraseña.</p>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-[#888888]">
+            <Switch checked={draft.smtp_enabled} onCheckedChange={(v) => setField("smtp_enabled", v)} />
+            Habilitado
+          </label>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <Label className="text-xs font-semibold">Host SMTP</Label>
+            <Input value={draft.smtp_host} onChange={(e) => setField("smtp_host", e.target.value)} className="rounded-sm mt-1" placeholder="smtp.resend.com" />
+          </div>
+          <div>
+            <Label className="text-xs font-semibold">Puerto</Label>
+            <Input type="number" value={draft.smtp_port} onChange={(e) => setField("smtp_port", Number(e.target.value) || 0)} className="rounded-sm mt-1" />
+          </div>
+          <div>
+            <Label className="text-xs font-semibold">Usuario SMTP</Label>
+            <Input value={draft.smtp_username} onChange={(e) => setField("smtp_username", e.target.value)} className="rounded-sm mt-1" placeholder="resend" />
+          </div>
+          <div>
+            <Label className="text-xs font-semibold">Nueva contraseña SMTP</Label>
+            <Input type="password" value={draft.smtp_password} onChange={(e) => setField("smtp_password", e.target.value)} className="rounded-sm mt-1" placeholder={settingsQ.data?.smtp_password_configured ? "Ya configurada. Escribí solo si querés reemplazarla." : ""} />
+          </div>
+          <div>
+            <Label className="text-xs font-semibold">Email remitente</Label>
+            <Input type="email" value={draft.smtp_from_email} onChange={(e) => setField("smtp_from_email", e.target.value)} className="rounded-sm mt-1" placeholder="crm@tuempresa.com" />
+          </div>
+          <div>
+            <Label className="text-xs font-semibold">Nombre remitente</Label>
+            <Input value={draft.smtp_from_name} onChange={(e) => setField("smtp_from_name", e.target.value)} className="rounded-sm mt-1" placeholder="Latus CRM" />
+          </div>
+          <div className="md:col-span-2">
+            <Label className="text-xs font-semibold">URL pública del CRM</Label>
+            <Input value={draft.app_base_url} onChange={(e) => setField("app_base_url", e.target.value)} className="rounded-sm mt-1" placeholder="https://tu-crm.com" />
+            <p className="text-[11px] text-[#888888] mt-1">Se usa para generar el enlace de recuperación que llega por email.</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 text-sm text-[#888888]">
+          <label className="flex items-center gap-2">
+            <Switch
+              checked={draft.smtp_use_tls}
+              onCheckedChange={(v) => setDraft((prev) => ({ ...prev, smtp_use_tls: v, smtp_use_ssl: v ? false : prev.smtp_use_ssl }))}
+            />
+            STARTTLS
+          </label>
+          <label className="flex items-center gap-2">
+            <Switch
+              checked={draft.smtp_use_ssl}
+              onCheckedChange={(v) => setDraft((prev) => ({ ...prev, smtp_use_ssl: v, smtp_use_tls: v ? false : prev.smtp_use_tls }))}
+            />
+            SSL directo
+          </label>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <div className="mr-auto flex items-center gap-2">
+            <Input
+              type="email"
+              value={testEmail}
+              onChange={(e) => setTestEmail(e.target.value)}
+              className="rounded-sm w-72"
+              placeholder="email para prueba"
+            />
+            <Button
+              variant="outline"
+              className="rounded-sm"
+              disabled={!testEmail.trim() || sendTest.isPending}
+              onClick={() => sendTest.mutate()}
+            >
+              {sendTest.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+              Probar envío
+            </Button>
+          </div>
+          <Button
+            variant="outline"
+            className="rounded-sm"
+            disabled={!dirty}
+            onClick={() => setDraft({
+              smtp_enabled: !!settingsQ.data?.smtp_enabled,
+              smtp_host: settingsQ.data?.smtp_host || "",
+              smtp_port: settingsQ.data?.smtp_port || 587,
+              smtp_username: settingsQ.data?.smtp_username || "",
+              smtp_password: "",
+              smtp_from_email: settingsQ.data?.smtp_from_email || "",
+              smtp_from_name: settingsQ.data?.smtp_from_name || "Latus CRM",
+              smtp_use_tls: settingsQ.data?.smtp_use_tls !== false,
+              smtp_use_ssl: !!settingsQ.data?.smtp_use_ssl,
+              app_base_url: settingsQ.data?.app_base_url || "",
+            })}
+          >
+            Descartar cambios
+          </Button>
+          <Button className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+            {save.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+            Guardar email
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// =============================================================================
 // Page shell
 // =============================================================================
 export default function Configuracion() {
@@ -2143,6 +2334,7 @@ export default function Configuracion() {
   if (hasPerm("configure_ai"))      tabs.push({ key: "ai",       label: "IA y automatización", icon: Sparkles,         testid: "tab-ai-auto" });
   if (hasPerm("manage_users"))      tabs.push({ key: "roles",    label: "Roles y Accesos",     icon: Shield,           testid: "tab-roles" });
   if (hasPerm("manage_settings"))   tabs.push({ key: "crm",      label: "Tareas y catálogo",   icon: Package,          testid: "tab-crm-config" });
+  if (hasPerm("manage_settings"))   tabs.push({ key: "email",    label: "Email",               icon: MessageSquareText, testid: "tab-email-config" });
 
   // If current tab is not visible, switch to first available
   const activeTab = tabs.find((t) => t.key === tab) ? tab : (tabs[0]?.key || "users");
@@ -2172,6 +2364,7 @@ export default function Configuracion() {
         {activeTab === "ai" && <AIAutoTab />}
         {activeTab === "roles" && <RolesTab />}
         {activeTab === "crm" && <CRMConfigTab />}
+        {activeTab === "email" && <EmailSettingsTab />}
       </div>
     </AppLayout>
   );

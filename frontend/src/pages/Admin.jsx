@@ -23,7 +23,7 @@ export default function Admin() {
   const qc = useQueryClient();
   const { user: me } = useAuth();
   const { data: users = [] } = useQuery({ queryKey: ["users"], queryFn: () => api.get("/users").then((r) => r.data) });
-  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => api.get("/settings").then((r) => r.data) });
+  const { data: settings } = useQuery({ queryKey: ["admin-settings"], queryFn: () => api.get("/admin/settings").then((r) => r.data) });
   const { data: waStatus } = useQuery({
     queryKey: ["wa-status"],
     queryFn: () => api.get("/admin/whatsapp/status").then((r) => r.data).catch(() => null),
@@ -61,7 +61,7 @@ export default function Admin() {
   });
 
   const saveSettings = useMutation({
-    mutationFn: () => api.patch("/settings", {
+    mutationFn: () => api.patch("/admin/settings", {
       lead_no_response_enabled: enabled,
       lead_no_response_threshold_hours: Number(threshold),
       lead_no_response_business_hours_only: businessHours,
@@ -70,7 +70,11 @@ export default function Admin() {
       business_days: bhDays,
       business_timezone: bhTz,
     }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings"] }); toast.success("Configuración guardada"); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-settings"] });
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      toast.success("Configuración guardada");
+    },
     onError: () => toast.error("No se pudo guardar"),
   });
 

@@ -1,0 +1,269 @@
+INFO:     Started server process [48292]
+INFO:     Waiting for application startup.
+2026-06-08 14:17:32,762 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-08 14:17:32,769 - apscheduler.scheduler - INFO - Added job "_start_scheduler.<locals>._job" to job store "default"
+2026-06-08 14:17:32,770 - apscheduler.scheduler - INFO - Scheduler started
+2026-06-08 14:17:32,772 - server - INFO - APScheduler started: lead_no_response_scan every 5m
+2026-06-08 14:17:32,773 - server - INFO - Latus CRM started (background init tasks scheduled)
+2026-06-08 14:17:32,775 - server - ERROR - Error seeding roles: MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy.
+Traceback (most recent call last):
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3488, in _seed_roles
+    exist = await db.roles.find_one({"role_id": rid})
+                  ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 67, in _resolve
+    raise RuntimeError(
+        "MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy."
+    )
+RuntimeError: MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy.
+2026-06-08 14:17:32,780 - server - ERROR - background startup step '_seed' failed
+Traceback (most recent call last):
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3308, in _seed
+    flag = await db.settings.find_one({"key": "seeded"})
+                 ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3488, in _seed_roles
+    exist = await db.roles.find_one({"role_id": rid})
+                  ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 67, in _resolve
+    raise RuntimeError(
+        "MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy."
+    )
+RuntimeError: MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy.
+2026-06-08 14:17:32,783 - server - ERROR - background startup step 'backfill_notifications' failed
+Traceback (most recent call last):
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3691, in backfill_notifications
+    convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
+                  ^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3308, in _seed
+    flag = await db.settings.find_one({"key": "seeded"})
+                 ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3488, in _seed_roles
+    exist = await db.roles.find_one({"role_id": rid})
+                  ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 67, in _resolve
+    raise RuntimeError(
+        "MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy."
+    )
+RuntimeError: MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy.
+2026-06-08 14:17:32,786 - server - WARNING - ensure_indexes failed: MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy.
+2026-06-08 14:17:32,787 - server - ERROR - _migrate_promote_first_google_admin failed
+Traceback (most recent call last):
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3588, in _migrate_promote_first_google_admin
+    existing_admin = await db.users.find_one(
+                           ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3616, in _ensure_indexes
+    await db.messages.create_index(
+          ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3691, in backfill_notifications
+    convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
+                  ^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3308, in _seed
+    flag = await db.settings.find_one({"key": "seeded"})
+                 ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3488, in _seed_roles
+    exist = await db.roles.find_one({"role_id": rid})
+                  ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 67, in _resolve
+    raise RuntimeError(
+        "MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy."
+    )
+RuntimeError: MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-06-08 14:18:02,767 - apscheduler.executors.default - INFO - Running job "_start_scheduler.<locals>._job (trigger: interval[0:05:00], next run at: 2026-06-08 14:23:02 -03)" (scheduled at 2026-06-08 17:18:02.761738+00:00)
+2026-06-08 14:18:02,768 - server - ERROR - scheduled scan_lead_no_response failed
+Traceback (most recent call last):
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3588, in _migrate_promote_first_google_admin
+    existing_admin = await db.users.find_one(
+                           ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3616, in _ensure_indexes
+    await db.messages.create_index(
+          ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3691, in backfill_notifications
+    convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
+                  ^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3308, in _seed
+    flag = await db.settings.find_one({"key": "seeded"})
+                 ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3488, in _seed_roles
+    exist = await db.roles.find_one({"role_id": rid})
+                  ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 67, in _resolve
+    raise RuntimeError(
+        "MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy."
+    )
+RuntimeError: MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy.
+2026-06-08 14:18:02,773 - apscheduler.executors.default - INFO - Job "_start_scheduler.<locals>._job (trigger: interval[0:05:00], next run at: 2026-06-08 14:23:02 -03)" executed successfully
+2026-06-08 14:23:02,763 - apscheduler.executors.default - INFO - Running job "_start_scheduler.<locals>._job (trigger: interval[0:05:00], next run at: 2026-06-08 14:28:02 -03)" (scheduled at 2026-06-08 14:23:02.761738-03:00)
+2026-06-08 14:23:02,765 - server - ERROR - scheduled scan_lead_no_response failed
+Traceback (most recent call last):
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3588, in _migrate_promote_first_google_admin
+    existing_admin = await db.users.find_one(
+                           ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3616, in _ensure_indexes
+    await db.messages.create_index(
+          ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3691, in backfill_notifications
+    convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
+                  ^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3308, in _seed
+    flag = await db.settings.find_one({"key": "seeded"})
+                 ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3488, in _seed_roles
+    exist = await db.roles.find_one({"role_id": rid})
+                  ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 67, in _resolve
+    raise RuntimeError(
+        "MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy."
+    )
+RuntimeError: MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy.
+2026-06-08 14:23:02,769 - apscheduler.executors.default - INFO - Job "_start_scheduler.<locals>._job (trigger: interval[0:05:00], next run at: 2026-06-08 14:28:02 -03)" executed successfully
