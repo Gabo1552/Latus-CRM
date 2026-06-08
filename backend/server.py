@@ -1967,6 +1967,40 @@ async def admin_test_ai_provider(admin: User = Depends(require_admin)):
     return await ai_providers.test_provider_connectivity(db)
 
 
+@api_router.post("/admin/debug-anthropic")
+async def admin_debug_anthropic(admin: User = Depends(require_admin)):
+    from ai import providers as ai_providers
+    import httpx
+    try:
+        provider = await ai_providers.get_provider(db, override_provider="anthropic")
+    except Exception as e:
+        return {"error_get_provider": str(e)}
+        
+    url = "https://api.anthropic.com/v1/messages"
+    payload = {
+        "model": provider.model,
+        "max_tokens": 100,
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+    headers = {
+        "x-api-key": provider.api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            r = await cli.post(url, headers=headers, json=payload)
+            return {
+                "status_code": r.status_code,
+                "headers": dict(r.headers),
+                "body": r.text,
+                "decrypted_key_length": len(provider.api_key) if provider.api_key else 0,
+                "decrypted_key_preview": (provider.api_key[:10] + "..." + provider.api_key[-10:]) if provider.api_key else "",
+            }
+    except Exception as e:
+        return {"error_request": str(e)}
+
+
 # ---------------------------------------------------------------------------
 # AI usage logs + pricing (Phase 2)
 # ---------------------------------------------------------------------------
