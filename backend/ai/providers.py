@@ -36,15 +36,12 @@ KEY_REQUIRED_PROVIDERS = ("openai", "anthropic", "gemini", "openrouter", "custom
 # Default suggestions per provider (UI uses these for the datalist; backend
 # accepts any string so admins can paste a fresh model name without a release).
 MODEL_SUGGESTIONS: dict[str, list[str]] = {
-    "built_in":      ["gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet-20241022"],
-    "openai":        ["gpt-5.5-pro", "gpt-5.5-instant", "gpt-5.4", "gpt-5.4-mini", "gpt-4o", "gpt-4o-mini"],
-    "anthropic":     ["claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5",
-                      "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
-    "gemini":        ["gemini-3.5-flash", "gemini-3.1-pro", "gemini-3.1-flash-lite",
-                      "gemini-2.0-flash", "gemini-1.5-pro"],
-    "openrouter":    ["openai/gpt-5.5-pro", "openai/gpt-5.4-mini", "anthropic/claude-opus-4-7",
-                      "anthropic/claude-sonnet-4-6", "google/gemini-3.5-flash",
-                      "deepseek/deepseek-chat", "deepseek/deepseek-reasoner"],
+    "built_in":      ["gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet-20241022", "gemini-2.0-flash", "gemini-1.5-flash"],
+    "openai":        ["gpt-4o", "gpt-4o-mini", "o1", "o1-mini", "o3-mini"],
+    "anthropic":     ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"],
+    "gemini":        ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+    "openrouter":    ["openai/gpt-4o", "openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet",
+                      "google/gemini-2.0-flash-001", "deepseek/deepseek-chat", "deepseek/deepseek-reasoner"],
     "custom_openai": ["gpt-4o-mini"],
 }
 
@@ -255,7 +252,12 @@ class BuiltInProvider(AIProvider):
             UserMessage = mod.UserMessage
         except (ImportError, AttributeError) as e:  # pragma: no cover
             raise LLMUnavailable(f"Integración del sistema no disponible: {e}") from e
-        sub_provider = "openai" if self.model.lower().startswith("gpt") else "anthropic"
+        if self.model.lower().startswith("gpt"):
+            sub_provider = "openai"
+        elif "gemini" in self.model.lower():
+            sub_provider = "google"
+        else:
+            sub_provider = "anthropic"
         t0 = time.perf_counter()
         try:
             chat = (LlmChat(api_key=key,

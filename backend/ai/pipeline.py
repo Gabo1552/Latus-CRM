@@ -69,7 +69,7 @@ async def regenerate_summary(db, conv_id: str, *, user_id: str | None = None) ->
     msgs.reverse()
     block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
     ai_cfg = await ai_providers.load_settings(db)
-    model_override = "gpt-4o-mini" if ai_cfg.get("provider") == "built_in" else None
+    model_override = ai_cfg.get("model") if ai_cfg.get("provider") == "built_in" else None
     try:
         parsed, raw = await call_llm_json(
             db=db,

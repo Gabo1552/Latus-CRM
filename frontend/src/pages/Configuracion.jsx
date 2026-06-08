@@ -971,6 +971,8 @@ function BotIATab({ setTab }) {
                     <SelectItem value="gpt-4o-mini">gpt-4o-mini (recomendado)</SelectItem>
                     <SelectItem value="gpt-4o">gpt-4o (más preciso)</SelectItem>
                     <SelectItem value="claude-3-5-sonnet-20241022">claude-3-5-sonnet-20241022</SelectItem>
+                    <SelectItem value="gemini-2.0-flash">gemini-2.0-flash (rápido y económico)</SelectItem>
+                    <SelectItem value="gemini-1.5-flash">gemini-1.5-flash</SelectItem>
                   </SelectContent>
                 </Select>
               </>

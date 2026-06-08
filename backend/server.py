@@ -1862,7 +1862,10 @@ class BotSettingsUpdate(BaseModel):
     include_client_info: Optional[bool] = None
 
 
-_ALLOWED_BOT_MODELS = {"gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet-20241022"}
+_ALLOWED_BOT_MODELS = {
+    "gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet-20241022",
+    "gemini-2.0-flash", "gemini-1.5-flash"
+}
 
 
 @api_router.get("/admin/bot-settings")
