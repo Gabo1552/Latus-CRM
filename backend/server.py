@@ -632,6 +632,34 @@ async def send_email_via_settings(*, to_email: str, subject: str, html_body: str
         logger.warning("smtp enabled but host/from_email missing")
         return False
 
+    # If using Resend, prefer the HTTP REST API to bypass cloud SMTP port blocking (e.g. on Railway)
+    password = settings.get("smtp_password") or ""
+    if host == "smtp.resend.com" or (password and password.startswith("re_")):
+        try:
+            from_name = settings.get("smtp_from_name") or "Latus CRM"
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.post(
+                    "https://api.resend.com/emails",
+                    headers={
+                        "Authorization": f"Bearer {password}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "from": f"{from_name} <{from_email}>",
+                        "to": [to_email],
+                        "subject": subject,
+                        "html": html_body,
+                        "text": text_body,
+                    }
+                )
+                if res.status_code in (200, 201):
+                    logger.info("Email sent successfully via Resend HTTP API")
+                    return True
+                else:
+                    logger.error("Resend HTTP API failed with status %d: %s", res.status_code, res.text)
+        except Exception as e:
+            logger.exception("Failed sending email via Resend HTTP API: %s", e)
+
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = f'{settings.get("smtp_from_name") or "Latus CRM"} <{from_email}>'

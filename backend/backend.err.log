@@ -4200,3 +4200,1053 @@ Traceback (most recent call last):
     )
 RuntimeError: MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy.
 2026-06-08 15:58:02,786 - apscheduler.executors.default - INFO - Job "_start_scheduler.<locals>._job (trigger: interval[0:05:00], next run at: 2026-06-08 16:03:02 -03)" executed successfully
+2026-06-08 16:03:02,767 - apscheduler.executors.default - INFO - Running job "_start_scheduler.<locals>._job (trigger: interval[0:05:00], next run at: 2026-06-08 16:08:02 -03)" (scheduled at 2026-06-08 16:03:02.761738-03:00)
+2026-06-08 16:03:02,773 - server - ERROR - scheduled scan_lead_no_response failed
+Traceback (most recent call last):
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3588, in _migrate_promote_first_google_admin
+    existing_admin = await db.users.find_one(
+                           ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3616, in _ensure_indexes
+    await db.messages.create_index(
+          ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3691, in backfill_notifications
+    convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
+                  ^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3308, in _seed
+    flag = await db.settings.find_one({"key": "seeded"})
+                 ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3488, in _seed_roles
+    exist = await db.roles.find_one({"role_id": rid})
+                  ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 67, in _resolve
+    raise RuntimeError(
+        "MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy."
+    )
+RuntimeError: MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy.
+2026-06-08 16:03:02,786 - apscheduler.executors.default - INFO - Job "_start_scheduler.<locals>._job (trigger: interval[0:05:00], next run at: 2026-06-08 16:08:02 -03)" executed successfully
+2026-06-08 16:08:02,772 - apscheduler.executors.default - INFO - Running job "_start_scheduler.<locals>._job (trigger: interval[0:05:00], next run at: 2026-06-08 16:13:02 -03)" (scheduled at 2026-06-08 16:08:02.761738-03:00)
+2026-06-08 16:08:02,774 - server - ERROR - scheduled scan_lead_no_response failed
+Traceback (most recent call last):
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3588, in _migrate_promote_first_google_admin
+    existing_admin = await db.users.find_one(
+                           ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3616, in _ensure_indexes
+    await db.messages.create_index(
+          ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3691, in backfill_notifications
+    convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
+                  ^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3308, in _seed
+    flag = await db.settings.find_one({"key": "seeded"})
+                 ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3488, in _seed_roles
+    exist = await db.roles.find_one({"role_id": rid})
+                  ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 67, in _resolve
+    raise RuntimeError(
+        "MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy."
+    )
+RuntimeError: MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy.
+2026-06-08 16:08:02,788 - apscheduler.executors.default - INFO - Job "_start_scheduler.<locals>._job (trigger: interval[0:05:00], next run at: 2026-06-08 16:13:02 -03)" executed successfully
+2026-06-08 16:13:02,774 - apscheduler.executors.default - INFO - Running job "_start_scheduler.<locals>._job (trigger: interval[0:05:00], next run at: 2026-06-08 16:18:02 -03)" (scheduled at 2026-06-08 16:13:02.761738-03:00)
+2026-06-08 16:13:02,780 - server - ERROR - scheduled scan_lead_no_response failed
+Traceback (most recent call last):
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3671, in _job
+    await scan_lead_no_response()
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1896, in scan_lead_no_response
+    settings = await get_app_settings()
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 1793, in get_app_settings
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0})
+                ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3588, in _migrate_promote_first_google_admin
+    existing_admin = await db.users.find_one(
+                           ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3616, in _ensure_indexes
+    await db.messages.create_index(
+          ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3691, in backfill_notifications
+    convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
+                  ^^^^^^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3514, in _bg_step
+    await coro
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3308, in _seed
+    flag = await db.settings.find_one({"key": "seeded"})
+                 ^^^^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 62, in _resolve
+    raise cls._init_err
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 3488, in _seed_roles
+    exist = await db.roles.find_one({"role_id": rid})
+                  ^^^^^^^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 90, in __getattr__
+    return getattr(self.__class__._resolve(), name)
+                   ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\gabyh\OneDrive\Documents\GitHub\Latus-CRM\backend\server.py", line 67, in _resolve
+    raise RuntimeError(
+        "MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy."
+    )
+RuntimeError: MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy.
+2026-06-08 16:13:02,795 - apscheduler.executors.default - INFO - Job "_start_scheduler.<locals>._job (trigger: interval[0:05:00], next run at: 2026-06-08 16:18:02 -03)" executed successfully
