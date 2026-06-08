@@ -1865,7 +1865,7 @@ class BotSettingsUpdate(BaseModel):
 
 _ALLOWED_BOT_MODELS = {
     "gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet-20241022",
-    "gemini-2.0-flash", "gemini-1.5-flash"
+    "gemini-2.0-flash", "gemini-1.5-flash", "claude-sonnet-4-6"
 }
 
 
@@ -1965,34 +1965,6 @@ async def admin_put_ai_provider(payload: dict = Body(...),
 async def admin_test_ai_provider(admin: User = Depends(require_admin)):
     from ai import providers as ai_providers
     return await ai_providers.test_provider_connectivity(db)
-
-
-@api_router.post("/admin/debug-anthropic")
-async def admin_debug_anthropic(admin: User = Depends(require_admin)):
-    from ai import providers as ai_providers
-    import httpx
-    try:
-        provider = await ai_providers.get_provider(db, override_provider="anthropic")
-    except Exception as e:
-        return {"error_get_provider": str(e)}
-        
-    url = "https://api.anthropic.com/v1/models"
-    headers = {
-        "x-api-key": provider.api_key,
-        "anthropic-version": "2023-06-01"
-    }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as cli:
-            r = await cli.get(url, headers=headers)
-            return {
-                "status_code": r.status_code,
-                "headers": dict(r.headers),
-                "body": r.text,
-                "decrypted_key_length": len(provider.api_key) if provider.api_key else 0,
-                "decrypted_key_preview": (provider.api_key[:10] + "..." + provider.api_key[-10:]) if provider.api_key else "",
-            }
-    except Exception as e:
-        return {"error_request": str(e)}
 
 
 # ---------------------------------------------------------------------------
