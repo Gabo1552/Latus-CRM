@@ -2126,6 +2126,10 @@ function EmailSettingsTab() {
         smtp_use_tls: settingsQ.data.smtp_use_tls !== false,
         smtp_use_ssl: !!settingsQ.data.smtp_use_ssl,
         app_base_url: settingsQ.data.app_base_url || "",
+        email_notif_unattended_enabled: settingsQ.data.email_notif_unattended_enabled !== false,
+        email_report_daily_enabled: settingsQ.data.email_report_daily_enabled !== false,
+        email_report_weekly_enabled: settingsQ.data.email_report_weekly_enabled !== false,
+        email_report_monthly_enabled: settingsQ.data.email_report_monthly_enabled !== false,
       });
     }
   }, [settingsQ.data]);
@@ -2162,6 +2166,10 @@ function EmailSettingsTab() {
     smtp_use_tls: settingsQ.data?.smtp_use_tls !== false,
     smtp_use_ssl: !!settingsQ.data?.smtp_use_ssl,
     app_base_url: settingsQ.data?.app_base_url || "",
+    email_notif_unattended_enabled: settingsQ.data?.email_notif_unattended_enabled !== false,
+    email_report_daily_enabled: settingsQ.data?.email_report_daily_enabled !== false,
+    email_report_weekly_enabled: settingsQ.data?.email_report_weekly_enabled !== false,
+    email_report_monthly_enabled: settingsQ.data?.email_report_monthly_enabled !== false,
   }) || !!draft.smtp_password;
 
   const setField = (key, value) => setDraft((prev) => ({ ...prev, [key]: value }));
@@ -2248,6 +2256,65 @@ function EmailSettingsTab() {
               Probar envío
             </Button>
           </div>
+        </div>
+
+        <hr className="border-[#E9E6DC]" />
+
+        <div className="space-y-4">
+          <div>
+            <h4 className="text-sm font-bold text-[#0B1B26]">Notificaciones y Reportes por Correo</h4>
+            <p className="text-xs text-[#888888] mt-0.5">Configurá las notificaciones automáticas y el envío de reportes de leads.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label className="flex items-center gap-3 text-sm text-[#334155] border border-[#E9E6DC] p-3 rounded-sm hover:bg-slate-50 cursor-pointer">
+              <Switch
+                checked={draft.email_notif_unattended_enabled}
+                onCheckedChange={(v) => setField("email_notif_unattended_enabled", v)}
+              />
+              <div>
+                <span className="font-semibold block text-[#0B1B26] text-xs">Leads sin atender</span>
+                <span className="text-[11px] text-[#888888]">Notificar al mail cuando un cliente espera respuesta</span>
+              </div>
+            </label>
+
+            <label className="flex items-center gap-3 text-sm text-[#334155] border border-[#E9E6DC] p-3 rounded-sm hover:bg-slate-50 cursor-pointer">
+              <Switch
+                checked={draft.email_report_daily_enabled}
+                onCheckedChange={(v) => setField("email_report_daily_enabled", v)}
+              />
+              <div>
+                <span className="font-semibold block text-[#0B1B26] text-xs">Reporte Diario</span>
+                <span className="text-[11px] text-[#888888]">Resumen de leads de las últimas 24 horas</span>
+              </div>
+            </label>
+
+            <label className="flex items-center gap-3 text-sm text-[#334155] border border-[#E9E6DC] p-3 rounded-sm hover:bg-slate-50 cursor-pointer">
+              <Switch
+                checked={draft.email_report_weekly_enabled}
+                onCheckedChange={(v) => setField("email_report_weekly_enabled", v)}
+              />
+              <div>
+                <span className="font-semibold block text-[#0B1B26] text-xs">Reporte Semanal</span>
+                <span className="text-[11px] text-[#888888]">Resumen de leads de los últimos 7 días</span>
+              </div>
+            </label>
+
+            <label className="flex items-center gap-3 text-sm text-[#334155] border border-[#E9E6DC] p-3 rounded-sm hover:bg-slate-50 cursor-pointer">
+              <Switch
+                checked={draft.email_report_monthly_enabled}
+                onCheckedChange={(v) => setField("email_report_monthly_enabled", v)}
+              />
+              <div>
+                <span className="font-semibold block text-[#0B1B26] text-xs">Reporte Mensual</span>
+                <span className="text-[11px] text-[#888888]">Resumen de leads de los últimos 30 días</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <hr className="border-[#E9E6DC]" />
+
+        <div className="flex justify-end gap-2">
           <Button
             variant="outline"
             className="rounded-sm"
@@ -2263,13 +2330,17 @@ function EmailSettingsTab() {
               smtp_use_tls: settingsQ.data?.smtp_use_tls !== false,
               smtp_use_ssl: !!settingsQ.data?.smtp_use_ssl,
               app_base_url: settingsQ.data?.app_base_url || "",
+              email_notif_unattended_enabled: settingsQ.data?.email_notif_unattended_enabled !== false,
+              email_report_daily_enabled: settingsQ.data?.email_report_daily_enabled !== false,
+              email_report_weekly_enabled: settingsQ.data?.email_report_weekly_enabled !== false,
+              email_report_monthly_enabled: settingsQ.data?.email_report_monthly_enabled !== false,
             })}
           >
             Descartar cambios
           </Button>
           <Button className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
             {save.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
-            Guardar email
+            Guardar cambios
           </Button>
         </div>
       </div>

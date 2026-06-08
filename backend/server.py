@@ -1516,7 +1516,11 @@ async def list_leads(
         q["status"] = status
     if priority:
         q["priority"] = priority
-    if assigned_to:
+    role = _normalize_role(user.role)
+    is_admin_or_supervisor = role in ("admin", "supervisor")
+    if not is_admin_or_supervisor:
+        q["assigned_to"] = user.user_id
+    elif assigned_to:
         q["assigned_to"] = assigned_to
     docs = await db.leads.find(q, {"_id": 0}).sort("updated_at", -1).to_list(1000)
     # enrich with contact
@@ -1607,6 +1611,31 @@ async def _make_notification(ntype, title, body, entity_type, entity_id, user_id
     )
     await db.notifications.insert_one(notif.model_dump())
 
+    # Send email notification if enabled and it is an unattended lead alert
+    if ntype == "lead_no_response":
+        settings = await get_app_settings()
+        if settings.get("email_notif_unattended_enabled", True):
+            user = await db.users.find_one({"user_id": user_id})
+            if user and user.get("email"):
+                to_email = user["email"].strip().lower()
+                if "@" in to_email:
+                    base_url = _resolve_app_base_url(settings)
+                    link = f"{base_url}/chat" if entity_type == "conversation" else base_url
+                    cname = title.replace("Lead sin respuesta: ", "")
+                    html_content = _build_password_email_html(
+                        title="⚠️ Lead sin atender",
+                        intro=f"Hola {user.get('name', 'Usuario')}, el cliente <strong>{cname}</strong> requiere atención urgente. Lleva más de {settings.get('lead_no_response_threshold_hours', 2)} horas sin recibir respuesta.",
+                        cta_label="Ver Conversación",
+                        cta_url=link,
+                        footer="Recibiste esta notificación porque estás a cargo de este lead o sos administrador del sistema."
+                    )
+                    await send_email_via_settings(
+                        to_email=to_email,
+                        subject=f"⚠️ {title}",
+                        html_body=html_content,
+                        text_body=f"Hola {user.get('name', 'Usuario')}, {body}. Podés verlo en {link}"
+                    )
+
 
 async def _notify_target(assigned_to, ntype, title, body, entity_type, entity_id, priority="medium"):
     """Notify the assigned user, or fall back to all admins + supervisors."""
@@ -1679,6 +1708,13 @@ DEFAULT_SETTINGS = {
     "smtp_use_tls": False if RESEND_API_KEY else True,
     "smtp_use_ssl": True if RESEND_API_KEY else False,
     "app_base_url": APP_BASE_URL,
+    "email_notif_unattended_enabled": True,
+    "email_report_daily_enabled": True,
+    "email_report_weekly_enabled": True,
+    "email_report_monthly_enabled": True,
+    "last_daily_report_at": "",
+    "last_weekly_report_at": "",
+    "last_monthly_report_at": "",
 }
 
 PUBLIC_SETTINGS_KEYS = {
@@ -1691,6 +1727,10 @@ PUBLIC_SETTINGS_KEYS = {
     "business_timezone",
     "task_statuses",
     "catalog_categories",
+    "email_notif_unattended_enabled",
+    "email_report_daily_enabled",
+    "email_report_weekly_enabled",
+    "email_report_monthly_enabled",
 }
 
 
@@ -1737,6 +1777,13 @@ class SettingsUpdate(BaseModel):
     smtp_use_tls: Optional[bool] = None
     smtp_use_ssl: Optional[bool] = None
     app_base_url: Optional[str] = None
+    email_notif_unattended_enabled: Optional[bool] = None
+    email_report_daily_enabled: Optional[bool] = None
+    email_report_weekly_enabled: Optional[bool] = None
+    email_report_monthly_enabled: Optional[bool] = None
+    last_daily_report_at: Optional[str] = None
+    last_weekly_report_at: Optional[str] = None
+    last_monthly_report_at: Optional[str] = None
 
 
 def _slugify_config_key(value: str) -> str:
@@ -2318,7 +2365,11 @@ async def list_conversations(
         q["status"] = status
     if priority:
         q["priority"] = priority
-    if assigned_to:
+    role = _normalize_role(user.role)
+    is_admin_or_supervisor = role in ("admin", "supervisor")
+    if not is_admin_or_supervisor:
+        q["assigned_to"] = user.user_id
+    elif assigned_to:
         q["assigned_to"] = assigned_to
     docs = await db.conversations.find(q, {"_id": 0}).sort("last_message_at", -1).to_list(1000)
     contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(1000)}
@@ -3092,7 +3143,11 @@ async def list_tasks(
     q = {}
     if status:
         q["status"] = status
-    if assigned_to:
+    role = _normalize_role(user.role)
+    is_admin_or_supervisor = role in ("admin", "supervisor")
+    if not is_admin_or_supervisor:
+        q["assigned_to"] = user.user_id
+    elif assigned_to:
         q["assigned_to"] = assigned_to
     docs = await db.tasks.find(q, {"_id": 0}).sort("due_date", 1).to_list(1000)
     leads = {l["id"]: l for l in await db.leads.find({}, {"_id": 0}).to_list(1000)}
@@ -3153,6 +3208,13 @@ async def dashboard_metrics(user: User = Depends(get_current_user)):
     convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
     tasks = await db.tasks.find({}, {"_id": 0}).to_list(2000)
     contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(2000)}
+
+    role = _normalize_role(user.role)
+    is_admin_or_supervisor = role in ("admin", "supervisor")
+    if not is_admin_or_supervisor:
+        leads = [l for l in leads if l.get("assigned_to") == user.user_id]
+        convs = [c for c in convs if c.get("assigned_to") == user.user_id]
+        tasks = [t for t in tasks if t.get("assigned_to") == user.user_id]
 
     by_status = {s: 0 for s in LEAD_STATUSES}
     value_by_status = {s: 0.0 for s in LEAD_STATUSES}
@@ -3221,6 +3283,8 @@ async def dashboard_metrics(user: User = Depends(get_current_user)):
 
     # lead_no_response automation: scan + collect qualifying conversations
     no_response_convs = await scan_lead_no_response()
+    if not is_admin_or_supervisor:
+        no_response_convs = [c for c in no_response_convs if c.get("assigned_to") == user.user_id]
     no_response = [conv_brief(c) for c in no_response_convs]
 
     return {
@@ -3672,6 +3736,198 @@ async def _ensure_indexes() -> None:
         logger.warning("ensure_indexes failed: %s", e)
 
 
+def _build_report_email_html(report_type: str, stats: dict, base_url: str) -> str:
+    title = f"Resumen {report_type.capitalize()} de Leads"
+    def fmt_curr(val: float) -> str:
+        return f"${val:,.2f}"
+    return f"""
+    <div style="font-family: Arial, sans-serif; background-color: #f9f9f7; padding: 24px; color: #0b1b26;">
+      <div style="max-width: 500px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; border: 1px solid #e5e7eb; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+        <div style="background-color: #0b1b26; padding: 24px; text-align: center; color: #ffffff;">
+          <h2 style="margin: 0; font-size: 20px; font-weight: bold; letter-spacing: 0.5px;">Latus CRM</h2>
+          <p style="margin: 4px 0 0 0; font-size: 13px; color: #94a3b8;">{title}</p>
+        </div>
+        <div style="padding: 24px;">
+          <p style="font-size: 15px; margin: 0 0 20px 0; color: #334155; line-height: 1.5;">
+            Hola, te compartimos el resumen de rendimiento y estado de los leads de tu CRM correspondiente al periodo de este reporte.
+          </p>
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
+            <thead>
+              <tr style="border-bottom: 2px solid #e2e8f0;">
+                <th style="text-align: left; padding: 8px 0; font-size: 12px; font-weight: 600; color: #64748b; text-transform: uppercase;">Métrica</th>
+                <th style="text-align: right; padding: 8px 0; font-size: 12px; font-weight: 600; color: #64748b; text-transform: uppercase;">Resultado</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 12px 0; font-size: 14px; color: #0b1b26; font-weight: 500;">Nuevos Leads Creados</td>
+                <td style="padding: 12px 0; font-size: 14px; color: #0b1b26; font-weight: bold; text-align: right;">{stats['new_count']} <span style="font-size: 12px; color: #64748b; font-weight: normal;">({fmt_curr(stats['new_value'])})</span></td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 12px 0; font-size: 14px; color: #16a34a; font-weight: 500;">Leads Ganados</td>
+                <td style="padding: 12px 0; font-size: 14px; color: #16a34a; font-weight: bold; text-align: right;">{stats['won_count']} <span style="font-size: 12px; color: #16a34a; font-weight: normal;">({fmt_curr(stats['won_value'])})</span></td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 12px 0; font-size: 14px; color: #dc2626; font-weight: 500;">Leads Perdidos</td>
+                <td style="padding: 12px 0; font-size: 14px; color: #dc2626; font-weight: bold; text-align: right;">{stats['lost_count']}</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 12px 0; font-size: 14px; color: #ea580c; font-weight: 500;">Clientes Sin Atender</td>
+                <td style="padding: 12px 0; font-size: 14px; color: #ea580c; font-weight: bold; text-align: right;">{stats['unattended_count']}</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;">
+                <td style="padding: 12px 6px; font-size: 14px; color: #0b1b26; font-weight: 600;">Valor del Pipeline Activo</td>
+                <td style="padding: 12px 6px; font-size: 14px; color: #0b1b26; font-weight: bold; text-align: right;">{fmt_curr(stats['active_value'])}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="text-align: center; margin-top: 30px; margin-bottom: 10px;">
+            <a href="{base_url}" style="background-color: #0b1b26; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-size: 14px; font-weight: bold; display: inline-block;">Abrir Latus CRM</a>
+          </div>
+        </div>
+        <div style="background-color: #f8fafc; padding: 16px; text-align: center; border-top: 1px solid #e2e8f0;">
+          <p style="margin: 0; font-size: 11px; color: #64748b; line-height: 1.4;">
+            Este reporte fue auto-generado por Latus CRM.<br/>Podés desactivar estos resúmenes desde el panel de Configuración en cualquier momento.
+          </p>
+        </div>
+      </div>
+    </div>
+    """.strip()
+
+
+async def generate_leads_summary_report(days_back: int) -> dict:
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(days=days_back)
+    leads = await db.leads.find({}, {"_id": 0}).to_list(10000)
+    new_leads_count = 0
+    new_leads_value = 0.0
+    won_leads_count = 0
+    won_leads_value = 0.0
+    lost_leads_count = 0
+    total_active_value = 0.0
+    for l in leads:
+        try:
+            created_at = datetime.fromisoformat(l.get("created_at").replace("Z", "+00:00"))
+        except Exception:
+            created_at = None
+        try:
+            updated_at = datetime.fromisoformat(l.get("updated_at").replace("Z", "+00:00"))
+        except Exception:
+            updated_at = None
+        status = l.get("status", "new")
+        val = float(l.get("value") or 0.0)
+        if created_at and created_at >= cutoff:
+            new_leads_count += 1
+            new_leads_value += val
+        if status == "won":
+            if updated_at and updated_at >= cutoff:
+                won_leads_count += 1
+                won_leads_value += val
+        elif status == "lost":
+            if updated_at and updated_at >= cutoff:
+                lost_leads_count += 1
+        else:
+            total_active_value += val
+    unattended_count = await db.notifications.count_documents({
+        "type": "lead_no_response",
+        "is_read": False
+    })
+    return {
+        "new_count": new_leads_count,
+        "new_value": new_leads_value,
+        "won_count": won_leads_count,
+        "won_value": won_leads_value,
+        "lost_count": lost_leads_count,
+        "active_value": total_active_value,
+        "unattended_count": unattended_count
+    }
+
+
+async def check_and_send_scheduled_reports():
+    settings = await get_app_settings()
+    now_utc = datetime.now(timezone.utc)
+    daily_enabled = bool(settings.get("email_report_daily_enabled", True))
+    weekly_enabled = bool(settings.get("email_report_weekly_enabled", True))
+    monthly_enabled = bool(settings.get("email_report_monthly_enabled", True))
+    last_daily = settings.get("last_daily_report_at")
+    last_weekly = settings.get("last_weekly_report_at")
+    last_monthly = settings.get("last_monthly_report_at")
+    run_daily = False
+    run_weekly = False
+    run_monthly = False
+    updates = {}
+    if daily_enabled:
+        if not last_daily:
+            run_daily = True
+        else:
+            try:
+                dt_daily = datetime.fromisoformat(last_daily.replace("Z", "+00:00"))
+                if now_utc - dt_daily >= timedelta(hours=24):
+                    run_daily = True
+            except Exception:
+                run_daily = True
+    if weekly_enabled:
+        if not last_weekly:
+            run_weekly = True
+        else:
+            try:
+                dt_weekly = datetime.fromisoformat(last_weekly.replace("Z", "+00:00"))
+                if now_utc - dt_weekly >= timedelta(days=7):
+                    run_weekly = True
+            except Exception:
+                run_weekly = True
+    if monthly_enabled:
+        if not last_monthly:
+            run_monthly = True
+        else:
+            try:
+                dt_monthly = datetime.fromisoformat(last_monthly.replace("Z", "+00:00"))
+                if now_utc - dt_monthly >= timedelta(days=30):
+                    run_monthly = True
+            except Exception:
+                run_monthly = True
+    if run_daily or run_weekly or run_monthly:
+        leaders = await db.users.find({"role": {"$in": ["admin", "supervisor"]}}, {"_id": 0}).to_list(100)
+        recipients = [u["email"].strip().lower() for u in leaders if u.get("email") and "@" in u["email"]]
+        if recipients:
+            base_url = _resolve_app_base_url(settings)
+            if run_daily:
+                stats = await generate_leads_summary_report(1)
+                html_body = _build_report_email_html("diario", stats, base_url)
+                for email in recipients:
+                    await send_email_via_settings(
+                        to_email=email,
+                        subject="📊 Resumen Diario de Leads - Latus CRM",
+                        html_body=html_body,
+                        text_body=f"Resumen diario de Latus CRM. Nuevos leads: {stats['new_count']}. Ganados: {stats['won_count']}. Valor activo: ${stats['active_value']}."
+                    )
+                updates["last_daily_report_at"] = now_utc.isoformat()
+            if run_weekly:
+                stats = await generate_leads_summary_report(7)
+                html_body = _build_report_email_html("semanal", stats, base_url)
+                for email in recipients:
+                    await send_email_via_settings(
+                        to_email=email,
+                        subject="📊 Resumen Semanal de Leads - Latus CRM",
+                        html_body=html_body,
+                        text_body=f"Resumen semanal de Latus CRM. Nuevos leads: {stats['new_count']}. Ganados: {stats['won_count']}. Valor activo: ${stats['active_value']}."
+                    )
+                updates["last_weekly_report_at"] = now_utc.isoformat()
+            if run_monthly:
+                stats = await generate_leads_summary_report(30)
+                html_body = _build_report_email_html("mensual", stats, base_url)
+                for email in recipients:
+                    await send_email_via_settings(
+                        to_email=email,
+                        subject="📊 Resumen Mensual de Leads - Latus CRM",
+                        html_body=html_body,
+                        text_body=f"Resumen mensual de Latus CRM. Nuevos leads: {stats['new_count']}. Ganados: {stats['won_count']}. Valor activo: ${stats['active_value']}."
+                    )
+                updates["last_monthly_report_at"] = now_utc.isoformat()
+    if updates:
+        await db.settings.update_one({"key": "app"}, {"$set": updates}, upsert=True)
+
+
 # ---------------------------------------------------------------------------
 # Scheduler: lead-no-response scan every 5 minutes
 # ---------------------------------------------------------------------------
@@ -3699,6 +3955,10 @@ def _start_scheduler():
             await scan_lead_no_response()
         except Exception:  # pragma: no cover - log only
             logger.exception("scheduled scan_lead_no_response failed")
+        try:
+            await check_and_send_scheduled_reports()
+        except Exception:  # pragma: no cover - log only
+            logger.exception("scheduled check_and_send_scheduled_reports failed")
 
     sched.add_job(
         _job,

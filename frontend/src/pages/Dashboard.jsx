@@ -9,13 +9,16 @@ import api from "@/lib/api";
 import AppLayout from "@/components/AppLayout";
 import { LEAD_STATUSES, CONV_STATUSES, money, statusMeta } from "@/lib/constants";
 import { StatusBadge, Avatar } from "@/components/Bits";
+import { useAuth } from "@/context/AuthContext";
 
 function Metric({ icon: Icon, label, value, sub, testid }) {
   return (
-    <div className="bg-white border border-[#E9E6DC] rounded-sm p-5 hover:border-zinc-300 transition-colors" data-testid={testid}>
+    <div className="bg-white border border-[#E9E6DC] rounded-sm p-5 hover:border-zinc-400 hover:shadow-sm hover:-translate-y-0.5 transition-all duration-300" data-testid={testid}>
       <div className="flex items-center justify-between mb-3">
         <span className="text-xs tracking-[0.15em] uppercase font-bold text-[#888888]">{label}</span>
-        <Icon className="h-4 w-4 text-[#0E8DDB]" />
+        <div className="p-1.5 bg-[#E6F4FE] rounded-full">
+          <Icon className="h-4 w-4 text-[#0E8DDB]" />
+        </div>
       </div>
       <p className="text-3xl font-extrabold tracking-tighter text-[#0B1B26]">{value}</p>
       {sub && <p className="text-xs text-[#888888] mt-1">{sub}</p>}
@@ -42,6 +45,7 @@ function AttnColumn({ icon: Icon, title, count, children, testid }) {
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const { data: m } = useQuery({ queryKey: ["metrics"], queryFn: () => api.get("/dashboard/metrics").then((r) => r.data) });
   const { data: convs = [] } = useQuery({ queryKey: ["convs-recent"], queryFn: () => api.get("/conversations").then((r) => r.data) });
 
@@ -52,9 +56,33 @@ export default function Dashboard() {
   const attn = m?.requires_attention || { open_handoffs: [], unread_conversations: [], overdue_tasks: [], no_response: [] };
   const attnTotal = attn.open_handoffs.length + attn.unread_conversations.length + attn.overdue_tasks.length + (attn.no_response?.length || 0);
 
+  const role = user?.role ? user.role.toLowerCase() : "";
+  const isAdminOrSupervisor = role === "admin" || role === "supervisor";
+
   return (
     <AppLayout title="Panel principal">
       <div className="p-6 md:p-8 space-y-6 animate-in fade-in duration-300">
+        
+        {/* Welcome Section */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-[#E9E6DC] rounded-sm p-6 hover:shadow-sm transition-all duration-300">
+          <div>
+            <h2 className="text-xl font-bold tracking-tight text-[#0B1B26] flex items-center gap-2">
+              ¡Hola, {user?.name || "Usuario"}! 👋
+            </h2>
+            <p className="text-sm text-[#888888] mt-1">
+              {isAdminOrSupervisor 
+                ? "Este es el resumen general del rendimiento y actividad de Latus CRM."
+                : "Este es el resumen de tus leads, conversaciones y tareas asignadas."}
+            </p>
+          </div>
+          {isAdminOrSupervisor && (
+            <div className="flex items-center gap-2 bg-[#E6F4FE] text-[#0E8DDB] font-semibold text-xs px-3 py-1.5 rounded-full border border-[#D0ECFD] w-fit">
+              <span className="h-1.5 w-1.5 rounded-full bg-[#0E8DDB] animate-pulse" />
+              Vista Administrador
+            </div>
+          )}
+        </div>
+
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Metric icon={DollarSign} label="Valor del pipeline" value={money(m?.pipeline_value)} sub={`${money(m?.won_value)} ganado`} testid="metric-pipeline" />
           <Metric icon={Target} label="Leads activos" value={m?.total_leads ?? "—"} sub={`${m?.total_contacts ?? 0} contactos`} testid="metric-leads" />
