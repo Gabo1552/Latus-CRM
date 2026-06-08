@@ -44,7 +44,8 @@ function monthStart()  { const d = new Date(); d.setDate(1); return d.toISOStrin
 
 export default function ConsumoIA() {
   const { user } = useAuth();
-  const isAdmin = user && user.role === "admin";
+  const perms = user?.permissions || [];
+  const isAdmin = perms.includes("configure_ai");
 
   const [filters, setFilters] = useState({
     from: monthStart(),

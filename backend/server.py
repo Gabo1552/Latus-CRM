@@ -137,6 +137,44 @@ def _normalize_role(r: str | None) -> str:
         return "agent"
     return LEGACY_ROLE_MAP.get(r, r)
 
+
+DEFAULT_ROLE_PERMISSIONS = {
+    "admin": ["manage_users", "configure_whatsapp", "configure_ai", "manage_settings", "write_catalog", "message_any", "trigger_bot_any", "write_crm"],
+    "supervisor": ["write_catalog", "trigger_bot_any", "write_crm"],
+    "agent": ["write_crm"],
+    "viewer": []
+}
+
+
+async def get_role_permissions(role: str) -> list[str]:
+    try:
+        doc = await db.roles.find_one({"role_id": role})
+        if doc and "permissions" in doc:
+            return list(doc["permissions"])
+    except Exception:
+        pass
+    return list(DEFAULT_ROLE_PERMISSIONS.get(role, []))
+
+
+async def get_all_roles() -> set[str]:
+    roles_set = set(ROLES)
+    try:
+        custom = await db.roles.find({}, {"_id": 0, "role_id": 1}).to_list(100)
+        roles_set.update(r["role_id"] for r in custom)
+    except Exception:
+        pass
+    return roles_set
+
+
+def require_perm(permission: str):
+    """Dependency factory: check if the current user has the required permission."""
+    async def _dep(user: User = Depends(get_current_user)) -> User:
+        perms = await get_role_permissions(user.role)
+        if permission not in perms:
+            raise HTTPException(status_code=403, detail="Permiso insuficiente")
+        return user
+    return _dep
+
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
@@ -150,6 +188,7 @@ class User(BaseModel):
     active: bool = True
     auth_provider: str = "google"   # one of: google | local | both
     last_login_at: Optional[str] = None
+    permissions: Optional[List[str]] = None
     created_at: str = Field(default_factory=now_iso)
 
     @field_validator("created_at", mode="before")
@@ -366,7 +405,9 @@ async def get_current_user(request: Request) -> User:
         raise HTTPException(status_code=401, detail="User not found")
     if not user_doc.get("active", True):
         raise HTTPException(status_code=403, detail="Account deactivated")
-    return User(**user_doc)
+    user = User(**user_doc)
+    user.permissions = await get_role_permissions(user.role)
+    return user
 
 
 async def require_admin(user: User = Depends(get_current_user)) -> User:
@@ -393,7 +434,8 @@ def require_role(*allowed_roles: str):
 
 # Convenience: blocks viewer everywhere on write paths.
 async def require_write(user: User = Depends(get_current_user)) -> User:
-    if user.role == "viewer":
+    perms = await get_role_permissions(user.role)
+    if "write_crm" not in perms:
         raise HTTPException(status_code=403, detail="Sin permisos")
     return user
 
@@ -468,7 +510,9 @@ async def process_session(request: Request, response: Response):
         secure=True, samesite="none", path="/", max_age=7 * 24 * 60 * 60,
     )
     user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
-    return User(**user_doc)
+    user = User(**user_doc)
+    user.permissions = await get_role_permissions(user.role)
+    return user
 
 
 @api_router.get("/auth/me", response_model=User)
@@ -554,7 +598,9 @@ async def auth_login(payload: LocalLoginBody, response: Response):
     await _issue_session(user["user_id"], response)
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"last_login_at": now_iso()}})
     user_doc = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
-    return User(**user_doc)
+    user_obj = User(**user_doc)
+    user_obj.permissions = await get_role_permissions(user_obj.role)
+    return user_obj
 
 
 @api_router.post("/auth/password/change")
@@ -578,8 +624,106 @@ async def auth_change_password(payload: ChangePasswordBody, user: User = Depends
 
 
 # ---------------------------------------------------------------------------
+# Admin · Roles CRUD
+# ---------------------------------------------------------------------------
+
+class RoleCreate(BaseModel):
+    role_id: str
+    name: str
+    permissions: List[str] = []
+
+class RoleUpdatePayload(BaseModel):
+    name: Optional[str] = None
+    permissions: List[str]
+
+@api_router.get("/roles")
+async def list_roles(user: User = Depends(require_perm("manage_users"))):
+    docs = await db.roles.find({}, {"_id": 0}).to_list(100)
+    # If empty, return defaults
+    if not docs:
+        docs = [
+            {"role_id": rid, "name": rid.capitalize(), "permissions": perms, "is_default": True}
+            for rid, perms in DEFAULT_ROLE_PERMISSIONS.items()
+        ]
+    return docs
+
+@api_router.post("/roles")
+async def create_custom_role(payload: RoleCreate, user: User = Depends(require_perm("manage_users"))):
+    rid = payload.role_id.strip().lower()
+    if not rid or not payload.name.strip():
+        raise HTTPException(status_code=400, detail="ID de rol y nombre son requeridos")
+    if rid in DEFAULT_ROLE_PERMISSIONS:
+        raise HTTPException(status_code=400, detail="No se puede sobreescribir un rol del sistema")
+    
+    # Check if exists
+    exist = await db.roles.find_one({"role_id": rid})
+    if exist:
+        raise HTTPException(status_code=400, detail="El rol ya existe")
+        
+    doc = {
+        "role_id": rid,
+        "name": payload.name.strip(),
+        "permissions": payload.permissions,
+        "is_default": False
+    }
+    await db.roles.insert_one(doc)
+    # Add to global ROLES list so it's recognized as a valid role
+    if rid not in ROLES:
+        ROLES.append(rid)
+    return {"ok": True, "role": doc}
+
+@api_router.put("/roles/{role_id}")
+async def update_role(role_id: str, payload: RoleUpdatePayload, user: User = Depends(require_perm("manage_users"))):
+    rid = role_id.strip().lower()
+    exist = await db.roles.find_one({"role_id": rid})
+    if not exist:
+        # If it's a default role, we can create/upsert it in DB
+        if rid in DEFAULT_ROLE_PERMISSIONS:
+            doc = {
+                "role_id": rid,
+                "name": rid.capitalize(),
+                "permissions": payload.permissions,
+                "is_default": True
+            }
+            await db.roles.insert_one(doc)
+            return {"ok": True, "role": doc}
+        raise HTTPException(status_code=404, detail="Rol no encontrado")
+        
+    update = {"permissions": payload.permissions}
+    if payload.name:
+        update["name"] = payload.name.strip()
+        
+    await db.roles.update_one({"role_id": rid}, {"$set": update})
+    return {"ok": True}
+
+@api_router.delete("/roles/{role_id}")
+async def delete_custom_role(role_id: str, user: User = Depends(require_perm("manage_users"))):
+    rid = role_id.strip().lower()
+    if rid in DEFAULT_ROLE_PERMISSIONS:
+        raise HTTPException(status_code=400, detail="No se pueden borrar roles del sistema")
+        
+    exist = await db.roles.find_one({"role_id": rid})
+    if not exist:
+        raise HTTPException(status_code=404, detail="Rol no encontrado")
+        
+    # Check if any user is currently using this role
+    in_use = await db.users.find_one({"role": rid})
+    if in_use:
+        raise HTTPException(status_code=400, detail="No se puede borrar el rol porque está siendo usado por uno o más usuarios")
+        
+    await db.roles.delete_one({"role_id": rid})
+    if rid in ROLES:
+        try:
+            ROLES.remove(rid)
+        except ValueError:
+            pass
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # Admin · Users CRUD
 # ---------------------------------------------------------------------------
+
 
 class AdminUserCreate(BaseModel):
     email: str
@@ -621,7 +765,7 @@ def _public_user(d: dict) -> dict:
 
 @api_router.get("/admin/users")
 async def admin_list_users(
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_perm("manage_users")),
     q: Optional[str] = None,
     role: Optional[str] = None,
     is_active: Optional[bool] = None,
@@ -646,7 +790,7 @@ async def admin_list_users(
 
 
 @api_router.get("/admin/users/{uid}")
-async def admin_get_user(uid: str, admin: User = Depends(require_admin)):
+async def admin_get_user(uid: str, admin: User = Depends(require_perm("manage_users"))):
     d = await db.users.find_one({"user_id": uid}, {"_id": 0})
     if not d:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -654,11 +798,12 @@ async def admin_get_user(uid: str, admin: User = Depends(require_admin)):
 
 
 @api_router.post("/admin/users")
-async def admin_create_user(payload: AdminUserCreate, admin: User = Depends(require_admin)):
+async def admin_create_user(payload: AdminUserCreate, admin: User = Depends(require_perm("manage_users"))):
     email = (payload.email or "").lower().strip()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Email inválido")
-    if payload.role not in ROLES:
+    valid_roles = await get_all_roles()
+    if payload.role not in valid_roles:
         raise HTTPException(status_code=400, detail="Rol inválido")
     ap = (payload.auth_provider or "").lower()
     if ap not in AUTH_PROVIDERS:
@@ -702,7 +847,7 @@ async def _count_active_admins() -> int:
 
 
 @api_router.patch("/admin/users/{uid}")
-async def admin_update_user(uid: str, payload: AdminUserUpdate, admin: User = Depends(require_admin)):
+async def admin_update_user(uid: str, payload: AdminUserUpdate, admin: User = Depends(require_perm("manage_users"))):
     target = await db.users.find_one({"user_id": uid}, {"_id": 0})
     if not target:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -710,7 +855,8 @@ async def admin_update_user(uid: str, payload: AdminUserUpdate, admin: User = De
     if payload.name is not None:
         update["name"] = payload.name.strip()
     if payload.role is not None:
-        if payload.role not in ROLES:
+        valid_roles = await get_all_roles()
+        if payload.role not in valid_roles:
             raise HTTPException(status_code=400, detail="Rol inválido")
         # Don't allow demoting the last admin
         if target.get("role") == "admin" and payload.role != "admin":
@@ -740,17 +886,17 @@ async def admin_update_user(uid: str, payload: AdminUserUpdate, admin: User = De
 
 
 @api_router.post("/admin/users/{uid}/activate")
-async def admin_activate(uid: str, admin: User = Depends(require_admin)):
+async def admin_activate(uid: str, admin: User = Depends(require_perm("manage_users"))):
     return await admin_update_user(uid, AdminUserUpdate(is_active=True), admin=admin)
 
 
 @api_router.post("/admin/users/{uid}/deactivate")
-async def admin_deactivate(uid: str, admin: User = Depends(require_admin)):
+async def admin_deactivate(uid: str, admin: User = Depends(require_perm("manage_users"))):
     return await admin_update_user(uid, AdminUserUpdate(is_active=False), admin=admin)
 
 
 @api_router.post("/admin/users/{uid}/reset-password")
-async def admin_reset_password(uid: str, admin: User = Depends(require_admin)):
+async def admin_reset_password(uid: str, admin: User = Depends(require_perm("manage_users"))):
     target = await db.users.find_one({"user_id": uid}, {"_id": 0})
     if not target:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -770,7 +916,7 @@ async def admin_reset_password(uid: str, admin: User = Depends(require_admin)):
 
 
 @api_router.delete("/admin/users/{uid}")
-async def admin_delete_user(uid: str, admin: User = Depends(require_admin)):
+async def admin_delete_user(uid: str, admin: User = Depends(require_perm("manage_users"))):
     target = await db.users.find_one({"user_id": uid}, {"_id": 0})
     if not target:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -846,7 +992,7 @@ def _webhook_url(request: Request) -> tuple[str, str]:
 
 
 @api_router.get("/admin/whatsapp/config")
-async def admin_wa_config_get(request: Request, admin: User = Depends(require_admin)):
+async def admin_wa_config_get(request: Request, admin: User = Depends(require_perm("configure_whatsapp"))):
     env = _wa_env_values()
     fields = await per_field_sources(db, env)
     cfg = await wa_config_effective(db)
@@ -868,7 +1014,7 @@ async def admin_wa_config_get(request: Request, admin: User = Depends(require_ad
 
 
 @api_router.put("/admin/whatsapp/config")
-async def admin_wa_config_put(payload: WhatsAppConfigUpdate, admin: User = Depends(require_admin)):
+async def admin_wa_config_put(payload: WhatsAppConfigUpdate, admin: User = Depends(require_perm("configure_whatsapp"))):
     if not crypto_available():
         raise HTTPException(
             status_code=503,
@@ -894,7 +1040,7 @@ async def admin_wa_config_put(payload: WhatsAppConfigUpdate, admin: User = Depen
 
 
 @api_router.post("/admin/whatsapp/test-connection")
-async def admin_wa_test_connection(admin: User = Depends(require_admin)):
+async def admin_wa_test_connection(admin: User = Depends(require_perm("configure_whatsapp"))):
     cfg = await wa_config_effective(db)
     if not (cfg.access_token and cfg.phone_number_id):
         raise HTTPException(status_code=503, detail="WhatsApp no configurado")
@@ -925,7 +1071,7 @@ async def admin_wa_test_connection(admin: User = Depends(require_admin)):
 
 
 @api_router.post("/admin/whatsapp/rotate-verify-token")
-async def admin_wa_rotate_verify_token(admin: User = Depends(require_admin)):
+async def admin_wa_rotate_verify_token(admin: User = Depends(require_perm("configure_whatsapp"))):
     if not crypto_available():
         raise HTTPException(
             status_code=503,
@@ -938,7 +1084,7 @@ async def admin_wa_rotate_verify_token(admin: User = Depends(require_admin)):
 
 
 @api_router.post("/admin/whatsapp/test-webhook-verify")
-async def admin_wa_test_webhook_verify(request: Request, admin: User = Depends(require_admin)):
+async def admin_wa_test_webhook_verify(request: Request, admin: User = Depends(require_perm("configure_whatsapp"))):
     """Self-test: hit our own GET /api/webhooks/whatsapp the same way Meta does.
 
     This proves the URL is publicly reachable AND the configured verify_token
@@ -1011,8 +1157,9 @@ async def list_users(user: User = Depends(get_current_user)):
 
 
 @api_router.patch("/users/{user_id}", response_model=User)
-async def update_user(user_id: str, payload: RoleUpdate, admin: User = Depends(require_admin)):
-    if payload.role not in ROLES:
+async def update_user(user_id: str, payload: RoleUpdate, admin: User = Depends(require_perm("manage_users"))):
+    valid_roles = await get_all_roles()
+    if payload.role not in valid_roles:
         raise HTTPException(status_code=400, detail="Invalid role")
     update = {"role": payload.role}
     if payload.active is not None:
@@ -1303,7 +1450,7 @@ async def read_settings(user: User = Depends(get_current_user)):
 
 
 @api_router.patch("/settings")
-async def update_settings(payload: SettingsUpdate, admin: User = Depends(require_admin)):
+async def update_settings(payload: SettingsUpdate, admin: User = Depends(require_perm("manage_settings"))):
     update = {k: v for k, v in payload.model_dump().items() if v is not None}
     if "lead_no_response_threshold_hours" in update:
         update["lead_no_response_threshold_hours"] = max(1, int(update["lead_no_response_threshold_hours"]))
@@ -1649,8 +1796,9 @@ async def send_whatsapp(conv_id: str, payload: WhatsAppSend, user: User = Depend
     conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    if user.role != "admin" and conv.get("assigned_to") != user.user_id:
-        raise HTTPException(status_code=403, detail="Solo el operador asignado o un administrador pueden enviar mensajes a esta conversación")
+    perms = await get_role_permissions(user.role)
+    if "message_any" not in perms and conv.get("assigned_to") != user.user_id:
+        raise HTTPException(status_code=403, detail="Solo el operador asignado o un usuario con permisos pueden enviar mensajes a esta conversación")
     contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0})
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
@@ -1702,7 +1850,8 @@ async def send_whatsapp(conv_id: str, payload: WhatsAppSend, user: User = Depend
 
 @api_router.get("/admin/whatsapp/status")
 async def admin_whatsapp_status(user: User = Depends(get_current_user)):
-    if user.role not in ("admin", "supervisor"):
+    perms = await get_role_permissions(user.role)
+    if "configure_whatsapp" not in perms:
         raise HTTPException(status_code=403, detail="Acceso restringido")
     cfg = await wa_config_effective(db)
     status_doc = await _wa_get_status_doc()
@@ -1759,8 +1908,9 @@ async def send_message(conv_id: str, payload: MessageCreate, user: User = Depend
     conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    if user.role != "admin" and conv.get("assigned_to") != user.user_id:
-        raise HTTPException(status_code=403, detail="Solo el operador asignado o un administrador pueden enviar mensajes a esta conversación")
+    perms = await get_role_permissions(user.role)
+    if "message_any" not in perms and conv.get("assigned_to") != user.user_id:
+        raise HTTPException(status_code=403, detail="Solo el operador asignado o un usuario con permisos pueden enviar mensajes a esta conversación")
     contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0})
     sender_name = user.name if payload.sender_type == "agent" else (
         contact["name"] if (payload.sender_type == "contact" and contact) else "Bot"
@@ -1934,7 +2084,7 @@ _ALLOWED_BOT_MODELS = {
 
 
 @api_router.get("/admin/bot-settings")
-async def admin_get_bot_settings(admin: User = Depends(require_admin)):
+async def admin_get_bot_settings(admin: User = Depends(require_perm("configure_ai"))):
     from ai.pipeline import DEFAULT_BOT_SETTINGS
     doc = await db.bot_settings.find_one({"_id": "default"}, {"_id": 0}) or {}
     return {**DEFAULT_BOT_SETTINGS, **doc}
@@ -1942,7 +2092,7 @@ async def admin_get_bot_settings(admin: User = Depends(require_admin)):
 
 @api_router.patch("/admin/bot-settings")
 async def admin_patch_bot_settings(payload: BotSettingsUpdate,
-                                   admin: User = Depends(require_admin)):
+                                   admin: User = Depends(require_perm("configure_ai"))):
     update = {k: v for k, v in payload.model_dump().items() if v is not None}
     if "confidence_threshold" in update:
         v = float(update["confidence_threshold"])
@@ -2003,7 +2153,7 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
 
 
 @api_router.get("/admin/ai-provider")
-async def admin_get_ai_provider(admin: User = Depends(require_admin)):
+async def admin_get_ai_provider(admin: User = Depends(require_perm("configure_ai"))):
     from ai import providers as ai_providers
     s = await ai_providers.load_settings(db)
     # never leak the encrypted blob or the plain key
@@ -2024,7 +2174,7 @@ async def admin_get_ai_provider(admin: User = Depends(require_admin)):
 
 @api_router.put("/admin/ai-provider")
 async def admin_put_ai_provider(payload: dict = Body(...),
-                                admin: User = Depends(require_admin)):
+                                admin: User = Depends(require_perm("configure_ai"))):
     from ai import providers as ai_providers
     current = await ai_providers.load_settings(db)
     try:
@@ -2036,7 +2186,7 @@ async def admin_put_ai_provider(payload: dict = Body(...),
 
 
 @api_router.post("/admin/ai-provider/test")
-async def admin_test_ai_provider(admin: User = Depends(require_admin)):
+async def admin_test_ai_provider(admin: User = Depends(require_perm("configure_ai"))):
     from ai import providers as ai_providers
     return await ai_providers.test_provider_connectivity(db)
 
@@ -2080,7 +2230,7 @@ async def admin_ai_usage_summary(
     to: str | None = Query(None),
     model: str | None = None,
     status: str | None = None,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_perm("configure_ai")),
 ):
     f, t = _date_bounds(from_, to)
     q = _build_usage_filter(f, t, model, status)
@@ -2136,7 +2286,7 @@ async def admin_ai_usage_logs(
     conversation_id: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_perm("configure_ai")),
 ):
     f, t = _date_bounds(from_, to)
     q = _build_usage_filter(f, t, model, status, conversation_id)
@@ -2148,7 +2298,7 @@ async def admin_ai_usage_logs(
 
 
 @api_router.get("/admin/ai-usage/quick")
-async def admin_ai_usage_quick(admin: User = Depends(require_admin)):
+async def admin_ai_usage_quick(admin: User = Depends(require_perm("configure_ai"))):
     today = datetime.now(timezone.utc).date()
     today_iso_f = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc).isoformat()
     month_iso_f = datetime.combine(today.replace(day=1), datetime.min.time(),
@@ -2183,7 +2333,7 @@ async def admin_ai_usage_quick(admin: User = Depends(require_admin)):
 
 
 @api_router.get("/admin/ai-pricing")
-async def admin_ai_pricing_get(admin: User = Depends(require_admin)):
+async def admin_ai_pricing_get(admin: User = Depends(require_perm("configure_ai"))):
     from ai import usage as ai_usage
     pricing = await ai_usage.load_pricing(db)
     return {"models": pricing, "defaults": ai_usage.DEFAULT_PRICING}
@@ -2197,7 +2347,7 @@ class AIPriceItem(BaseModel):
 
 @api_router.put("/admin/ai-pricing")
 async def admin_ai_pricing_put(item: AIPriceItem,
-                               admin: User = Depends(require_admin)):
+                               admin: User = Depends(require_perm("configure_ai"))):
     from ai import usage as ai_usage
     try:
         result = await ai_usage.save_pricing(db, item.model, item.input_per_million,
@@ -2209,7 +2359,7 @@ async def admin_ai_pricing_put(item: AIPriceItem,
 
 
 @api_router.post("/admin/ai-pricing/reset")
-async def admin_ai_pricing_reset(admin: User = Depends(require_admin)):
+async def admin_ai_pricing_reset(admin: User = Depends(require_perm("configure_ai"))):
     from ai import usage as ai_usage
     result = await ai_usage.reset_pricing(db, user_id=admin.user_id)
     return {"models": result, "defaults": ai_usage.DEFAULT_PRICING}
@@ -2221,7 +2371,8 @@ async def admin_ai_pricing_reset(admin: User = Depends(require_admin)):
 
 
 async def require_catalog_writer(user: User = Depends(get_current_user)) -> User:
-    if user.role not in ("admin", "supervisor"):
+    perms = await get_role_permissions(user.role)
+    if "write_catalog" not in perms:
         raise HTTPException(403, "Permiso insuficiente")
     return user
 
@@ -2384,9 +2535,10 @@ async def catalog_stats(user: User = Depends(get_current_user)):
 
 
 async def _can_use_bot_for_conv(conv: dict, user: User) -> bool:
-    if user.role == "viewer":
+    perms = await get_role_permissions(user.role)
+    if "write_crm" not in perms:
         return False
-    if user.role in ("admin", "supervisor"):
+    if "trigger_bot_any" in perms:
         return True
     return conv.get("assigned_to") == user.user_id
 
@@ -2722,7 +2874,7 @@ async def ai_suggest(conv_id: str, user: User = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 
 @api_router.post("/seed")
-async def reseed(admin: User = Depends(require_admin)):
+async def reseed(admin: User = Depends(require_perm("manage_settings"))):
     await _seed(force=True)
     await backfill_notifications()
     return {"ok": True}
@@ -2912,6 +3064,26 @@ async def _seed(force: bool = False):
     await db.settings.update_one({"key": "seeded"}, {"$set": {"key": "seeded", "at": now_iso()}}, upsert=True)
 
 
+async def _seed_roles():
+    """Seed the default roles in db.roles if they do not exist."""
+    try:
+        for rid, perms in DEFAULT_ROLE_PERMISSIONS.items():
+            exist = await db.roles.find_one({"role_id": rid})
+            if not exist:
+                await db.roles.update_one(
+                    {"role_id": rid},
+                    {"$set": {
+                        "role_id": rid,
+                        "name": rid.capitalize(),
+                        "permissions": perms,
+                        "is_default": True
+                    }},
+                    upsert=True
+                )
+    except Exception as e:
+        logger.exception("Error seeding roles: %s", str(e))
+
+
 @app.on_event("startup")
 async def on_startup():
     """Best-effort, non-blocking startup.
@@ -2927,6 +3099,7 @@ async def on_startup():
             logger.exception("background startup step '%s' failed", step_name)
 
     # Schedule (but DO NOT await) the DB-touching jobs.
+    asyncio.create_task(_bg_step("_seed_roles", _seed_roles()))
     asyncio.create_task(_bg_step("_seed", _seed(force=False)))
     asyncio.create_task(_bg_step("backfill_notifications", backfill_notifications()))
     asyncio.create_task(_bg_step("_ensure_indexes", _ensure_indexes()))
@@ -3144,7 +3317,8 @@ async def block_viewer_on_writes(request: Request, call_next):
                     user_doc = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
                     if user_doc:
                         role = _normalize_role(user_doc.get("role"))
-                        if role == "viewer":
+                        perms = await get_role_permissions(role)
+                        if "write_crm" not in perms:
                             from fastapi.responses import JSONResponse
                             return JSONResponse({"detail": "Sin permisos"}, status_code=403)
             except Exception:

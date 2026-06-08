@@ -20,11 +20,15 @@ export default function AppLayout({ children, title, actions }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
+  const perms = user?.permissions || [];
+  const hasPerm = (p) => perms.includes(p);
+  const hasAnyAdmin = hasPerm("manage_users") || hasPerm("configure_whatsapp") || hasPerm("configure_ai") || hasPerm("manage_settings");
+
   const nav = [...NAV];
-  if (user?.role !== "viewer") {
+  if (hasPerm("write_crm")) {
     nav.push({ to: "/catalogo", label: "Catálogo", icon: Package, testid: "nav-catalogo" });
   }
-  if (user?.role === "admin") {
+  if (hasAnyAdmin) {
     nav.push({ to: "/admin", label: "Administración", icon: Shield, testid: "nav-admin" });
     nav.push({ to: "/consumo-ia", label: "Consumo de IA", icon: DollarSign, testid: "nav-consumo-ia" });
     nav.push({ to: "/configuracion", label: "Configuración", icon: Settings, testid: "nav-configuracion" });

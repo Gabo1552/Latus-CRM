@@ -39,9 +39,9 @@ function fmtPrice(p, cur) {
 
 export default function Catalogo() {
   const { user } = useAuth();
-  const canWrite = user && (user.role === "admin" || user.role === "supervisor");
-  const canRead = user && user.role !== "viewer"
-    || (user && user.role === "viewer"); // viewer can read too
+  const perms = user?.permissions || [];
+  const canWrite = perms.includes("write_catalog");
+  const canRead = !!user; // any authenticated user can read
 
   const [filters, setFilters] = useState({
     q: "", category: "all", stock_status: "all", include_inactive: false,

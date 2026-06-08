@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import {
   Users as UsersIcon, MessageSquareText, Plus, MoreHorizontal, Search,
   Copy, RefreshCw, CheckCircle2, AlertTriangle, KeyRound, Trash2, Eye, EyeOff,
-  Bot, Sparkles, Lightbulb,
+  Bot, Sparkles, Lightbulb, Shield, Check,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import { useAuth } from "@/context/AuthContext";
@@ -31,11 +31,22 @@ import {
 import api from "@/lib/api";
 import { roleMeta, AUTH_PROVIDERS } from "@/lib/constants";
 
-const ROLE_OPTIONS = [
+const DEFAULT_ROLE_OPTIONS = [
   { key: "admin", label: "Administrador" },
   { key: "supervisor", label: "Supervisor" },
   { key: "agent", label: "Agente" },
   { key: "viewer", label: "Consulta" },
+];
+
+const ALL_PERMISSIONS = [
+  { key: "write_crm", label: "Escritura CRM", desc: "Crear/editar contactos, leads, notas y tareas" },
+  { key: "write_catalog", label: "Catálogo", desc: "Administrar productos del catálogo" },
+  { key: "manage_users", label: "Usuarios", desc: "Crear, editar, activar/desactivar y borrar usuarios" },
+  { key: "configure_whatsapp", label: "WhatsApp", desc: "Configurar credenciales y webhook de WhatsApp" },
+  { key: "configure_ai", label: "IA", desc: "Configurar proveedores de IA, bot, modelos y precios" },
+  { key: "manage_settings", label: "Ajustes", desc: "Cambiar ajustes generales del CRM" },
+  { key: "message_any", label: "Mensajes globales", desc: "Enviar mensajes en cualquier conversación" },
+  { key: "trigger_bot_any", label: "Bot global", desc: "Activar bot IA en cualquier conversación" },
 ];
 
 const TZ_OPTIONS = [
@@ -157,7 +168,7 @@ function UsersTab({ me }) {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__all__">Todos los roles</SelectItem>
-            {ROLE_OPTIONS.map((r) => (
+            {DEFAULT_ROLE_OPTIONS.map((r) => (
               <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>
             ))}
           </SelectContent>
@@ -425,7 +436,7 @@ function UserFormDialog({ open, mode, initialUser, onClose, onSaved }) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {ROLE_OPTIONS.map((r) => (
+                {DEFAULT_ROLE_OPTIONS.map((r) => (
                   <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>
                 ))}
               </SelectContent>
@@ -1655,6 +1666,231 @@ function AIAutoTab() {
 
 
 // =============================================================================
+// ROLES TAB
+// =============================================================================
+function RolesTab() {
+  const qc = useQueryClient();
+  const [showCreate, setShowCreate] = useState(false);
+  const [newRoleId, setNewRoleId] = useState("");
+  const [newRoleName, setNewRoleName] = useState("");
+  const [newRolePerms, setNewRolePerms] = useState([]);
+
+  const rolesQ = useQuery({
+    queryKey: ["roles"],
+    queryFn: () => api.get("/roles").then((r) => r.data),
+  });
+
+  const updateRole = useMutation({
+    mutationFn: ({ role_id, permissions, name }) =>
+      api.put(`/roles/${role_id}`, { permissions, name }),
+    onSuccess: () => {
+      toast.success("Permisos actualizados");
+      qc.invalidateQueries({ queryKey: ["roles"] });
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Error al actualizar"),
+  });
+
+  const createRole = useMutation({
+    mutationFn: (payload) => api.post("/roles", payload),
+    onSuccess: () => {
+      toast.success("Rol creado");
+      qc.invalidateQueries({ queryKey: ["roles"] });
+      setShowCreate(false);
+      setNewRoleId("");
+      setNewRoleName("");
+      setNewRolePerms([]);
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Error al crear rol"),
+  });
+
+  const deleteRole = useMutation({
+    mutationFn: (role_id) => api.delete(`/roles/${role_id}`),
+    onSuccess: () => {
+      toast.success("Rol eliminado");
+      qc.invalidateQueries({ queryKey: ["roles"] });
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Error al eliminar"),
+  });
+
+  const togglePerm = (role, perm) => {
+    const current = role.permissions || [];
+    const next = current.includes(perm)
+      ? current.filter((p) => p !== perm)
+      : [...current, perm];
+    updateRole.mutate({ role_id: role.role_id, permissions: next, name: role.name });
+  };
+
+  const roles = rolesQ.data || [];
+
+  return (
+    <div data-testid="roles-tab" className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-bold tracking-tight text-[#0B1B26]">Roles y Accesos</h2>
+          <p className="text-sm text-[#888888] mt-0.5">Definí qué puede hacer cada rol en el sistema</p>
+        </div>
+        <Button
+          data-testid="create-role-btn"
+          onClick={() => setShowCreate(true)}
+          className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm"
+        >
+          <Plus className="h-4 w-4 mr-1" /> Nuevo rol
+        </Button>
+      </div>
+
+      {/* Roles Grid */}
+      <div className="bg-white border border-[#E9E6DC] rounded-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[#E9E6DC] bg-[#F9F8F6]">
+                <th className="text-left px-4 py-3 font-bold text-[#0B1B26] text-xs uppercase tracking-wider sticky left-0 bg-[#F9F8F6] z-10 min-w-[160px]">Rol</th>
+                {ALL_PERMISSIONS.map((p) => (
+                  <th key={p.key} className="text-center px-3 py-3 font-semibold text-[#888888] text-[10px] uppercase tracking-wider min-w-[100px]">
+                    <div>{p.label}</div>
+                  </th>
+                ))}
+                <th className="w-12"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {roles.map((role) => (
+                <tr key={role.role_id} className="border-b border-[#E9E6DC] last:border-0 hover:bg-[#F9F8F6] transition-colors">
+                  <td className="px-4 py-3 sticky left-0 bg-white z-10">
+                    <div className="font-bold text-[#0B1B26]">{role.name}</div>
+                    <div className="text-[10px] text-[#888888] font-mono">{role.role_id}</div>
+                  </td>
+                  {ALL_PERMISSIONS.map((p) => {
+                    const has = (role.permissions || []).includes(p.key);
+                    return (
+                      <td key={p.key} className="text-center px-3 py-3">
+                        <button
+                          data-testid={`perm-${role.role_id}-${p.key}`}
+                          onClick={() => togglePerm(role, p.key)}
+                          className={`h-7 w-7 rounded-sm border inline-flex items-center justify-center transition-all duration-150 ${
+                            has
+                              ? "bg-[#064E3B] border-[#064E3B] text-white shadow-sm"
+                              : "border-zinc-300 text-transparent hover:border-[#0E8DDB] hover:bg-[#EFF6FF]"
+                          }`}
+                        >
+                          <Check className="h-4 w-4" strokeWidth={3} />
+                        </button>
+                      </td>
+                    );
+                  })}
+                  <td className="px-2 py-3">
+                    {!role.is_default && (
+                      <button
+                        data-testid={`delete-role-${role.role_id}`}
+                        onClick={() => deleteRole.mutate(role.role_id)}
+                        className="text-zinc-400 hover:text-red-500 transition-colors p-1"
+                        title="Eliminar rol"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Permission descriptions */}
+      <div className="bg-[#F9F8F6] border border-[#E9E6DC] rounded-sm p-4">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-[#888888] mb-3">Referencia de permisos</h3>
+        <div className="grid grid-cols-2 gap-2">
+          {ALL_PERMISSIONS.map((p) => (
+            <div key={p.key} className="flex items-start gap-2">
+              <span className="font-mono text-[10px] bg-white px-1.5 py-0.5 border border-[#E9E6DC] rounded-sm text-[#0E8DDB] whitespace-nowrap shrink-0">{p.key}</span>
+              <span className="text-xs text-[#888888]">{p.desc}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Create Role Dialog */}
+      <Dialog open={showCreate} onOpenChange={(o) => !o && setShowCreate(false)}>
+        <DialogContent className="rounded-sm sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Nuevo Rol</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs font-semibold">Identificador (slug)</Label>
+              <Input
+                data-testid="new-role-id"
+                placeholder="ej: gestor_catalogo"
+                value={newRoleId}
+                onChange={(e) => setNewRoleId(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_"))}
+                className="rounded-sm mt-1 font-mono"
+              />
+            </div>
+            <div>
+              <Label className="text-xs font-semibold">Nombre visible</Label>
+              <Input
+                data-testid="new-role-name"
+                placeholder="ej: Gestor de Catálogo"
+                value={newRoleName}
+                onChange={(e) => setNewRoleName(e.target.value)}
+                className="rounded-sm mt-1"
+              />
+            </div>
+            <div>
+              <Label className="text-xs font-semibold">Permisos</Label>
+              <div className="mt-2 space-y-1.5">
+                {ALL_PERMISSIONS.map((p) => {
+                  const active = newRolePerms.includes(p.key);
+                  return (
+                    <button
+                      key={p.key}
+                      type="button"
+                      data-testid={`new-role-perm-${p.key}`}
+                      onClick={() => {
+                        setNewRolePerms((prev) =>
+                          active ? prev.filter((x) => x !== p.key) : [...prev, p.key]
+                        );
+                      }}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-sm border text-left text-sm transition-colors ${
+                        active
+                          ? "bg-[#064E3B]/5 border-[#064E3B] text-[#064E3B]"
+                          : "bg-white border-zinc-200 text-[#888888] hover:border-[#0E8DDB]"
+                      }`}
+                    >
+                      <span className={`h-4 w-4 rounded-sm border flex items-center justify-center shrink-0 ${
+                        active ? "bg-[#064E3B] border-[#064E3B]" : "border-zinc-300"
+                      }`}>
+                        {active && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
+                      </span>
+                      <span className="font-semibold">{p.label}</span>
+                      <span className="text-xs text-[#888888] ml-auto">{p.desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" className="rounded-sm" onClick={() => setShowCreate(false)}>Cancelar</Button>
+            <Button
+              data-testid="save-new-role"
+              className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm"
+              disabled={!newRoleId.trim() || !newRoleName.trim() || createRole.isPending}
+              onClick={() => createRole.mutate({ role_id: newRoleId, name: newRoleName, permissions: newRolePerms })}
+            >
+              {createRole.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+              Crear
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+
+// =============================================================================
 // Page shell
 // =============================================================================
 export default function Configuracion() {
@@ -1663,7 +1899,12 @@ export default function Configuracion() {
 
   if (loading) return null;
   if (!user) return <Navigate to="/" replace />;
-  if (user.role !== "admin") {
+
+  const perms = user.permissions || [];
+  const hasPerm = (p) => perms.includes(p);
+  const hasAnyAdmin = hasPerm("manage_users") || hasPerm("configure_whatsapp") || hasPerm("configure_ai") || hasPerm("manage_settings");
+
+  if (!hasAnyAdmin) {
     return (
       <AppLayout title="Configuración">
         <div className="px-6 py-6 max-w-2xl">
@@ -1678,13 +1919,12 @@ export default function Configuracion() {
               No tenés permisos para acceder a esta sección
             </h2>
             <p className="text-sm text-[#888888] mb-4">
-              La sección <b>Configuración</b> es exclusiva para usuarios con rol{" "}
-              <RolePill role="admin" />. Tu cuenta actual tiene rol{" "}
-              <RolePill role={user.role} />.
+              La sección <b>Configuración</b> requiere permisos administrativos.
+              Tu cuenta actual tiene rol <RolePill role={user.role} />.
             </p>
             <p className="text-xs text-[#888888] mb-5">
-              Si necesitás acceso, pedile a un administrador que actualice tu rol
-              desde <span className="font-mono">/configuracion</span> &gt; Usuarios.
+              Si necesitás acceso, pedile a un administrador que actualice tus permisos
+              desde <span className="font-mono">/configuracion</span> &gt; Roles y Accesos.
             </p>
             <a
               href="/dashboard"
@@ -1698,59 +1938,41 @@ export default function Configuracion() {
     );
   }
 
+  // Build visible tabs based on permissions
+  const tabs = [];
+  if (hasPerm("manage_users"))      tabs.push({ key: "users",    label: "Usuarios",            icon: UsersIcon,        testid: "tab-users" });
+  if (hasPerm("configure_whatsapp")) tabs.push({ key: "whatsapp", label: "WhatsApp",            icon: MessageSquareText, testid: "tab-whatsapp" });
+  if (hasPerm("configure_ai"))      tabs.push({ key: "bot",      label: "Bot IA",              icon: Bot,              testid: "tab-bot-ia" });
+  if (hasPerm("configure_ai"))      tabs.push({ key: "ai",       label: "IA y automatización", icon: Sparkles,         testid: "tab-ai-auto" });
+  if (hasPerm("manage_users"))      tabs.push({ key: "roles",    label: "Roles y Accesos",     icon: Shield,           testid: "tab-roles" });
+
+  // If current tab is not visible, switch to first available
+  const activeTab = tabs.find((t) => t.key === tab) ? tab : (tabs[0]?.key || "users");
+
   return (
     <AppLayout title="Configuración">
       <div className="px-6 py-6 max-w-6xl">
         <div className="flex items-center gap-2 mb-6 border-b border-[#E9E6DC]">
-          <button
-            data-testid="tab-users"
-            onClick={() => setTab("users")}
-            className={`px-4 py-2.5 -mb-px text-sm font-bold border-b-2 transition-colors ${
-              tab === "users"
-                ? "border-[#0E8DDB] text-[#0B1B26]"
-                : "border-transparent text-[#888888] hover:text-[#0B1B26]"
-            }`}
-          >
-            <UsersIcon className="h-4 w-4 inline mr-1.5" /> Usuarios
-          </button>
-          <button
-            data-testid="tab-whatsapp"
-            onClick={() => setTab("whatsapp")}
-            className={`px-4 py-2.5 -mb-px text-sm font-bold border-b-2 transition-colors ${
-              tab === "whatsapp"
-                ? "border-[#0E8DDB] text-[#0B1B26]"
-                : "border-transparent text-[#888888] hover:text-[#0B1B26]"
-            }`}
-          >
-            <MessageSquareText className="h-4 w-4 inline mr-1.5" /> WhatsApp
-          </button>
-          <button
-            data-testid="tab-bot-ia"
-            onClick={() => setTab("bot")}
-            className={`px-4 py-2.5 -mb-px text-sm font-bold border-b-2 transition-colors ${
-              tab === "bot"
-                ? "border-[#0E8DDB] text-[#0B1B26]"
-                : "border-transparent text-[#888888] hover:text-[#0B1B26]"
-            }`}
-          >
-            <Bot className="h-4 w-4 inline mr-1.5" /> Bot IA
-          </button>
-          <button
-            data-testid="tab-ai-auto"
-            onClick={() => setTab("ai")}
-            className={`px-4 py-2.5 -mb-px text-sm font-bold border-b-2 transition-colors ${
-              tab === "ai"
-                ? "border-[#0E8DDB] text-[#0B1B26]"
-                : "border-transparent text-[#888888] hover:text-[#0B1B26]"
-            }`}
-          >
-            <Sparkles className="h-4 w-4 inline mr-1.5" /> IA y automatización
-          </button>
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              data-testid={t.testid}
+              onClick={() => setTab(t.key)}
+              className={`px-4 py-2.5 -mb-px text-sm font-bold border-b-2 transition-colors ${
+                activeTab === t.key
+                  ? "border-[#0E8DDB] text-[#0B1B26]"
+                  : "border-transparent text-[#888888] hover:text-[#0B1B26]"
+              }`}
+            >
+              <t.icon className="h-4 w-4 inline mr-1.5" /> {t.label}
+            </button>
+          ))}
         </div>
-        {tab === "users" && <UsersTab me={user} />}
-        {tab === "whatsapp" && <WhatsAppTab />}
-        {tab === "bot" && <BotIATab setTab={setTab} />}
-        {tab === "ai" && <AIAutoTab />}
+        {activeTab === "users" && <UsersTab me={user} />}
+        {activeTab === "whatsapp" && <WhatsAppTab />}
+        {activeTab === "bot" && <BotIATab setTab={setTab} />}
+        {activeTab === "ai" && <AIAutoTab />}
+        {activeTab === "roles" && <RolesTab />}
       </div>
     </AppLayout>
   );
