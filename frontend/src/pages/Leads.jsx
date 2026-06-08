@@ -9,6 +9,7 @@ import { LEAD_STATUSES, PRIORITIES, money, statusMeta } from "@/lib/constants";
 import { StatusBadge, PriorityDot, Avatar, EmptyState } from "@/components/Bits";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import SearchableSelect from "@/components/SearchableSelect";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
@@ -39,6 +40,11 @@ export default function Leads() {
   const { data: contacts = [] } = useQuery({ queryKey: ["contacts"], queryFn: () => api.get("/contacts").then((r) => r.data) });
 
   const userName = (id) => users.find((u) => u.user_id === id)?.name || "Sin asignar";
+  const contactOptions = contacts.map((c) => ({
+    value: c.id,
+    label: c.company ? `${c.name} · ${c.company}` : c.name,
+    searchText: `${c.name} ${c.company || ""} ${c.phone || ""} ${c.email || ""}`,
+  }));
 
   const filtered = leads.filter((l) =>
     !search || l.title.toLowerCase().includes(search.toLowerCase()) || l.contact?.name?.toLowerCase().includes(search.toLowerCase())
@@ -71,10 +77,16 @@ export default function Leads() {
             <div className="space-y-4 py-2">
               <div>
                 <Label className="text-xs font-semibold">Contacto</Label>
-                <Select value={form.contact_id} onValueChange={(v) => setForm({ ...form, contact_id: v })}>
-                  <SelectTrigger data-testid="lead-contact-select" className="rounded-sm mt-1"><SelectValue placeholder="Seleccioná un contacto" /></SelectTrigger>
-                  <SelectContent>{contacts.map((c) => <SelectItem key={c.id} value={c.id}>{c.name} · {c.company}</SelectItem>)}</SelectContent>
-                </Select>
+                <SearchableSelect
+                  value={form.contact_id}
+                  onChange={(v) => setForm({ ...form, contact_id: v })}
+                  options={contactOptions}
+                  placeholder="Seleccioná un contacto"
+                  searchPlaceholder="Buscar contacto..."
+                  emptyLabel="No se encontraron contactos"
+                  triggerTestId="lead-contact-select"
+                  inputTestId="lead-contact-search"
+                />
               </div>
               <div>
                 <Label className="text-xs font-semibold">Título</Label>

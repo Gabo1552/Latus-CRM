@@ -315,7 +315,7 @@ class Task(BaseModel):
     description: Optional[str] = None
     lead_id: Optional[str] = None
     due_date: Optional[str] = None
-    status: str = "todo"  # todo | done
+    status: str = "todo"
     priority: str = "medium"
     assigned_to: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
@@ -326,6 +326,7 @@ class TaskCreate(BaseModel):
     description: Optional[str] = None
     lead_id: Optional[str] = None
     due_date: Optional[str] = None
+    status: str = "todo"
     priority: str = "medium"
     assigned_to: Optional[str] = None
 
@@ -1398,6 +1399,12 @@ DEFAULT_SETTINGS = {
     "business_hours_end": BH_DEFAULT_END,               # "HH:MM"
     "business_days": list(BH_DEFAULT_DAYS),             # 0=Mon..6=Sun
     "business_timezone": BH_DEFAULT_TZ,                  # IANA tz, e.g. America/Argentina/Cordoba
+    "task_statuses": [
+        {"key": "todo", "label": "Pendiente", "is_done": False},
+        {"key": "in_progress", "label": "En progreso", "is_done": False},
+        {"key": "done", "label": "Completada", "is_done": True},
+    ],
+    "catalog_categories": [],
 }
 
 
@@ -1432,6 +1439,65 @@ class SettingsUpdate(BaseModel):
     business_hours_end: Optional[str] = None
     business_days: Optional[List[int]] = None
     business_timezone: Optional[str] = None
+    task_statuses: Optional[List[dict[str, Any]]] = None
+    catalog_categories: Optional[List[str]] = None
+
+
+def _slugify_config_key(value: str) -> str:
+    raw = "".join(ch.lower() if ch.isalnum() else "_" for ch in (value or "").strip())
+    parts = [p for p in raw.split("_") if p]
+    return "_".join(parts)
+
+
+def _normalize_task_statuses(items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items or []:
+        label = str(item.get("label") or "").strip()
+        key = _slugify_config_key(str(item.get("key") or label))
+        if not label or not key or key in seen:
+            continue
+        normalized.append({
+            "key": key,
+            "label": label,
+            "is_done": bool(item.get("is_done", False)),
+        })
+        seen.add(key)
+    if not normalized:
+        normalized = [dict(x) for x in DEFAULT_SETTINGS["task_statuses"]]
+    if not any(item["is_done"] for item in normalized):
+        normalized[-1]["is_done"] = True
+    return normalized
+
+
+def _normalize_catalog_categories(items: list[str] | None) -> list[str]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for item in items or []:
+        value = str(item or "").strip()
+        lowered = value.lower()
+        if not value or lowered in seen:
+            continue
+        normalized.append(value)
+        seen.add(lowered)
+    return sorted(normalized, key=lambda x: x.lower())
+
+
+def _task_status_map(settings: dict) -> dict[str, dict[str, Any]]:
+    return {item["key"]: item for item in settings.get("task_statuses", [])}
+
+
+async def validate_task_status(status: str) -> str:
+    settings = await get_app_settings()
+    allowed = _task_status_map(settings)
+    if status not in allowed:
+        raise HTTPException(status_code=400, detail="Estado de tarea inválido")
+    return status
+
+
+async def get_task_done_statuses() -> set[str]:
+    settings = await get_app_settings()
+    return {item["key"] for item in settings.get("task_statuses", []) if item.get("is_done")}
 
 
 async def get_app_settings() -> dict:
@@ -1441,6 +1507,8 @@ async def get_app_settings() -> dict:
         for k in DEFAULT_SETTINGS:
             if k in doc and doc[k] is not None:
                 s[k] = doc[k]
+    s["task_statuses"] = _normalize_task_statuses(s.get("task_statuses"))
+    s["catalog_categories"] = _normalize_catalog_categories(s.get("catalog_categories"))
     return s
 
 
@@ -1472,6 +1540,10 @@ async def update_settings(payload: SettingsUpdate, admin: User = Depends(require
     if "business_days" in update:
         days = sorted({int(d) for d in update["business_days"] if 0 <= int(d) <= 6})
         update["business_days"] = days
+    if "task_statuses" in update:
+        update["task_statuses"] = _normalize_task_statuses(update["task_statuses"])
+    if "catalog_categories" in update:
+        update["catalog_categories"] = _normalize_catalog_categories(update["catalog_categories"])
     await db.settings.update_one({"key": "app"}, {"$set": {"key": "app", **update}}, upsert=True)
     return await get_app_settings()
 
@@ -2508,9 +2580,12 @@ async def catalog_restore(product_id: str,
 
 @api_router.get("/catalog/categories")
 async def catalog_categories(user: User = Depends(get_current_user)):
+    settings = await get_app_settings()
+    configured = settings.get("catalog_categories", [])
     cats = await db.products.distinct("category", {"deleted_at": None,
                                                    "category": {"$ne": None}})
-    return {"categories": sorted([c for c in cats if c])}
+    merged = _normalize_catalog_categories([*configured, *[c for c in cats if c]])
+    return {"categories": merged}
 
 
 @api_router.get("/catalog/stats")
@@ -2670,6 +2745,8 @@ async def create_task(payload: TaskCreate, user: User = Depends(get_current_user
     data = payload.model_dump()
     if not data.get("assigned_to"):
         data["assigned_to"] = user.user_id
+    if data.get("status"):
+        data["status"] = await validate_task_status(data["status"])
     task = Task(**data)
     await db.tasks.insert_one(task.model_dump())
     return task
@@ -2678,6 +2755,8 @@ async def create_task(payload: TaskCreate, user: User = Depends(get_current_user
 @api_router.patch("/tasks/{task_id}", response_model=Task)
 async def update_task(task_id: str, payload: TaskUpdate, user: User = Depends(get_current_user)):
     update = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if "status" in update:
+        update["status"] = await validate_task_status(update["status"])
     await db.tasks.update_one({"id": task_id}, {"$set": update})
     doc = await db.tasks.find_one({"id": task_id}, {"_id": 0})
     if not doc:
@@ -2731,14 +2810,15 @@ async def dashboard_metrics(user: User = Depends(get_current_user)):
     open_convs = len([c for c in convs if c.get("status") == "open"])
     pending_convs = len([c for c in convs if c.get("status") == "pending"])
     human_handled = len([c for c in convs if not c.get("bot_enabled", True)])
-    open_tasks = len([t for t in tasks if t.get("status") != "done"])
+    done_statuses = await get_task_done_statuses()
+    open_tasks = len([t for t in tasks if t.get("status") not in done_statuses])
 
     # --- Detect overdue / due-soon tasks and generate notifications ---
     now = datetime.now(timezone.utc)
     soon = now + timedelta(hours=24)
     overdue_tasks = []
     for t in tasks:
-        if t.get("status") == "done" or not t.get("due_date"):
+        if t.get("status") in done_statuses or not t.get("due_date"):
             continue
         raw = t["due_date"]
         try:

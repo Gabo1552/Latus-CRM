@@ -31,11 +31,23 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
     queryKey: ["catalog-products"],
     queryFn: () => api.get("/catalog/products?limit=100").then((r) => r.data),
   });
+  const settingsQ = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => api.get("/settings").then((r) => r.data),
+  });
 
   const tasksQ = useQuery({
     queryKey: ["tasks"],
     queryFn: () => api.get("/tasks").then((r) => r.data),
   });
+  const taskStatuses = settingsQ.data?.task_statuses || [
+    { key: "todo", label: "Pendiente", is_done: false },
+    { key: "done", label: "Completada", is_done: true },
+  ];
+  const defaultOpenStatus = taskStatuses.find((status) => !status.is_done)?.key || taskStatuses[0]?.key || "todo";
+  const defaultDoneStatus = taskStatuses.find((status) => status.is_done)?.key || taskStatuses.at(-1)?.key || "done";
+  const isDoneStatus = (status) => taskStatuses.some((item) => item.key === status && item.is_done);
+  const nextToggleStatus = (status) => isDoneStatus(status) ? defaultOpenStatus : defaultDoneStatus;
 
   const patch = useMutation({
     mutationFn: (body) => api.patch(`/leads/${leadId}`, body),
@@ -65,7 +77,7 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
   });
 
   const addTask = useMutation({
-    mutationFn: () => api.post("/tasks", { title: taskTitle, lead_id: leadId }),
+    mutationFn: () => api.post("/tasks", { title: taskTitle, lead_id: leadId, status: defaultOpenStatus }),
     onSuccess: () => {
       setTaskTitle("");
       qc.invalidateQueries({ queryKey: ["lead", leadId] });
@@ -283,12 +295,12 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
                         <div key={t.id} className="flex items-center justify-between border border-[#E9E6DC] rounded-sm px-3 py-2 text-sm bg-white">
                           <div className="flex items-center gap-2 min-w-0">
                             <button
-                              onClick={() => toggleTask.mutate({ id: t.id, status: t.status === "done" ? "todo" : "done" })}
-                              className={`h-4.5 w-4.5 rounded-sm border flex items-center justify-center shrink-0 transition-colors ${t.status === "done" ? "bg-[#064E3B] border-[#064E3B]" : "border-zinc-300 hover:border-[#0E8DDB]"}`}
+                              onClick={() => toggleTask.mutate({ id: t.id, status: nextToggleStatus(t.status) })}
+                              className={`h-4.5 w-4.5 rounded-sm border flex items-center justify-center shrink-0 transition-colors ${isDoneStatus(t.status) ? "bg-[#064E3B] border-[#064E3B]" : "border-zinc-300 hover:border-[#0E8DDB]"}`}
                             >
-                              {t.status === "done" && <Check className="h-3 w-3 text-white" />}
+                              {isDoneStatus(t.status) && <Check className="h-3 w-3 text-white" />}
                             </button>
-                            <span className={t.status === "done" ? "line-through text-latus-muted truncate" : "text-[#0B1B26] truncate"}>{t.title}</span>
+                            <span className={isDoneStatus(t.status) ? "line-through text-latus-muted truncate" : "text-[#0B1B26] truncate"}>{t.title}</span>
                           </div>
                         </div>
                       ));
@@ -326,12 +338,12 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
                         <div key={t.id} className="flex items-center justify-between border border-[#E9E6DC]/80 rounded-sm px-3 py-1.5 text-xs bg-latus-cream/40">
                           <div className="flex items-center gap-2 min-w-0">
                             <button
-                              onClick={() => toggleTask.mutate({ id: t.id, status: t.status === "done" ? "todo" : "done" })}
-                              className={`h-4 w-4 rounded-sm border flex items-center justify-center shrink-0 transition-colors ${t.status === "done" ? "bg-[#064E3B] border-[#064E3B]" : "border-zinc-300 hover:border-[#0E8DDB]"}`}
+                              onClick={() => toggleTask.mutate({ id: t.id, status: nextToggleStatus(t.status) })}
+                              className={`h-4 w-4 rounded-sm border flex items-center justify-center shrink-0 transition-colors ${isDoneStatus(t.status) ? "bg-[#064E3B] border-[#064E3B]" : "border-zinc-300 hover:border-[#0E8DDB]"}`}
                             >
-                              {t.status === "done" && <Check className="h-2.5 w-2.5 text-white" />}
+                              {isDoneStatus(t.status) && <Check className="h-2.5 w-2.5 text-white" />}
                             </button>
-                            <span className={t.status === "done" ? "line-through text-latus-muted truncate" : "text-[#0B1B26] truncate"}>{t.title}</span>
+                            <span className={isDoneStatus(t.status) ? "line-through text-latus-muted truncate" : "text-[#0B1B26] truncate"}>{t.title}</span>
                           </div>
                         </div>
                       ));

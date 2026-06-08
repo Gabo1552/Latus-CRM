@@ -368,12 +368,15 @@ function ProductModal({ product, categories, onClose, onSaved }) {
           </div>
           <div>
             <Label className="text-xs font-bold text-[#888888]">Categoría</Label>
-            <Input data-testid="modal-category" list="cat-suggestions" value={d.category || ""}
-                   onChange={(e) => setD({ ...d, category: e.target.value })}
-                   className="rounded-sm h-9 mt-1" />
-            <datalist id="cat-suggestions">
-              {categories.map(c => <option key={c} value={c} />)}
-            </datalist>
+            <Select value={d.category || "__none__"} onValueChange={(v) => setD({ ...d, category: v === "__none__" ? "" : v })}>
+              <SelectTrigger data-testid="modal-category" className="rounded-sm h-9 mt-1 text-sm">
+                <SelectValue placeholder="Seleccioná una categoría" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Sin categoría</SelectItem>
+                {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <Label className="text-xs font-bold text-[#888888]">Precio</Label>

@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import {
   Users as UsersIcon, MessageSquareText, Plus, MoreHorizontal, Search,
   Copy, RefreshCw, CheckCircle2, AlertTriangle, KeyRound, Trash2, Eye, EyeOff,
-  Bot, Sparkles, Lightbulb, Shield, Check,
+  Bot, Sparkles, Lightbulb, Shield, Check, CheckSquare, Package,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import { useAuth } from "@/context/AuthContext";
@@ -1891,6 +1891,203 @@ function RolesTab() {
 
 
 // =============================================================================
+// TASKS + CATALOG SETTINGS TAB
+// =============================================================================
+function CRMConfigTab() {
+  const qc = useQueryClient();
+  const settingsQ = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => api.get("/settings").then((r) => r.data),
+  });
+  const [taskDraft, setTaskDraft] = useState([]);
+  const [taskLabel, setTaskLabel] = useState("");
+  const [taskIsDone, setTaskIsDone] = useState(false);
+  const [categoryDraft, setCategoryDraft] = useState([]);
+  const [categoryName, setCategoryName] = useState("");
+
+  useEffect(() => {
+    if (settingsQ.data) {
+      setTaskDraft(settingsQ.data.task_statuses || []);
+      setCategoryDraft(settingsQ.data.catalog_categories || []);
+    }
+  }, [settingsQ.data]);
+
+  const save = useMutation({
+    mutationFn: () => api.patch("/settings", {
+      task_statuses: taskDraft,
+      catalog_categories: categoryDraft,
+    }),
+    onSuccess: () => {
+      toast.success("Configuración actualizada");
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      qc.invalidateQueries({ queryKey: ["catalog-categories"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "No se pudo guardar la configuración"),
+  });
+
+  const addTaskStatus = () => {
+    const label = taskLabel.trim();
+    const key = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    if (!label || !key) return;
+    if (taskDraft.some((item) => item.key === key)) {
+      toast.error("Ese estado ya existe");
+      return;
+    }
+    setTaskDraft((prev) => [...prev, { key, label, is_done: taskIsDone }]);
+    setTaskLabel("");
+    setTaskIsDone(false);
+  };
+
+  const addCategory = () => {
+    const value = categoryName.trim();
+    if (!value) return;
+    if (categoryDraft.some((item) => item.toLowerCase() === value.toLowerCase())) {
+      toast.error("Esa categoría ya existe");
+      return;
+    }
+    setCategoryDraft((prev) => [...prev, value].sort((a, b) => a.localeCompare(b)));
+    setCategoryName("");
+  };
+
+  const dirty = JSON.stringify(taskDraft) !== JSON.stringify(settingsQ.data?.task_statuses || [])
+    || JSON.stringify(categoryDraft) !== JSON.stringify(settingsQ.data?.catalog_categories || []);
+
+  return (
+    <div data-testid="crm-config-tab" className="space-y-6">
+      <div className="grid gap-6 xl:grid-cols-2">
+        <div className="bg-white border border-[#E9E6DC] rounded-sm p-5 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="h-10 w-10 rounded-sm bg-[#EFF6FF] text-[#0E8DDB] flex items-center justify-center">
+              <CheckSquare className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-[#0B1B26]">Estados de tareas</h3>
+              <p className="text-sm text-[#888888] mt-0.5">Definí los estados disponibles para el equipo y cuáles cuentan como completados.</p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+            <div>
+              <Label className="text-xs font-semibold">Nuevo estado</Label>
+              <Input
+                data-testid="task-status-name"
+                value={taskLabel}
+                onChange={(e) => setTaskLabel(e.target.value)}
+                placeholder="Ej. En espera de cliente"
+                className="rounded-sm mt-1"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm text-[#888888] self-end pb-2">
+              <Switch checked={taskIsDone} onCheckedChange={setTaskIsDone} />
+              Marcar como completado
+            </label>
+          </div>
+          <Button type="button" variant="outline" className="rounded-sm" onClick={addTaskStatus}>
+            <Plus className="h-4 w-4 mr-1" /> Agregar estado
+          </Button>
+
+          <div className="space-y-2">
+            {taskDraft.map((item) => (
+              <div key={item.key} className="flex items-center gap-3 border border-[#E9E6DC] rounded-sm px-3 py-2">
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-[#0B1B26]">{item.label}</p>
+                  <p className="text-[11px] text-[#888888] font-mono">{item.key}</p>
+                </div>
+                <label className="flex items-center gap-2 text-xs text-[#888888]">
+                  <Switch
+                    checked={!!item.is_done}
+                    onCheckedChange={(checked) => setTaskDraft((prev) => prev.map((current) => current.key === item.key ? { ...current, is_done: checked } : current))}
+                  />
+                  Completado
+                </label>
+                <button
+                  type="button"
+                  data-testid={`delete-task-status-${item.key}`}
+                  onClick={() => setTaskDraft((prev) => prev.filter((current) => current.key !== item.key))}
+                  className="text-zinc-400 hover:text-red-500 transition-colors"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white border border-[#E9E6DC] rounded-sm p-5 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="h-10 w-10 rounded-sm bg-[#FFF7ED] text-[#FF4500] flex items-center justify-center">
+              <Package className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-[#0B1B26]">Categorías del catálogo</h3>
+              <p className="text-sm text-[#888888] mt-0.5">Mantené una lista unificada para que luego se seleccione en los productos.</p>
+            </div>
+          </div>
+
+          <div>
+            <Label className="text-xs font-semibold">Nueva categoría</Label>
+            <div className="flex gap-2 mt-1">
+              <Input
+                data-testid="catalog-category-name"
+                value={categoryName}
+                onChange={(e) => setCategoryName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCategory(); } }}
+                placeholder="Ej. Accesorios"
+                className="rounded-sm"
+              />
+              <Button type="button" variant="outline" className="rounded-sm" onClick={addCategory}>
+                <Plus className="h-4 w-4 mr-1" /> Agregar
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {categoryDraft.map((item) => (
+              <span key={item} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-sm bg-[#F9F8F6] border border-[#E9E6DC] text-sm text-[#0B1B26]">
+                {item}
+                <button
+                  type="button"
+                  data-testid={`delete-category-${item}`}
+                  onClick={() => setCategoryDraft((prev) => prev.filter((current) => current !== item))}
+                  className="text-zinc-400 hover:text-red-500 transition-colors"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="outline"
+          className="rounded-sm"
+          disabled={!dirty}
+          onClick={() => {
+            setTaskDraft(settingsQ.data?.task_statuses || []);
+            setCategoryDraft(settingsQ.data?.catalog_categories || []);
+          }}
+        >
+          Descartar cambios
+        </Button>
+        <Button
+          data-testid="save-crm-config"
+          className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm"
+          disabled={!dirty || save.isPending || taskDraft.length === 0}
+          onClick={() => save.mutate()}
+        >
+          {save.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+          Guardar configuración
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+
+// =============================================================================
 // Page shell
 // =============================================================================
 export default function Configuracion() {
@@ -1945,6 +2142,7 @@ export default function Configuracion() {
   if (hasPerm("configure_ai"))      tabs.push({ key: "bot",      label: "Bot IA",              icon: Bot,              testid: "tab-bot-ia" });
   if (hasPerm("configure_ai"))      tabs.push({ key: "ai",       label: "IA y automatización", icon: Sparkles,         testid: "tab-ai-auto" });
   if (hasPerm("manage_users"))      tabs.push({ key: "roles",    label: "Roles y Accesos",     icon: Shield,           testid: "tab-roles" });
+  if (hasPerm("manage_settings"))   tabs.push({ key: "crm",      label: "Tareas y catálogo",   icon: Package,          testid: "tab-crm-config" });
 
   // If current tab is not visible, switch to first available
   const activeTab = tabs.find((t) => t.key === tab) ? tab : (tabs[0]?.key || "users");
@@ -1973,6 +2171,7 @@ export default function Configuracion() {
         {activeTab === "bot" && <BotIATab setTab={setTab} />}
         {activeTab === "ai" && <AIAutoTab />}
         {activeTab === "roles" && <RolesTab />}
+        {activeTab === "crm" && <CRMConfigTab />}
       </div>
     </AppLayout>
   );

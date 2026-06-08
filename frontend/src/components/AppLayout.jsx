@@ -25,7 +25,7 @@ export default function AppLayout({ children, title, actions }) {
   const hasAnyAdmin = hasPerm("manage_users") || hasPerm("configure_whatsapp") || hasPerm("configure_ai") || hasPerm("manage_settings");
 
   const nav = [...NAV];
-  if (hasPerm("write_crm")) {
+  if (hasPerm("write_catalog")) {
     nav.push({ to: "/catalogo", label: "Catálogo", icon: Package, testid: "nav-catalogo" });
   }
   if (hasAnyAdmin) {
