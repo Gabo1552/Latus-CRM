@@ -848,6 +848,11 @@ function BotIATab({ setTab }) {
     queryFn: () => api.get("/admin/ai-provider").then((r) => r.data),
   });
 
+  const usersQ = useQuery({
+    queryKey: ["users"],
+    queryFn: () => api.get("/users").then((r) => r.data),
+  });
+
   const [draft, setDraft] = useState(null);
   useEffect(() => { if (q.data && draft === null) setDraft({ ...q.data }); }, [q.data, draft]);
 
@@ -861,7 +866,7 @@ function BotIATab({ setTab }) {
     onError: (e) => toast.error(e?.response?.data?.detail || "No se pudieron guardar los cambios"),
   });
 
-  if (q.isPending || aiProviderQ.isPending || !draft) return <div className="text-[#888888]">Cargando…</div>;
+  if (q.isPending || aiProviderQ.isPending || usersQ.isPending || !draft) return <div className="text-[#888888]">Cargando…</div>;
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const faqs = Array.isArray(draft.faqs) ? draft.faqs : [];
@@ -897,6 +902,7 @@ function BotIATab({ setTab }) {
       model: draft.model || "gpt-4o-mini",
       bot_name: (draft.bot_name || "").trim(),
       include_client_info: !!draft.include_client_info,
+      default_handoff_user_id: draft.default_handoff_user_id || null,
       faqs: faqs
         .map((f) => ({ q: (f.q || "").trim(), a: (f.a || "").trim() }))
         .filter((f) => f.q && f.a),
@@ -1075,6 +1081,32 @@ function BotIATab({ setTab }) {
             {ctxInvalid && (
               <p className="text-[11px] text-[#DC2626] mt-1">Debe estar entre 3 y 50.</p>
             )}
+          </div>
+
+          {/* Default Handoff User */}
+          <div className="p-3 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Operador de derivación por defecto</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
+              Se le asignará el lead cuando el bot active una derivación.
+            </p>
+            <Select
+              value={draft.default_handoff_user_id || "unassigned"}
+              onValueChange={(v) => set({ default_handoff_user_id: v === "unassigned" ? null : v })}
+            >
+              <SelectTrigger data-testid="bot-setting-default-handoff-user" className="rounded-sm h-9 text-sm">
+                <SelectValue placeholder="Sin asignar" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unassigned">Sin asignar</SelectItem>
+                {(usersQ.data || [])
+                  .filter((u) => u.is_active)
+                  .map((u) => (
+                    <SelectItem key={u.user_id} value={u.user_id}>
+                      {u.name || u.email}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Tone */}

@@ -1093,11 +1093,20 @@ async def get_lead(lead_id: str, user: User = Depends(get_current_user)):
 @api_router.patch("/leads/{lead_id}", response_model=Lead)
 async def update_lead(lead_id: str, payload: LeadUpdate, user: User = Depends(get_current_user)):
     update = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if "assigned_to" in payload.model_fields_set:
+        val = payload.assigned_to
+        if val is None or (isinstance(val, str) and val.strip() == ""):
+            update["assigned_to"] = None
+        else:
+            update["assigned_to"] = str(val).strip()
     update["updated_at"] = now_iso()
     await db.leads.update_one({"id": lead_id}, {"$set": update})
     doc = await db.leads.find_one({"id": lead_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Lead not found")
+    # Sync assigned_to to conversation
+    if "assigned_to" in update:
+        await db.conversations.update_one({"lead_id": lead_id}, {"$set": {"assigned_to": update["assigned_to"]}})
     return Lead(**doc)
 
 
@@ -1590,6 +1599,8 @@ async def send_whatsapp(conv_id: str, payload: WhatsAppSend, user: User = Depend
     conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    if user.role != "admin" and conv.get("assigned_to") != user.user_id:
+        raise HTTPException(status_code=403, detail="Solo el operador asignado o un administrador pueden enviar mensajes a esta conversación")
     contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0})
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
@@ -1698,6 +1709,8 @@ async def send_message(conv_id: str, payload: MessageCreate, user: User = Depend
     conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    if user.role != "admin" and conv.get("assigned_to") != user.user_id:
+        raise HTTPException(status_code=403, detail="Solo el operador asignado o un administrador pueden enviar mensajes a esta conversación")
     contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0})
     sender_name = user.name if payload.sender_type == "agent" else (
         contact["name"] if (payload.sender_type == "contact" and contact) else "Bot"
@@ -1861,6 +1874,7 @@ class BotSettingsUpdate(BaseModel):
     model: Optional[str] = None
     bot_name: Optional[str] = None
     include_client_info: Optional[bool] = None
+    default_handoff_user_id: Optional[str] = None
 
 
 _ALLOWED_BOT_MODELS = {
@@ -1916,6 +1930,16 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
         update["bot_name"] = bn
     if "include_client_info" in update:
         update["include_client_info"] = bool(update["include_client_info"])
+    if "default_handoff_user_id" in update:
+        uid = update["default_handoff_user_id"]
+        if uid:
+            uid = uid.strip()
+            user_doc = await db.users.find_one({"user_id": uid})
+            if not user_doc:
+                raise HTTPException(400, "El usuario asignado para derivación no existe")
+            update["default_handoff_user_id"] = uid
+        else:
+            update["default_handoff_user_id"] = None
     update["updated_at"] = now_iso()
     update["updated_by"] = admin.user_id
     await db.bot_settings.update_one({"_id": "default"},
@@ -2376,7 +2400,20 @@ async def bot_suggest_reply(conv_id: str, user: User = Depends(get_current_user)
 @api_router.patch("/conversations/{conv_id}")
 async def update_conversation(conv_id: str, payload: ConversationUpdate, user: User = Depends(get_current_user)):
     update = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if "assigned_to" in payload.model_fields_set:
+        val = payload.assigned_to
+        if val is None or (isinstance(val, str) and val.strip() == ""):
+            update["assigned_to"] = None
+        else:
+            update["assigned_to"] = str(val).strip()
+
     await db.conversations.update_one({"id": conv_id}, {"$set": update})
+    
+    # Sync assigned_to to lead
+    if "assigned_to" in update:
+        conv = await db.conversations.find_one({"id": conv_id})
+        if conv and conv.get("lead_id"):
+            await db.leads.update_one({"id": conv["lead_id"]}, {"$set": {"assigned_to": update["assigned_to"]}})
     # log bot handoff event
     if "bot_enabled" in update:
         await db.bot_events.insert_one({

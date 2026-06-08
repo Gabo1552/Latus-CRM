@@ -88,6 +88,11 @@ export default function Inbox() {
     staleTime: 60_000,
   });
 
+  const usersQ = useQuery({
+    queryKey: ["users"],
+    queryFn: () => api.get("/users").then((r) => r.data),
+  });
+
   const patchConv = useMutation({
     mutationFn: (body) => api.patch(`/conversations/${activeId}`, body),
     onSuccess: () => {
@@ -361,6 +366,33 @@ export default function Inbox() {
                 </div>
               </div>
             )}
+
+            {/* Operator Assignment */}
+            <div className="p-4 border-b border-[#E9E6DC]">
+              <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#888888] mb-3">Responsable</p>
+              <Select
+                disabled={readOnly}
+                value={active.assigned_to || "unassigned"}
+                onValueChange={(v) => {
+                  patchConv.mutate({ assigned_to: v === "unassigned" ? null : v });
+                  toast.success("Asignación de conversación actualizada");
+                }}
+              >
+                <SelectTrigger data-testid="inbox-assignee-select" className="w-full rounded-sm h-9 text-xs">
+                  <SelectValue placeholder="Sin asignar" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unassigned">Sin asignar</SelectItem>
+                  {(usersQ.data || [])
+                    .filter((u) => u.is_active)
+                    .map((u) => (
+                      <SelectItem key={u.user_id} value={u.user_id}>
+                        {u.name || u.email}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
 
             {/* AI Bot panel */}
             <BotPanel

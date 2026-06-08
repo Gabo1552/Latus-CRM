@@ -33,6 +33,7 @@ DEFAULT_BOT_SETTINGS = {
     "model": "gpt-4o-mini",
     "bot_name": "Bot",
     "include_client_info": True,
+    "default_handoff_user_id": None,
 }
 
 # Sensitive data patterns (Argentinian DNI, CBU, credit card-like)
@@ -302,9 +303,8 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             decision = "require_human"
             human_reason = human_reason or f"Confianza baja ({confidence:.2f} < {thresh:.2f})"
 
-        # Global WhatsApp auto-reply switch: degrade reply_with_bot → update_status_only
-        if decision == "reply_with_bot" and not ai_cfg.get("whatsapp_auto_reply_enabled", True):
-            event["auto_reply_suppressed"] = True
+        # Enforce classification-only: bot never sends replies to the customer, only classifies
+        if decision == "reply_with_bot":
             decision = "update_status_only"
             reply = ""
 
@@ -315,9 +315,9 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         notif_payload = None
 
         if decision == "reply_with_bot" and reply and wa_send is not None:
+            # This block won't execute because of the suppression above, kept for structure
             try:
                 await wa_send(conv, reply)
-                # persist bot outbound message
                 await db.messages.insert_one({
                     "id": "msg_" + uuid.uuid4().hex[:12],
                     "conversation_id": conv_id,
@@ -337,7 +337,6 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                 logger.exception("wa_send failed in bot pipeline")
                 event["error_message"] = f"wa_send failed: {e}"
                 event["status"] = "error"
-                # notify admins of send failure
                 notif_payload = ("handoff_required",
                                  "Bot no pudo enviar respuesta",
                                  f"Falla al enviar via WhatsApp: {e}")
@@ -350,6 +349,12 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                 conv_set["bot_enabled"] = False
                 conv_set["bot_status"] = "requiere_humano"
                 conv_set["human_required_reason"] = human_reason or "Derivación solicitada por el bot"
+                # Route handoff to the configured default user if specified
+                handoff_uid = settings.get("default_handoff_user_id")
+                if handoff_uid:
+                    conv_set["assigned_to"] = handoff_uid
+                    if conv.get("lead_id"):
+                        await db.leads.update_one({"id": conv["lead_id"]}, {"$set": {"assigned_to": handoff_uid}})
             else:
                 # Auto-handoff disabled — just notify, keep bot armed
                 event["auto_handoff_suppressed"] = True

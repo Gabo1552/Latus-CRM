@@ -157,12 +157,13 @@ class TestPipeline:
         monkeypatch.setattr(pipeline_mod, "call_llm_json",
                             _llm_factory(decision="reply_with_bot", confidence=0.9))
         ev = _run(pipeline_mod.process_inbound(db, cv, "wamid.IN1", wa_send=wa_send))
-        assert ev["decision"] == "reply_with_bot"
-        assert sent == ["¡Hola Ana!"]
+        # Enforce classification-only: reply_with_bot degraded to update_status_only
+        assert ev["decision"] == "update_status_only"
+        assert sent == []
         bots = [m for m in db.messages.docs if m["sender_type"] == "bot"]
-        assert len(bots) == 1 and bots[0]["body"] == "¡Hola Ana!"
+        assert len(bots) == 0
         conv = _run(db.conversations.find_one({"id": cv}))
-        assert conv["bot_status"] == "esperando_cliente"
+        assert conv["bot_status"] == "bot_activo"
         assert conv["summary"] == "Cliente preguntó por precios."
 
     def test_02_bot_disabled_no_llm_call(self, pipeline_mod, monkeypatch):
@@ -236,27 +237,24 @@ class TestPipeline:
         assert len([e for e in db.bot_events.docs
                     if e.get("triggered_by_message_id") == "wamid.DUP"]) == 1
         bots = [m for m in db.messages.docs if m["sender_type"] == "bot"]
-        assert len(bots) == 1
+        assert len(bots) == 0
 
-    def test_08_wa_send_failure_no_ghost_and_notifies_admin(self, pipeline_mod, monkeypatch):
+    def test_08_handoff_routes_to_default_handoff_user_id(self, pipeline_mod, monkeypatch):
         db = _DB(); cv = _seed_conv(db)
-        _run(db.users.insert_one({"user_id": "admin1", "role": "admin",
-                                   "active": True, "deleted_at": None,
-                                   "email": "a@x", "name": "A"}))
-        async def wa_send(conv, text):
-            raise RuntimeError("meta_500")
+        # Update bot settings to include default_handoff_user_id
+        _run(db.bot_settings.insert_one({"_id": "default", "default_handoff_user_id": "operator1"}))
+        
         monkeypatch.setattr(pipeline_mod, "call_llm_json",
-                            _llm_factory(decision="reply_with_bot", confidence=0.9))
-        ev = _run(pipeline_mod.process_inbound(db, cv, "wamid.IN1", wa_send=wa_send))
-        bots = [m for m in db.messages.docs if m["sender_type"] == "bot"]
-        assert bots == []  # no ghost outbound
-        assert ev.get("status") == "error" or ev.get("error_message")
-        # admin got a handoff notification
-        notifs = [n for n in db.notifications.docs if n["assigned_user_id"] == "admin1"]
-        assert len(notifs) >= 1
-        # original inbound message preserved
-        ins = [m for m in db.messages.docs if m["id"] == "msg_in_1"]
-        assert len(ins) == 1
+                            _llm_factory(decision="require_human", confidence=0.9, human_reason="Handoff needed"))
+        ev = _run(pipeline_mod.process_inbound(db, cv, "wamid.IN1", wa_send=AsyncMock()))
+        
+        # Verify conversation and lead are updated with the assigned operator
+        conv = _run(db.conversations.find_one({"id": cv}))
+        assert conv["assigned_to"] == "operator1"
+        assert conv["bot_status"] == "requiere_humano"
+        
+        lead = _run(db.leads.find_one({"id": "ld1"}))
+        assert lead["assigned_to"] == "operator1"
 
     def test_09_dni_pattern_forces_handoff_without_replying(self, pipeline_mod, monkeypatch):
         db = _DB()

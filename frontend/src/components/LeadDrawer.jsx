@@ -88,9 +88,12 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
                 </div>
                 <div>
                   <p className="text-xs font-bold uppercase tracking-wider text-[#888888] mb-1.5">Responsable</p>
-                  <Select value={lead.assigned_to || ""} onValueChange={(v) => patch.mutate({ assigned_to: v })}>
+                  <Select value={lead.assigned_to || "unassigned"} onValueChange={(v) => patch.mutate({ assigned_to: v === "unassigned" ? null : v })}>
                     <SelectTrigger className="rounded-sm"><SelectValue placeholder="Asignar" /></SelectTrigger>
-                    <SelectContent>{users.map((u) => <SelectItem key={u.user_id} value={u.user_id}>{u.name}</SelectItem>)}</SelectContent>
+                    <SelectContent>
+                      <SelectItem value="unassigned">Sin asignar</SelectItem>
+                      {users.map((u) => <SelectItem key={u.user_id} value={u.user_id}>{u.name}</SelectItem>)}
+                    </SelectContent>
                   </Select>
                 </div>
               </div>
