@@ -11,19 +11,29 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import LeadDrawer from "@/components/LeadDrawer";
 
 export default function Contacts() {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", phone: "", email: "", company: "" });
+  const [activeTab, setActiveTab] = useState("clients");
+  const [selectedLeadId, setSelectedLeadId] = useState(null);
 
-  const { data: contacts = [] } = useQuery({ queryKey: ["contacts"], queryFn: () => api.get("/contacts").then((r) => r.data) });
+  const contactsQ = useQuery({ queryKey: ["contacts"], queryFn: () => api.get("/contacts").then((r) => r.data) });
+  const leadsQ = useQuery({
+    queryKey: ["leads", { status: "all", priority: "all", assigned_to: "all" }],
+    queryFn: () => api.get("/leads").then((r) => r.data)
+  });
+  const { data: users = [] } = useQuery({ queryKey: ["users"], queryFn: () => api.get("/users").then((r) => r.data) });
 
   const create = useMutation({
     mutationFn: () => api.post("/contacts", form),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["contacts"] });
+      qc.invalidateQueries({ queryKey: ["leads"] });
       setOpen(false);
       setForm({ name: "", phone: "", email: "", company: "" });
       toast.success("Contacto agregado");
@@ -31,13 +41,33 @@ export default function Contacts() {
     onError: () => toast.error("No se pudo agregar el contacto"),
   });
 
-  const filtered = contacts.filter((c) =>
+  const contacts = contactsQ.data || [];
+  const leads = leadsQ.data || [];
+
+  const contactsWithLeads = contacts.map((c) => {
+    const linkedLead = leads.find((l) => l.contact_id === c.id);
+    return { ...c, lead: linkedLead };
+  });
+
+  const clients = contactsWithLeads.filter((c) => {
+    const status = c.lead?.status;
+    return status === "proposal" || status === "won" || status === "lost";
+  });
+
+  const nonClients = contactsWithLeads.filter((c) => {
+    const status = c.lead?.status;
+    return !status || (status !== "proposal" && status !== "won" && status !== "lost");
+  });
+
+  const listToRender = activeTab === "clients" ? clients : nonClients;
+
+  const filtered = listToRender.filter((c) =>
     !search || [c.name, c.company, c.phone].some((f) => f?.toLowerCase().includes(search.toLowerCase()))
   );
 
   return (
     <AppLayout
-      title="Contactos"
+      title="Clientes y Contactos"
       actions={
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -61,17 +91,39 @@ export default function Contacts() {
       }
     >
       <div className="p-6 md:p-8 space-y-5 animate-in fade-in duration-300">
-        <div className="relative max-w-xs">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-latus-muted" />
-          <Input data-testid="contacts-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar contactos…" className="pl-9 rounded-sm bg-white" />
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="bg-transparent border-b border-[#E9E6DC] rounded-none h-auto p-0 gap-4">
+              <TabsTrigger data-testid="tab-clients" value="clients" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#0E8DDB] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-1 pb-3 font-semibold">Clientes</TabsTrigger>
+              <TabsTrigger data-testid="tab-contacts" value="contacts" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#0E8DDB] data-[state=active]:bg-transparent data-[state=active]:shadow-none px-1 pb-3 font-semibold">Contactos</TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          <div className="relative max-w-xs w-full sm:w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-latus-muted" />
+            <Input data-testid="contacts-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar..." className="pl-9 rounded-sm bg-white" />
+          </div>
         </div>
 
         {filtered.length === 0 ? (
-          <div className="bg-white border border-[#E9E6DC] rounded-sm"><EmptyState icon={Users} title="Sin contactos" subtitle="Cada contacto de WhatsApp vive acá." /></div>
+          <div className="bg-white border border-[#E9E6DC] rounded-sm">
+            <EmptyState icon={Users} title={activeTab === "clients" ? "Sin clientes" : "Sin contactos"} subtitle="Cada contacto de WhatsApp vive acá." />
+          </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {filtered.map((c) => (
-              <div key={c.id} data-testid={`contact-card-${c.id}`} className="bg-white border border-[#E9E6DC] rounded-sm p-5 hover:border-zinc-300 transition-colors">
+              <div
+                key={c.id}
+                onClick={() => {
+                  if (c.lead) {
+                    setSelectedLeadId(c.lead.id);
+                  } else {
+                    toast.error("Legajo no disponible");
+                  }
+                }}
+                data-testid={`contact-card-${c.id}`}
+                className="bg-white border border-[#E9E6DC] rounded-sm p-5 hover:border-zinc-300 transition-colors cursor-pointer"
+              >
                 <div className="flex items-center gap-3 mb-4">
                   <Avatar src={c.avatar} name={c.name} size={44} />
                   <div className="min-w-0">
@@ -83,6 +135,12 @@ export default function Contacts() {
                   <p className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-[#0E8DDB]" /> {c.phone}</p>
                   {c.email && <p className="flex items-center gap-2 truncate"><Mail className="h-3.5 w-3.5 text-[#0E8DDB]" /> {c.email}</p>}
                 </div>
+                {c.lead && (
+                  <div className="mt-3 pt-3 border-t border-[#E9E6DC] flex items-center justify-between text-xs text-[#888888]">
+                    <span>Lead: {c.lead.title}</span>
+                    <span className="font-bold text-[#0E8DDB]">Ver legajo &rarr;</span>
+                  </div>
+                )}
                 {c.tags?.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mt-4">
                     {c.tags.map((t) => <span key={t} className="text-xs font-semibold bg-latus-warm-gray text-[#888888] rounded-full px-2.5 py-0.5">{t}</span>)}
@@ -93,6 +151,18 @@ export default function Contacts() {
           </div>
         )}
       </div>
+
+      {selectedLeadId && (
+        <LeadDrawer
+          leadId={selectedLeadId}
+          onClose={() => {
+            setSelectedLeadId(null);
+            qc.invalidateQueries({ queryKey: ["contacts"] });
+            qc.invalidateQueries({ queryKey: ["leads"] });
+          }}
+          users={users}
+        />
+      )}
     </AppLayout>
   );
 }

@@ -191,6 +191,13 @@ class ContactCreate(BaseModel):
     notes: Optional[str] = None
 
 
+class LeadProduct(BaseModel):
+    id: Optional[str] = None
+    name: str
+    price: float
+    quantity: int = 1
+
+
 class Lead(BaseModel):
     id: str = Field(default_factory=lambda: new_id("lead"))
     contact_id: str
@@ -201,6 +208,7 @@ class Lead(BaseModel):
     assigned_to: Optional[str] = None
     source: str = "WhatsApp"
     tags: List[str] = []
+    products: List[LeadProduct] = []
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
 
@@ -214,6 +222,7 @@ class LeadCreate(BaseModel):
     assigned_to: Optional[str] = None
     source: str = "WhatsApp"
     tags: List[str] = []
+    products: Optional[List[LeadProduct]] = []
 
 
 class LeadUpdate(BaseModel):
@@ -223,6 +232,7 @@ class LeadUpdate(BaseModel):
     value: Optional[float] = None
     assigned_to: Optional[str] = None
     tags: Optional[List[str]] = None
+    products: Optional[List[LeadProduct]] = None
 
 
 class Conversation(BaseModel):
@@ -1027,6 +1037,25 @@ async def list_contacts(user: User = Depends(get_current_user), search: Optional
             {"company": {"$regex": search, "$options": "i"}},
         ]}
     docs = await db.contacts.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    
+    # Self-healing: ensure all returned contacts have a linked lead
+    for d in docs:
+        cid = d["id"]
+        exist_lead = await db.leads.find_one({"contact_id": cid})
+        if not exist_lead:
+            lead = Lead(
+                id=new_id("lead"),
+                contact_id=cid,
+                title=f"Lead de {d['name']}",
+                status="new",
+                priority="medium",
+                value=0.0,
+                assigned_to=user.user_id,
+                tags=[],
+                products=[],
+            )
+            await db.leads.insert_one(lead.model_dump())
+            
     return [Contact(**d) for d in docs]
 
 
@@ -1034,6 +1063,21 @@ async def list_contacts(user: User = Depends(get_current_user), search: Optional
 async def create_contact(payload: ContactCreate, user: User = Depends(get_current_user)):
     contact = Contact(**payload.model_dump())
     await db.contacts.insert_one(contact.model_dump())
+    
+    # Automatically create a linked lead for the new contact
+    lead = Lead(
+        id=new_id("lead"),
+        contact_id=contact.id,
+        title=f"Lead de {contact.name}",
+        status="new",
+        priority="medium",
+        value=0.0,
+        assigned_to=user.user_id,
+        tags=[],
+        products=[],
+    )
+    await db.leads.insert_one(lead.model_dump())
+    
     return contact
 
 
@@ -1099,6 +1143,12 @@ async def update_lead(lead_id: str, payload: LeadUpdate, user: User = Depends(ge
             update["assigned_to"] = None
         else:
             update["assigned_to"] = str(val).strip()
+            
+    if "products" in payload.model_fields_set:
+        products_list = payload.products or []
+        update["products"] = [p.model_dump() for p in products_list]
+        update["value"] = sum(float(p.price) * int(p.quantity) for p in products_list)
+        
     update["updated_at"] = now_iso()
     await db.leads.update_one({"id": lead_id}, {"$set": update})
     doc = await db.leads.find_one({"id": lead_id}, {"_id": 0})
@@ -2454,8 +2504,12 @@ async def list_tasks(
         q["assigned_to"] = assigned_to
     docs = await db.tasks.find(q, {"_id": 0}).sort("due_date", 1).to_list(1000)
     leads = {l["id"]: l for l in await db.leads.find({}, {"_id": 0}).to_list(1000)}
+    contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(1000)}
     for d in docs:
-        d["lead"] = leads.get(d.get("lead_id"))
+        lead = leads.get(d.get("lead_id"))
+        if lead:
+            lead["contact"] = contacts.get(lead.get("contact_id"))
+            d["lead"] = lead
     return docs
 
 

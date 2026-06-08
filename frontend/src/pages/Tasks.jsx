@@ -20,17 +20,22 @@ export default function Tasks() {
   const qc = useQueryClient();
   const [tab, setTab] = useState("todo");
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ title: "", description: "", due_date: "", priority: "medium", assigned_to: "" });
+  const [form, setForm] = useState({ title: "", description: "", due_date: "", priority: "medium", assigned_to: "", lead_id: "" });
 
   const { data: tasks = [] } = useQuery({ queryKey: ["tasks"], queryFn: () => api.get("/tasks").then((r) => r.data) });
   const { data: users = [] } = useQuery({ queryKey: ["users"], queryFn: () => api.get("/users").then((r) => r.data) });
+  const leadsQ = useQuery({
+    queryKey: ["leads", { status: "all", priority: "all", assigned_to: "all" }],
+    queryFn: () => api.get("/leads").then((r) => r.data)
+  });
+  const leads = leadsQ.data || [];
 
   const create = useMutation({
-    mutationFn: () => api.post("/tasks", { ...form, assigned_to: form.assigned_to || null, due_date: form.due_date || null }),
+    mutationFn: () => api.post("/tasks", { ...form, assigned_to: form.assigned_to || null, due_date: form.due_date || null, lead_id: form.lead_id || null }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tasks"] });
       setOpen(false);
-      setForm({ title: "", description: "", due_date: "", priority: "medium", assigned_to: "" });
+      setForm({ title: "", description: "", due_date: "", priority: "medium", assigned_to: "", lead_id: "" });
       toast.success("Tarea creada");
     },
   });
@@ -74,6 +79,20 @@ export default function Tasks() {
                   <SelectContent>{users.map((u) => <SelectItem key={u.user_id} value={u.user_id}>{u.name}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
+              <div>
+                <Label className="text-xs font-semibold">Vincular a Contacto / Cliente</Label>
+                <Select value={form.lead_id || "none"} onValueChange={(v) => setForm({ ...form, lead_id: v === "none" ? "" : v })}>
+                  <SelectTrigger className="rounded-sm mt-1"><SelectValue placeholder="Sin vincular (General)" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Sin vincular (General)</SelectItem>
+                    {leads.map((l) => (
+                      <SelectItem key={l.id} value={l.id}>
+                        {l.contact?.name ? `${l.contact.name} (${l.title})` : l.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <DialogFooter>
               <Button data-testid="submit-task-button" disabled={!form.title || create.isPending} onClick={() => create.mutate()} className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm w-full font-semibold">Crear tarea</Button>
@@ -106,7 +125,11 @@ export default function Tasks() {
                 <div className="flex-1 min-w-0">
                   <p className={`font-semibold ${t.status === "done" ? "line-through text-latus-muted" : "text-[#0B1B26]"}`}>{t.title}</p>
                   {t.description && <p className="text-sm text-[#888888] truncate">{t.description}</p>}
-                  {t.lead?.title && <p className="text-xs text-[#0E8DDB] mt-0.5">Vinculado: {t.lead.title}</p>}
+                  {t.lead && (
+                    <p className="text-xs text-[#0E8DDB] mt-0.5">
+                      Vinculado: {t.lead.contact?.name ? `${t.lead.contact.name} (${t.lead.title})` : t.lead.title}
+                    </p>
+                  )}
                 </div>
                 <div className="flex items-center gap-4 shrink-0">
                   {t.due_date && <span className="flex items-center gap-1.5 text-xs text-[#888888]"><Calendar className="h-3.5 w-3.5" /> {t.due_date}</span>}

@@ -68,6 +68,7 @@ class _FakeDB:
         self.conversations = _Coll()
         self.messages = _Coll()
         self.app_secrets = _Coll()
+        self.tasks = _Coll()
 
 def _run(coro):
     loop = asyncio.new_event_loop()
@@ -177,3 +178,77 @@ def test_permissions_sending_messages(srv):
         r = client.post("/api/conversations/conv_123/send-whatsapp", headers={"Authorization": "Bearer T-AGENT2"}, json={"text": "Hello"})
         assert r.status_code == 403
         assert "Solo el operador asignado" in r.json()["detail"]
+
+
+def test_lead_creation_and_healing(srv):
+    server, fake, client = srv
+    # 1. Post a new contact
+    r = client.post("/api/contacts", headers={"Authorization": "Bearer T-ADMIN"}, json={
+        "name": "Juan Perez",
+        "phone": "+54911223344",
+        "email": "juan@perez.com",
+        "company": "Perez Co"
+    })
+    assert r.status_code == 200
+    contact_id = r.json()["id"]
+
+    # Verify a lead was automatically created
+    lead = _run(fake.leads.find_one({"contact_id": contact_id}))
+    assert lead is not None
+    assert lead["title"] == "Lead de Juan Perez"
+    assert lead["status"] == "new"
+
+    # 2. Test self-healing on list_contacts
+    # Insert contact manually without a lead
+    _run(fake.contacts.insert_one({"id": "contact_no_lead", "name": "Maria", "phone": "+5491100000"}))
+    r = client.get("/api/contacts", headers={"Authorization": "Bearer T-ADMIN"})
+    assert r.status_code == 200
+
+    # Verify a lead was healed for Maria
+    lead_healed = _run(fake.leads.find_one({"contact_id": "contact_no_lead"}))
+    assert lead_healed is not None
+    assert lead_healed["title"] == "Lead de Maria"
+
+
+def test_lead_products_value_calculation(srv):
+    server, fake, client = srv
+    # Seed lead
+    _run(fake.leads.insert_one({"id": "lead_val_123", "contact_id": "contact_123", "title": "CRM Interest", "status": "new", "value": 0.0, "products": []}))
+
+    # Patch products list
+    products_payload = [
+        {"name": "Consultoria", "price": 150.0, "quantity": 2},
+        {"name": "Soporte Anual", "price": 500.0, "quantity": 1}
+    ]
+    r = client.patch("/api/leads/lead_val_123", headers={"Authorization": "Bearer T-ADMIN"}, json={"products": products_payload})
+    assert r.status_code == 200
+    data = r.json()
+    
+    # 2 * 150 + 1 * 500 = 800
+    assert data["value"] == 800.0
+    assert len(data["products"]) == 2
+    assert data["products"][0]["name"] == "Consultoria"
+    assert data["products"][0]["price"] == 150.0
+    assert data["products"][0]["quantity"] == 2
+
+
+def test_task_list_enrichment(srv):
+    server, fake, client = srv
+    # Seed contact, lead, and task
+    _run(fake.contacts.insert_one({"id": "contact_abc", "name": "Carlos Gomez", "phone": "+54911222233"}))
+    _run(fake.leads.insert_one({"id": "lead_abc", "contact_id": "contact_abc", "title": "CRM Interest", "status": "new"}))
+    _run(fake.tasks.insert_one({"id": "task_abc", "title": "Llamar a Carlos", "lead_id": "lead_abc", "status": "todo"}))
+
+    # Fetch tasks
+    r = client.get("/api/tasks", headers={"Authorization": "Bearer T-ADMIN"})
+    assert r.status_code == 200
+    tasks_list = r.json()
+    
+    # Find our task
+    task_doc = next((t for t in tasks_list if t["id"] == "task_abc"), None)
+    assert task_doc is not None
+    assert task_doc["lead"] is not None
+    assert task_doc["lead"]["title"] == "CRM Interest"
+    assert task_doc["lead"]["contact"] is not None
+    assert task_doc["lead"]["contact"]["name"] == "Carlos Gomez"
+

@@ -12,7 +12,7 @@ const NAV = [
   { to: "/inbox", label: "Bandeja", icon: MessageSquare, testid: "nav-inbox" },
   { to: "/leads", label: "Leads", icon: Target, testid: "nav-leads" },
   { to: "/pipeline", label: "Pipeline", icon: KanbanSquare, testid: "nav-pipeline" },
-  { to: "/contacts", label: "Contactos", icon: Users, testid: "nav-contacts" },
+  { to: "/contacts", label: "Clientes", icon: Users, testid: "nav-contacts" },
   { to: "/tasks", label: "Tareas", icon: CheckSquare, testid: "nav-tasks" },
 ];
 

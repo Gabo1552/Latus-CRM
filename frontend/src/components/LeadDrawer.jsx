@@ -1,17 +1,25 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { X, StickyNote, CheckSquare, Phone, Building2, Send } from "lucide-react";
+import { X, StickyNote, CheckSquare, Phone, Building2, Send, Check } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { LEAD_STATUSES, PRIORITIES, money } from "@/lib/constants";
 import { StatusBadge, Avatar } from "@/components/Bits";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function LeadDrawer({ leadId, onClose, users = [] }) {
   const qc = useQueryClient();
   const [note, setNote] = useState("");
+  const [taskTitle, setTaskTitle] = useState("");
+  
+  const [selectedCatalogProduct, setSelectedCatalogProduct] = useState("");
+  const [manualName, setManualName] = useState("");
+  const [manualPrice, setManualPrice] = useState("");
+  const [manualQuantity, setManualQuantity] = useState(1);
 
   const { data: lead } = useQuery({
     queryKey: ["lead", leadId],
@@ -19,11 +27,22 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
     enabled: !!leadId,
   });
 
+  const catalogQ = useQuery({
+    queryKey: ["catalog-products"],
+    queryFn: () => api.get("/catalog/products?limit=100").then((r) => r.data),
+  });
+
+  const tasksQ = useQuery({
+    queryKey: ["tasks"],
+    queryFn: () => api.get("/tasks").then((r) => r.data),
+  });
+
   const patch = useMutation({
     mutationFn: (body) => api.patch(`/leads/${leadId}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["lead", leadId] });
       qc.invalidateQueries({ queryKey: ["leads"] });
+      qc.invalidateQueries({ queryKey: ["contacts"] });
       toast.success("Lead actualizado");
     },
   });
@@ -34,6 +53,24 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
       setNote("");
       qc.invalidateQueries({ queryKey: ["lead", leadId] });
       toast.success("Nota agregada");
+    },
+  });
+
+  const toggleTask = useMutation({
+    mutationFn: ({ id, status }) => api.patch(`/tasks/${id}`, { status }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lead", leadId] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+    },
+  });
+
+  const addTask = useMutation({
+    mutationFn: () => api.post("/tasks", { title: taskTitle, lead_id: leadId }),
+    onSuccess: () => {
+      setTaskTitle("");
+      qc.invalidateQueries({ queryKey: ["lead", leadId] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      toast.success("Tarea agregada");
     },
   });
 
@@ -83,7 +120,7 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-latus-cream border border-[#E9E6DC] rounded-sm p-3">
-                  <p className="text-xs font-bold uppercase tracking-wider text-[#888888]">Valor</p>
+                  <p className="text-xs font-bold uppercase tracking-wider text-[#888888]">Valor Total (Ticket)</p>
                   <p className="text-2xl font-extrabold tracking-tighter text-[#0B1B26] mt-1">{money(lead.value)}</p>
                 </div>
                 <div>
@@ -98,22 +135,213 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
                 </div>
               </div>
 
-              {/* Tasks */}
-              <div>
-                <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#888888] mb-2"><CheckSquare className="h-3.5 w-3.5" /> Tareas</p>
-                <div className="space-y-1.5">
-                  {(lead.tasks || []).length === 0 && <p className="text-sm text-latus-muted">Aún no hay tareas.</p>}
-                  {(lead.tasks || []).map((t) => (
-                    <div key={t.id} className="flex items-center gap-2 text-sm border border-[#E9E6DC] rounded-sm px-3 py-2">
-                      <span className={`h-2 w-2 rounded-full ${t.status === "done" ? "bg-[#064E3B]" : "bg-[#0E8DDB]"}`} />
-                      <span className={t.status === "done" ? "line-through text-latus-muted" : "text-[#0B1B26]"}>{t.title}</span>
+              {/* Products Section */}
+              <div className="border-t border-[#E9E6DC] pt-4">
+                <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#888888] mb-2">Productos ({lead.products?.length || 0})</p>
+                
+                {/* List products already in lead */}
+                <div className="space-y-1.5 mb-3">
+                  {(lead.products || []).length === 0 ? (
+                    <p className="text-sm text-latus-muted">No hay productos agregados.</p>
+                  ) : (
+                    (lead.products || []).map((p, idx) => (
+                      <div key={idx} className="flex items-center justify-between border border-[#E9E6DC] bg-latus-cream rounded-sm px-3 py-2 text-sm">
+                        <div className="min-w-0">
+                          <p className="font-semibold text-[#0B1B26] truncate">{p.name}</p>
+                          <p className="text-xs text-[#888888]">{p.quantity} x {money(p.price)}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-[#0B1B26]">{money(p.price * p.quantity)}</span>
+                          <button
+                            onClick={() => {
+                              const updated = [...lead.products];
+                              updated.splice(idx, 1);
+                              patch.mutate({ products: updated });
+                            }}
+                            className="text-red-500 hover:text-red-700 text-xs font-semibold px-1"
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Add product form */}
+                <div className="border border-[#E9E6DC] rounded-sm p-3 space-y-3 bg-white">
+                  <p className="text-xs font-bold text-[#0B1B26] uppercase">Agregar Producto</p>
+                  
+                  {/* Select from catalog */}
+                  <div>
+                    <Label className="text-[10px] font-bold uppercase text-[#888888]">Desde Catálogo</Label>
+                    <div className="flex gap-2 mt-1">
+                      <Select
+                        value={selectedCatalogProduct || ""}
+                        onValueChange={(val) => {
+                          setSelectedCatalogProduct(val);
+                          const prod = catalogQ.data?.items?.find((i) => i.product_id === val);
+                          if (prod) {
+                            setManualName(prod.name);
+                            setManualPrice(prod.price.toString());
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="rounded-sm h-9 text-xs flex-1">
+                          <SelectValue placeholder="Seleccionar del catálogo..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(catalogQ.data?.items || [])
+                            .filter((item) => item.active)
+                            .map((item) => (
+                              <SelectItem key={item.product_id} value={item.product_id}>
+                                {item.name} ({money(item.price)})
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
                     </div>
-                  ))}
+                  </div>
+
+                  {/* Manual entry / confirm details */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-2">
+                      <Label className="text-[10px] font-bold uppercase text-[#888888]">Nombre</Label>
+                      <Input
+                        value={manualName}
+                        onChange={(e) => setManualName(e.target.value)}
+                        placeholder="Ej.: Consultoría"
+                        className="rounded-sm h-8 mt-1 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[10px] font-bold uppercase text-[#888888]">Precio</Label>
+                      <Input
+                        type="number"
+                        value={manualPrice}
+                        onChange={(e) => setManualPrice(e.target.value)}
+                        placeholder="100"
+                        className="rounded-sm h-8 mt-1 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 items-center">
+                    <div className="w-1/3">
+                      <Label className="text-[10px] font-bold uppercase text-[#888888]">Cant.</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        value={manualQuantity}
+                        onChange={(e) => setManualQuantity(parseInt(e.target.value) || 1)}
+                        className="rounded-sm h-8 mt-1 text-xs"
+                      />
+                    </div>
+                    <div className="w-2/3 pt-4">
+                      <Button
+                        disabled={!manualName.trim() || !manualPrice}
+                        onClick={() => {
+                          const newProduct = {
+                            id: selectedCatalogProduct || null,
+                            name: manualName.trim(),
+                            price: parseFloat(manualPrice) || 0.0,
+                            quantity: manualQuantity,
+                          };
+                          const updated = [...(lead.products || []), newProduct];
+                          patch.mutate({ products: updated });
+                          // Reset input fields
+                          setManualName("");
+                          setManualPrice("");
+                          setManualQuantity(1);
+                          setSelectedCatalogProduct("");
+                        }}
+                        className="w-full bg-[#0B1B26] hover:bg-[#0E8DDB] rounded-sm h-8 text-xs font-semibold"
+                      >
+                        Agregar
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tasks */}
+              <div className="border-t border-[#E9E6DC] pt-4 space-y-4">
+                <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#888888] mb-1">
+                  <CheckSquare className="h-3.5 w-3.5" /> Tareas
+                </p>
+
+                {/* Contact Specific Tasks */}
+                <div className="space-y-2">
+                  <p className="text-[10px] font-bold uppercase text-[#888888] tracking-wider">Tareas del contacto ({(tasksQ.data || []).filter((t) => t.lead_id === leadId).length})</p>
+                  <div className="space-y-1.5">
+                    {(() => {
+                      const contactTasks = (tasksQ.data || []).filter((t) => t.lead_id === leadId);
+                      if (contactTasks.length === 0) {
+                        return <p className="text-xs text-latus-muted pl-1">No hay tareas específicas para este contacto.</p>;
+                      }
+                      return contactTasks.map((t) => (
+                        <div key={t.id} className="flex items-center justify-between border border-[#E9E6DC] rounded-sm px-3 py-2 text-sm bg-white">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <button
+                              onClick={() => toggleTask.mutate({ id: t.id, status: t.status === "done" ? "todo" : "done" })}
+                              className={`h-4.5 w-4.5 rounded-sm border flex items-center justify-center shrink-0 transition-colors ${t.status === "done" ? "bg-[#064E3B] border-[#064E3B]" : "border-zinc-300 hover:border-[#0E8DDB]"}`}
+                            >
+                              {t.status === "done" && <Check className="h-3 w-3 text-white" />}
+                            </button>
+                            <span className={t.status === "done" ? "line-through text-latus-muted truncate" : "text-[#0B1B26] truncate"}>{t.title}</span>
+                          </div>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+
+                  <div className="flex gap-2 mt-2">
+                    <Input
+                      placeholder="Nueva tarea puntual..."
+                      value={taskTitle}
+                      onChange={(e) => setTaskTitle(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && taskTitle.trim()) { addTask.mutate(); } }}
+                      className="rounded-sm h-8 text-xs"
+                    />
+                    <Button
+                      disabled={!taskTitle.trim() || addTask.isPending}
+                      onClick={() => { if (taskTitle.trim()) addTask.mutate(); }}
+                      className="bg-[#0B1B26] hover:bg-[#0E8DDB] rounded-sm h-8 text-xs shrink-0"
+                    >
+                      Agregar
+                    </Button>
+                  </div>
+                </div>
+
+                {/* General Tasks */}
+                <div className="space-y-2 pt-2 border-t border-[#E9E6DC]/60">
+                  <p className="text-[10px] font-bold uppercase text-[#888888] tracking-wider">Tareas generales ({(tasksQ.data || []).filter((t) => !t.lead_id).length})</p>
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                    {(() => {
+                      const generalTasks = (tasksQ.data || []).filter((t) => !t.lead_id);
+                      if (generalTasks.length === 0) {
+                        return <p className="text-xs text-latus-muted pl-1">No hay tareas generales.</p>;
+                      }
+                      return generalTasks.map((t) => (
+                        <div key={t.id} className="flex items-center justify-between border border-[#E9E6DC]/80 rounded-sm px-3 py-1.5 text-xs bg-latus-cream/40">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <button
+                              onClick={() => toggleTask.mutate({ id: t.id, status: t.status === "done" ? "todo" : "done" })}
+                              className={`h-4 w-4 rounded-sm border flex items-center justify-center shrink-0 transition-colors ${t.status === "done" ? "bg-[#064E3B] border-[#064E3B]" : "border-zinc-300 hover:border-[#0E8DDB]"}`}
+                            >
+                              {t.status === "done" && <Check className="h-2.5 w-2.5 text-white" />}
+                            </button>
+                            <span className={t.status === "done" ? "line-through text-latus-muted truncate" : "text-[#0B1B26] truncate"}>{t.title}</span>
+                          </div>
+                        </div>
+                      ));
+                    })()}
+                  </div>
                 </div>
               </div>
 
               {/* Notes */}
-              <div>
+              <div className="border-t border-[#E9E6DC] pt-4">
                 <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#888888] mb-2"><StickyNote className="h-3.5 w-3.5" /> Notas internas</p>
                 <div className="flex gap-2 mb-3">
                   <Textarea data-testid="note-input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Agregar una nota interna…" className="rounded-sm text-sm min-h-[60px]" />
