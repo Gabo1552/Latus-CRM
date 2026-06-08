@@ -870,6 +870,8 @@ function BotIATab({ setTab }) {
   const threshInvalid = !(thresh >= 0 && thresh <= 1);
   const ctxInvalid = !(ctxMax >= 3 && ctxMax <= 50);
   const dirty = JSON.stringify(draft) !== JSON.stringify(q.data);
+  const providers = aiProviderQ.data?.supported_providers || Object.keys(PROVIDER_LABELS);
+  const suggestionsList = (aiProviderQ.data?.model_suggestions || {})[draft.provider || "built_in"] || [];
 
   const onSave = () => {
     if (threshInvalid) {
@@ -891,6 +893,7 @@ function BotIATab({ setTab }) {
       business_instructions: draft.business_instructions || "",
       handoff_rules: draft.handoff_rules || "",
       tone: draft.tone || "",
+      provider: draft.provider || "built_in",
       model: draft.model || "gpt-4o-mini",
       bot_name: (draft.bot_name || "").trim(),
       include_client_info: !!draft.include_client_info,
@@ -929,53 +932,77 @@ function BotIATab({ setTab }) {
             />
           </div>
 
+          {/* Provider */}
+          <div className="p-3 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Proveedor</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
+              Elegí el proveedor de IA para el bot de autorespuestas.
+            </p>
+            <Select value={draft.provider || "built_in"} onValueChange={(v) => {
+              const newSuggestions = (aiProviderQ.data?.model_suggestions || {})[v] || [];
+              const defaultModel = newSuggestions[0] || "";
+              set({ provider: v, model: defaultModel });
+            }}>
+              <SelectTrigger data-testid="bot-setting-provider" className="rounded-sm h-9 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {providers.map((p) => (
+                  <SelectItem key={p} value={p}>{PROVIDER_LABELS[p] || p}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
           {/* Model */}
           <div className="p-3 border border-[#E9E6DC] rounded-sm">
             <Label className="text-sm font-bold text-[#0B1B26]">Modelo</Label>
-            {aiProviderQ.data?.provider !== "built_in" ? (
-              <>
-                <p className="text-xs text-[#888888] mt-0.5 mb-2">
-                  El modelo utilizado para generar respuestas.
-                </p>
-                <div className="bg-[#F9F9F7] border border-[#E9E6DC] rounded-sm p-2 flex items-center justify-between text-sm">
-                  <div>
-                    <span className="font-mono text-[#0B1B26] font-bold">{aiProviderQ.data?.model || "Configurado por proveedor"}</span>
-                    <p className="text-[11px] text-[#888888] mt-0.5">
-                      Proveedor: <span className="font-semibold text-[#0B1B26]">{PROVIDER_LABELS[aiProviderQ.data?.provider] || aiProviderQ.data?.provider}</span>
-                    </p>
-                  </div>
-                  <span className="text-[11px] font-bold text-[#0E8DDB] bg-[#E9E6DC] px-2 py-0.5 rounded-sm">Activo</span>
-                </div>
-                <p className="text-[11px] text-[#888888] mt-2">
-                  Este modelo se gestiona globalmente en la pestaña{" "}
-                  <button
-                    type="button"
-                    onClick={() => setTab("ai")}
-                    className="text-[#0E8DDB] font-bold hover:underline font-semibold"
-                  >
-                    IA y automatización
-                  </button>
-                  .
-                </p>
-              </>
-            ) : (
-              <>
-                <p className="text-xs text-[#888888] mt-0.5 mb-2">
-                  El modelo que genera las respuestas (usando el proveedor incorporado).
-                </p>
-                <Select value={draft.model || "gpt-4o-mini"} onValueChange={(v) => set({ model: v })}>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
+              Seleccioná un modelo o ingresá uno personalizado para el bot.
+            </p>
+            {suggestionsList.length > 0 ? (
+              <div className="space-y-2">
+                <Select
+                  value={suggestionsList.includes(draft.model) ? draft.model : "custom"}
+                  onValueChange={(v) => {
+                    if (v === "custom") {
+                      if (suggestionsList.includes(draft.model)) {
+                        set({ model: "" });
+                      }
+                    } else {
+                      set({ model: v });
+                    }
+                  }}
+                >
                   <SelectTrigger data-testid="bot-setting-model" className="rounded-sm h-9 text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="gpt-4o-mini">gpt-4o-mini (recomendado)</SelectItem>
-                    <SelectItem value="gpt-4o">gpt-4o (más preciso)</SelectItem>
-                    <SelectItem value="claude-3-5-sonnet-20241022">claude-3-5-sonnet-20241022</SelectItem>
-                    <SelectItem value="gemini-2.0-flash">gemini-2.0-flash (rápido y económico)</SelectItem>
-                    <SelectItem value="gemini-1.5-flash">gemini-1.5-flash</SelectItem>
+                    {suggestionsList.map((m) => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                    <SelectItem value="custom">Otro modelo (personalizado)</SelectItem>
                   </SelectContent>
                 </Select>
-              </>
+
+                {(!suggestionsList.includes(draft.model) || draft.model === "") && (
+                  <Input
+                    data-testid="bot-setting-model-custom"
+                    value={draft.model || ""}
+                    onChange={(e) => set({ model: e.target.value })}
+                    className="rounded-sm h-9 mt-2 font-mono"
+                    placeholder="Escribí el identificador del modelo..."
+                  />
+                )}
+              </div>
+            ) : (
+              <Input
+                data-testid="bot-setting-model"
+                value={draft.model || ""}
+                onChange={(e) => set({ model: e.target.value })}
+                className="rounded-sm h-9 font-mono"
+                placeholder="Identificador del modelo"
+              />
             )}
           </div>
 

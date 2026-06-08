@@ -73,7 +73,8 @@ async def load_settings(db) -> dict:
     merged = {**DEFAULTS, **{k: v for k, v in doc.items() if k in DEFAULTS}}
     if merged.get("provider") == base64.b64decode(b'ZW1lcmdlbnQ=').decode('utf-8'):
         merged["provider"] = "built_in"
-    merged["api_key_configured"] = bool(doc.get("api_key_enc"))
+    provider = merged.get("provider", "built_in")
+    merged["api_key_configured"] = bool(doc.get(f"api_key_{provider}_enc") or doc.get("api_key_enc"))
     merged["updated_at"] = doc.get("updated_at")
     merged["updated_by"] = doc.get("updated_by")
     return merged
@@ -87,12 +88,16 @@ async def save_settings(db, patch: dict, user_id: str | None) -> dict:
     """
     set_fields: dict[str, Any] = {}
     unset_fields: dict[str, Any] = {}
+    current = await load_settings(db)
+    provider = patch.get("provider", current.get("provider", "built_in"))
     for k, v in patch.items():
         if k == "api_key":
             if v is None:
                 unset_fields["api_key_enc"] = ""
+                unset_fields[f"api_key_{provider}_enc"] = ""
             elif isinstance(v, str) and v.strip():
                 set_fields["api_key_enc"] = crypto.encrypt(v.strip())
+                set_fields[f"api_key_{provider}_enc"] = crypto.encrypt(v.strip())
         elif k in DEFAULTS:
             set_fields[k] = v
     set_fields["updated_at"] = _now_iso()
@@ -104,15 +109,15 @@ async def save_settings(db, patch: dict, user_id: str | None) -> dict:
     return await load_settings(db)
 
 
-async def _resolve_api_key(db) -> str:
+async def _resolve_api_key(db, provider: str) -> str:
     doc = await db.app_secrets.find_one({"_id": "ai_provider"}, {"_id": 0}) or {}
-    enc = doc.get("api_key_enc")
+    enc = doc.get(f"api_key_{provider}_enc") or doc.get("api_key_enc")
     if not enc:
         return ""
     try:
         return crypto.decrypt(enc)
     except Exception:
-        logger.error("ai_provider: cannot decrypt api_key (encryption key rotated?)")
+        logger.error("ai_provider: cannot decrypt api_key for provider %s", provider)
         return ""
 
 
@@ -459,17 +464,18 @@ _PROVIDER_CLASSES: dict[str, type[AIProvider]] = {
 }
 
 
-async def get_provider(db, *, override_model: str | None = None) -> AIProvider:
+async def get_provider(db, *, override_provider: str | None = None, override_model: str | None = None) -> AIProvider:
     """Construct the configured provider, ready to call ``.chat(...)``."""
     s = await load_settings(db)
     if not s.get("ai_enabled", True):
         raise LLMUnavailable("La integración con IA está desactivada")
-    cls = _PROVIDER_CLASSES.get(s["provider"], BuiltInProvider)
+    active_provider = override_provider or s.get("provider") or "built_in"
+    cls = _PROVIDER_CLASSES.get(active_provider, BuiltInProvider)
     key = ""
-    if s["provider"] in KEY_REQUIRED_PROVIDERS:
-        key = await _resolve_api_key(db)
+    if active_provider in KEY_REQUIRED_PROVIDERS:
+        key = await _resolve_api_key(db, active_provider)
         if not key:
-            raise LLMUnavailable("API Key del proveedor no configurada")
+            raise LLMUnavailable(f"API Key del proveedor '{active_provider}' no configurada")
     return cls(
         model=(override_model or s.get("model") or DEFAULTS["model"]),
         api_key=key,

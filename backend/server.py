@@ -1857,6 +1857,7 @@ class BotSettingsUpdate(BaseModel):
     faqs: Optional[List[dict]] = None
     handoff_rules: Optional[str] = None
     tone: Optional[str] = None
+    provider: Optional[str] = None
     model: Optional[str] = None
     bot_name: Optional[str] = None
     include_client_info: Optional[bool] = None
@@ -1889,8 +1890,23 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
         if not (3 <= v <= 50):
             raise HTTPException(400, "recent_messages_context_max debe estar entre 3 y 50")
         update["recent_messages_context_max"] = v
-    if "model" in update and update["model"] not in _ALLOWED_BOT_MODELS:
-        raise HTTPException(400, f"model debe ser uno de {sorted(_ALLOWED_BOT_MODELS)}")
+    if "provider" in update:
+        from ai.providers import SUPPORTED_PROVIDERS
+        if update["provider"] not in SUPPORTED_PROVIDERS:
+            raise HTTPException(400, "Proveedor no soportado")
+    if "model" in update:
+        prov = update.get("provider")
+        if prov is None:
+            doc = await db.bot_settings.find_one({"_id": "default"}) or {}
+            prov = doc.get("provider", "built_in")
+        if prov == "built_in" and update["model"] not in _ALLOWED_BOT_MODELS:
+            raise HTTPException(400, f"model debe ser uno de {sorted(_ALLOWED_BOT_MODELS)} para el proveedor incorporado")
+        m = (update["model"] or "").strip()
+        if not m:
+            raise HTTPException(400, "El modelo no puede estar vacío")
+        if len(m) > 200:
+            raise HTTPException(400, "Nombre de modelo demasiado largo")
+        update["model"] = m
     if "bot_name" in update:
         bn = (update["bot_name"] or "").strip()
         if not bn:
@@ -1919,7 +1935,7 @@ async def admin_get_ai_provider(admin: User = Depends(require_admin)):
     # never leak the encrypted blob or the plain key
     masked = ""
     if s.get("api_key_configured"):
-        raw = await ai_providers._resolve_api_key(db)
+        raw = await ai_providers._resolve_api_key(db, s.get("provider", "built_in"))
         masked = ai_providers.mask_key(raw)
     return {
         **{k: s[k] for k in ai_providers.DEFAULTS.keys()},

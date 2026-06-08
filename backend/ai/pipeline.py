@@ -29,6 +29,7 @@ DEFAULT_BOT_SETTINGS = {
     "faqs": [],
     "handoff_rules": DEFAULT_HANDOFF_RULES,
     "tone": "profesional, cercano, conciso",
+    "provider": "built_in",
     "model": "gpt-4o-mini",
     "bot_name": "Bot",
     "include_client_info": True,
@@ -69,13 +70,15 @@ async def regenerate_summary(db, conv_id: str, *, user_id: str | None = None) ->
     msgs.reverse()
     block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
     ai_cfg = await ai_providers.load_settings(db)
-    model_override = ai_cfg.get("model") if ai_cfg.get("provider") == "built_in" else None
+    global_provider = ai_cfg.get("provider", "built_in")
+    global_model = ai_cfg.get("model", "gpt-4o-mini")
     try:
         parsed, raw = await call_llm_json(
             db=db,
             system_prompt=build_summary_only_prompt(),
             user_messages_block=block or "(sin mensajes)",
-            model=model_override,
+            provider=global_provider,
+            model=global_model,
             purpose="summary_regen",
             conversation_id=conv_id,
             user_id=user_id,
@@ -137,11 +140,13 @@ async def suggest_reply(db, conv_id: str, *, user_id: str | None = None) -> dict
                              faqs=settings["faqs"], handoff_rules=settings["handoff_rules"],
                              bot_name=settings.get("bot_name", "Bot"),
                              client_info=client_info)
-    model_override = settings["model"] if ai_cfg.get("provider") == "built_in" else None
+    bot_provider = settings.get("provider", "built_in")
+    bot_model = settings.get("model", "gpt-4o-mini")
     try:
         parsed, _ = await call_llm_json(db=db, system_prompt=sp,
                                         user_messages_block=block,
-                                        model=model_override,
+                                        provider=bot_provider,
+                                        model=bot_model,
                                         purpose="suggest_reply",
                                         conversation_id=conv_id,
                                         user_id=user_id)
@@ -253,13 +258,13 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                                  client_info=client_info)
         parsed: dict = {}
         raw = ""
-        # Model override: built_in uses bot_settings.model; other providers use
-        # the provider-configured model.
-        model_override = settings["model"] if ai_cfg.get("provider") == "built_in" else None
+        bot_provider = settings.get("provider", "built_in")
+        bot_model = settings.get("model", "gpt-4o-mini")
         try:
             parsed, raw = await call_llm_json(db=db, system_prompt=sp,
                                               user_messages_block=block or "(sin mensajes)",
-                                              model=model_override,
+                                              provider=bot_provider,
+                                              model=bot_model,
                                               purpose="bot_pipeline",
                                               conversation_id=conv_id,
                                               message_id=triggered_by_message_id)

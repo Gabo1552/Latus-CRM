@@ -23,6 +23,7 @@ async def call_llm_json(
     db,
     system_prompt: str,
     user_messages_block: str,
+    provider: str | None = None,
     model: str | None = None,
     purpose: str = "bot_pipeline",
     conversation_id: str | None = None,
@@ -30,9 +31,9 @@ async def call_llm_json(
     user_id: str | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Call the configured LLM, log usage, and return ``(parsed_json, raw_text)``."""
-    provider = await get_provider(db, override_model=model)
+    provider_obj = await get_provider(db, override_provider=provider, override_model=model)
     res = await call_with_logging(
-        db, provider,
+        db, provider_obj,
         system_prompt=system_prompt,
         user_block=user_messages_block,
         purpose=purpose,
