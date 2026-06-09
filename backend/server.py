@@ -228,6 +228,20 @@ class Contact(BaseModel):
     notes: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
 
+    # Meta Ads Referral Fields
+    meta_ad_id: Optional[str] = None
+    meta_ad_url: Optional[str] = None
+    meta_source_type: Optional[str] = None
+    meta_ad_title: Optional[str] = None
+    meta_ad_body: Optional[str] = None
+    meta_ad_media_type: Optional[str] = None
+    meta_ad_image_url: Optional[str] = None
+    meta_ctwa_clid: Optional[str] = None
+    lead_source: Optional[str] = "Orgánico"
+    first_message_from_ad: Optional[str] = None
+    first_ad_message_at: Optional[str] = None
+    raw_referral: Optional[dict] = None
+
 
 class ContactCreate(BaseModel):
     name: str
@@ -2163,6 +2177,8 @@ async def _upsert_whatsapp_contact(wa_id: str, profile_name: str) -> dict:
         upd: dict[str, Any] = {"whatsapp_id": wa_id}
         if profile_name and not contact.get("name"):
             upd["name"] = profile_name
+        if not contact.get("lead_source"):
+            upd["lead_source"] = "WhatsApp"
         await db.contacts.update_one({"id": contact["id"]}, {"$set": upd})
         contact = await db.contacts.find_one({"id": contact["id"]}, {"_id": 0})
         return contact
@@ -2172,6 +2188,7 @@ async def _upsert_whatsapp_contact(wa_id: str, profile_name: str) -> dict:
         phone=f"+{wa_id}",
     ).model_dump()
     new_contact["whatsapp_id"] = wa_id
+    new_contact["lead_source"] = "WhatsApp"
     await db.contacts.insert_one(new_contact)
     return new_contact
 
@@ -2217,6 +2234,28 @@ async def _ingest_inbound_message(m) -> None:
     if existing:
         return
     contact = await _upsert_whatsapp_contact(m.wa_id, m.profile_name)
+
+    # Check for Meta Ads click to WhatsApp referral payload
+    referral = m.raw.get("referral") if m.raw else None
+    if referral:
+        has_existing_campaign = bool(contact.get("meta_ad_id"))
+        upd: dict[str, Any] = {"raw_referral": referral}
+        if not has_existing_campaign:
+            upd["lead_source"] = "Meta Ads"
+            upd["meta_ad_id"] = referral.get("source_id")
+            upd["meta_ad_url"] = referral.get("source_url")
+            upd["meta_source_type"] = referral.get("source_type")
+            upd["meta_ad_title"] = referral.get("headline")
+            upd["meta_ad_body"] = referral.get("body")
+            upd["meta_ad_media_type"] = referral.get("media_type")
+            upd["meta_ad_image_url"] = referral.get("image_url")
+            upd["meta_ctwa_clid"] = referral.get("ctwa_clid")
+            upd["first_message_from_ad"] = m.text or f"[{m.message_type}]"
+            upd["first_ad_message_at"] = m.timestamp or now_iso()
+        
+        await db.contacts.update_one({"id": contact["id"]}, {"$set": upd})
+        contact.update(upd)
+
     conv = await _get_or_create_whatsapp_conversation(contact, phone_number_id=m.phone_number_id)
     body = m.text or f"[{m.message_type}]"
     msg_doc = await _handle_inbound_message(

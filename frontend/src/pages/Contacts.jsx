@@ -12,7 +12,14 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import LeadDrawer from "@/components/LeadDrawer";
+
+const leadSourceMeta = {
+  "Meta Ads": { color: "#1D4ED8", bg: "#EFF6FF", label: "Meta Ads" },
+  "WhatsApp": { color: "#15803D", bg: "#F0FDF4", label: "WhatsApp" },
+  "Orgánico": { color: "#52525B", bg: "#F4F4F5", label: "Orgánico" },
+};
 
 export default function Contacts() {
   const qc = useQueryClient();
@@ -21,6 +28,7 @@ export default function Contacts() {
   const [form, setForm] = useState({ name: "", phone: "", email: "", company: "" });
   const [activeTab, setActiveTab] = useState("clients");
   const [selectedLeadId, setSelectedLeadId] = useState(null);
+  const [sourceFilter, setSourceFilter] = useState("all");
 
   const contactsQ = useQuery({ queryKey: ["contacts"], queryFn: () => api.get("/contacts").then((r) => r.data) });
   const leadsQ = useQuery({
@@ -61,9 +69,16 @@ export default function Contacts() {
 
   const listToRender = activeTab === "clients" ? clients : nonClients;
 
-  const filtered = listToRender.filter((c) =>
-    !search || [c.name, c.company, c.phone].some((f) => f?.toLowerCase().includes(search.toLowerCase()))
-  );
+  const filtered = listToRender.filter((c) => {
+    const matchesSearch = !search || [c.name, c.company, c.phone].some((f) => f?.toLowerCase().includes(search.toLowerCase()));
+    let matchesSource = true;
+    if (sourceFilter === "meta_ads") {
+      matchesSource = c.lead_source === "Meta Ads";
+    } else if (sourceFilter === "organic") {
+      matchesSource = c.lead_source === "Orgánico" || !c.lead_source;
+    }
+    return matchesSearch && matchesSource;
+  });
 
   return (
     <AppLayout
@@ -99,9 +114,21 @@ export default function Contacts() {
             </TabsList>
           </Tabs>
 
-          <div className="relative max-w-xs w-full sm:w-64">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-latus-muted" />
-            <Input data-testid="contacts-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar..." className="pl-9 rounded-sm bg-white" />
+          <div className="flex items-center gap-2 max-w-md w-full sm:w-auto">
+            <Select value={sourceFilter} onValueChange={setSourceFilter}>
+              <SelectTrigger className="w-40 rounded-sm bg-white h-9 text-xs">
+                <SelectValue placeholder="Origen" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos</SelectItem>
+                <SelectItem value="meta_ads">Solo Meta Ads</SelectItem>
+                <SelectItem value="organic">Solo Orgánicos</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="relative flex-1 sm:w-64">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-latus-muted" />
+              <Input data-testid="contacts-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar..." className="pl-9 rounded-sm bg-white h-9" />
+            </div>
           </div>
         </div>
 
@@ -124,12 +151,25 @@ export default function Contacts() {
                 data-testid={`contact-card-${c.id}`}
                 className="bg-white border border-[#E9E6DC] rounded-sm p-5 hover:border-zinc-300 transition-colors cursor-pointer"
               >
-                <div className="flex items-center gap-3 mb-4">
-                  <Avatar src={c.avatar} name={c.name} size={44} />
-                  <div className="min-w-0">
-                    <p className="font-bold text-[#0B1B26] truncate">{c.name}</p>
-                    <p className="text-xs text-[#888888] truncate">{c.company}</p>
+                <div className="flex items-start justify-between gap-3 mb-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Avatar src={c.avatar} name={c.name} size={44} />
+                    <div className="min-w-0">
+                      <p className="font-bold text-[#0B1B26] truncate">{c.name}</p>
+                      <p className="text-xs text-[#888888] truncate">{c.company}</p>
+                    </div>
                   </div>
+                  {(() => {
+                    const sourceMeta = leadSourceMeta[c.lead_source] || leadSourceMeta["Orgánico"];
+                    return (
+                      <span
+                        className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold border shrink-0"
+                        style={{ color: sourceMeta.color, backgroundColor: sourceMeta.bg, borderColor: sourceMeta.color + "33" }}
+                      >
+                        {sourceMeta.label}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <div className="space-y-1.5 text-sm text-[#888888]">
                   <p className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-[#0E8DDB]" /> {c.phone}</p>

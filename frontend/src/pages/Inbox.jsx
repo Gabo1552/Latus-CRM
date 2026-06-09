@@ -356,6 +356,65 @@ export default function Inbox() {
               </div>
             </div>
 
+            {active.contact?.lead_source === "Meta Ads" && (
+              <div className="p-4 border-b border-[#E9E6DC] bg-orange-50/20 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] tracking-[0.15em] uppercase font-extrabold text-[#FF4500]">Origen Meta Ads</span>
+                  <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold bg-[#EFF6FF] text-[#1D4ED8] border border-[#1D4ED8]/20">
+                    Vino por anuncio
+                  </span>
+                </div>
+                {active.contact.meta_ad_title && (
+                  <div>
+                    <p className="text-[10px] font-bold text-[#888888] uppercase">Título del anuncio</p>
+                    <p className="text-sm font-semibold text-[#0B1B26]">{active.contact.meta_ad_title}</p>
+                  </div>
+                )}
+                {active.contact.meta_ad_body && (
+                  <div>
+                    <p className="text-[10px] font-bold text-[#888888] uppercase">Texto del anuncio</p>
+                    <p className="text-xs text-[#52525B] whitespace-pre-wrap">{active.contact.meta_ad_body}</p>
+                  </div>
+                )}
+                {active.contact.meta_ad_image_url && (
+                  <div>
+                    <p className="text-[10px] font-bold text-[#888888] uppercase mb-1">Imagen del anuncio</p>
+                    <img src={active.contact.meta_ad_image_url} alt="Ad Visual" className="max-w-full h-auto rounded-sm border border-[#E9E6DC] object-cover max-h-40" />
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  {active.contact.meta_ad_id && (
+                    <div>
+                      <p className="text-[10px] font-bold text-[#888888] uppercase">ID del anuncio</p>
+                      <p className="text-[#52525B] font-mono text-[11px] truncate" title={active.contact.meta_ad_id}>{active.contact.meta_ad_id}</p>
+                    </div>
+                  )}
+                  {active.contact.meta_ad_url && (
+                    <div>
+                      <p className="text-[10px] font-bold text-[#888888] uppercase">Link al anuncio</p>
+                      <a href={active.contact.meta_ad_url} target="_blank" rel="noopener noreferrer" className="text-[#0E8DDB] hover:underline font-semibold block truncate">
+                        Ver anuncio &rarr;
+                      </a>
+                    </div>
+                  )}
+                </div>
+                {active.contact.first_ad_message_at && (
+                  <div>
+                    <p className="text-[10px] font-bold text-[#888888] uppercase">Fecha del primer mensaje</p>
+                    <p className="text-xs text-[#52525B]">{new Date(active.contact.first_ad_message_at).toLocaleString("es-AR")}</p>
+                  </div>
+                )}
+                {active.contact.first_message_from_ad && (
+                  <div>
+                    <p className="text-[10px] font-bold text-[#888888] uppercase">Primer mensaje recibido</p>
+                    <p className="text-xs bg-white border border-[#E9E6DC] p-2 rounded-sm text-[#0B1B26] italic">
+                      "{active.contact.first_message_from_ad}"
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {active.lead && (
               <div className="p-4 border-b border-[#E9E6DC]">
                 <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#888888] mb-3">Lead vinculado</p>

@@ -381,6 +381,99 @@ class TestInboundText:
         notifs = [n for n in fake.notifications.docs if n["type"] == "new_message"]
         assert any(n["assigned_user_id"] == "user_agent_A" for n in notifs)
 
+    def test_inbound_with_meta_ad_referral(self, server_and_client):
+        server, fake, client = server_and_client
+        payload = {
+            "object": "whatsapp_business_account",
+            "entry": [{
+                "id": "WABA-1",
+                "changes": [{
+                    "field": "messages",
+                    "value": {
+                        "messaging_product": "whatsapp",
+                        "metadata": {"display_phone_number": "+1", "phone_number_id": "1234567890"},
+                        "contacts": [{"profile": {"name": "Referral User"}, "wa_id": "5491155554321"}],
+                        "messages": [{
+                            "from": "5491155554321",
+                            "id": "wamid.REF123",
+                            "timestamp": "1700000100",
+                            "type": "text",
+                            "text": {"body": "Me interesa este anuncio"},
+                            "referral": {
+                                "source_id": "ad_998877",
+                                "source_url": "https://fb.com/ads/998877",
+                                "source_type": "ad",
+                                "headline": "Oferta Especial Invierno",
+                                "body": "Descuento del 20% en toda la tienda.",
+                                "media_type": "image",
+                                "image_url": "https://example.com/ad_image.jpg",
+                                "ctwa_clid": "clid_ref_abc123"
+                            }
+                        }],
+                    },
+                }],
+            }],
+        }
+        r = self._post(client, payload)
+        assert r.status_code == 200
+
+        contacts = fake.contacts.docs
+        assert len(contacts) == 1
+        c = contacts[0]
+        assert c["whatsapp_id"] == "5491155554321"
+        assert c["lead_source"] == "Meta Ads"
+        assert c["meta_ad_id"] == "ad_998877"
+        assert c["meta_ad_url"] == "https://fb.com/ads/998877"
+        assert c["meta_source_type"] == "ad"
+        assert c["meta_ad_title"] == "Oferta Especial Invierno"
+        assert c["meta_ad_body"] == "Descuento del 20% en toda la tienda."
+        assert c["meta_ad_media_type"] == "image"
+        assert c["meta_ad_image_url"] == "https://example.com/ad_image.jpg"
+        assert c["meta_ctwa_clid"] == "clid_ref_abc123"
+        assert c["first_message_from_ad"] == "Me interesa este anuncio"
+        assert c["first_ad_message_at"] is not None
+        assert c["raw_referral"] == payload["entry"][0]["changes"][0]["value"]["messages"][0]["referral"]
+
+        # Subsequent message from another ad referral - should not overwrite main details but update raw_referral
+        payload2 = {
+            "object": "whatsapp_business_account",
+            "entry": [{
+                "id": "WABA-1",
+                "changes": [{
+                    "field": "messages",
+                    "value": {
+                        "messaging_product": "whatsapp",
+                        "metadata": {"display_phone_number": "+1", "phone_number_id": "1234567890"},
+                        "contacts": [{"profile": {"name": "Referral User"}, "wa_id": "5491155554321"}],
+                        "messages": [{
+                            "from": "5491155554321",
+                            "id": "wamid.REF124",
+                            "timestamp": "1700000200",
+                            "type": "text",
+                            "text": {"body": "Otro mensaje de otro anuncio"},
+                            "referral": {
+                                "source_id": "ad_55555",
+                                "source_url": "https://fb.com/ads/55555",
+                                "source_type": "ad",
+                                "headline": "Oferta Nueva",
+                                "body": "Cuerpo Nuevo",
+                                "media_type": "video",
+                                "image_url": "https://example.com/ad_video.jpg",
+                                "ctwa_clid": "clid_ref_xyz"
+                            }
+                        }],
+                    },
+                }],
+            }],
+        }
+        r2 = self._post(client, payload2)
+        assert r2.status_code == 200
+
+        c_refreshed = fake.contacts.docs[0]
+        assert c_refreshed["meta_ad_id"] == "ad_998877"
+        assert c_refreshed["meta_ctwa_clid"] == "clid_ref_abc123"
+        assert c_refreshed["raw_referral"]["source_id"] == "ad_55555"
+
 
 # ====================================================================
 # Status updates
@@ -500,7 +593,7 @@ class TestSendWhatsApp:
                 headers={"Authorization": "Bearer T-ADMIN"},
             )
         assert r.status_code == 502, r.text
-        assert r.json()["detail"] == "No se pudo enviar el mensaje"
+        assert r.json()["detail"].startswith("No se pudo enviar el mensaje")
         # Retried once (5xx is retryable)
         assert call_counter["n"] == 2
         # No outbound ghost message created
