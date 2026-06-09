@@ -18,8 +18,26 @@ LEAD_STATUSES = ("nuevo", "calificando", "calificado", "propuesta_solicitada",
                  "propuesta_enviada", "negociacion", "ganado", "perdido", "no_responde")
 BOT_STATUSES = ("bot_activo", "esperando_cliente", "requiere_humano",
                 "en_atencion_humana", "cerrada")
-LEGACY_LEAD_MAP = {"new": "nuevo", "qualifying": "calificando", "qualified": "calificado",
-                   "proposal": "propuesta_enviada", "won": "ganado", "lost": "perdido"}
+LEGACY_LEAD_MAP = {
+    "new": "nuevo",
+    "contacted": "calificando",
+    "qualifying": "calificando",
+    "qualified": "calificado",
+    "proposal": "propuesta_enviada",
+    "won": "ganado",
+    "lost": "perdido"
+}
+SPANISH_TO_ENGLISH_STATUS = {
+    "nuevo": "new",
+    "calificando": "contacted",
+    "calificado": "qualified",
+    "propuesta_solicitada": "proposal",
+    "propuesta_enviada": "proposal",
+    "negociacion": "proposal",
+    "ganado": "won",
+    "perdido": "lost",
+    "no_responde": "lost"
+}
 
 DEFAULT_BOT_SETTINGS = {
     "bot_enabled_default": True,
@@ -305,6 +323,8 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
 
         # Enforce classification-only: bot never sends replies to the customer, only classifies
         if decision == "reply_with_bot":
+            if not ai_cfg.get("whatsapp_auto_reply_enabled", True):
+                event["auto_reply_suppressed"] = True
             decision = "update_status_only"
             reply = ""
 
@@ -377,10 +397,11 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         if evidence and lead_status_suggested in LEAD_STATUSES:
             lead = await db.leads.find_one({"id": conv.get("lead_id")}, {"_id": 0}) if conv.get("lead_id") else None
             if lead and normalize_lead_status(lead.get("status")) != lead_status_suggested:
+                db_status = SPANISH_TO_ENGLISH_STATUS.get(lead_status_suggested, lead_status_suggested)
                 event["lead_status_change"] = {"from": lead.get("status"),
                                                "to": lead_status_suggested}
                 await db.leads.update_one({"id": lead["id"]},
-                                          {"$set": {"status": lead_status_suggested,
+                                          {"$set": {"status": db_status,
                                                     "updated_at": _now_iso()}})
 
         # Summary

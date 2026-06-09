@@ -3287,6 +3287,64 @@ async def dashboard_metrics(user: User = Depends(get_current_user)):
         no_response_convs = [c for c in no_response_convs if c.get("assigned_to") == user.user_id]
     no_response = [conv_brief(c) for c in no_response_convs]
 
+    # Calculate post-sales metrics
+    from collections import Counter
+    won_leads = [l for l in leads if l.get("status") == "won"]
+    won_contact_ids = {l["contact_id"] for l in won_leads if l.get("contact_id")}
+    total_customers = len(won_contact_ids)
+    average_ticket = won_value / len(won_leads) if won_leads else 0.0
+    
+    won_contact_counts = Counter(l["contact_id"] for l in won_leads if l.get("contact_id"))
+    recurring_customers = sum(1 for cid, count in won_contact_counts.items() if count > 1)
+    
+    contact_won_value = {}
+    for l in won_leads:
+        cid = l.get("contact_id")
+        if cid:
+            contact_won_value[cid] = contact_won_value.get(cid, 0.0) + float(l.get("value") or 0.0)
+            
+    top_customers_sorted = sorted(contact_won_value.items(), key=lambda x: x[1], reverse=True)[:5]
+    top_customers = []
+    for cid, val in top_customers_sorted:
+        ct = contacts.get(cid, {})
+        top_customers.append({
+            "contact_id": cid,
+            "name": ct.get("name") or "Cliente desconocido",
+            "company": ct.get("company") or "Particular",
+            "avatar": ct.get("avatar"),
+            "total_value": val
+        })
+        
+    product_revenue = {}
+    product_quantity = {}
+    for l in won_leads:
+        for p in l.get("products") or []:
+            pname = p.get("name")
+            if pname:
+                price = float(p.get("price") or 0.0)
+                qty = int(p.get("quantity") or 1)
+                product_revenue[pname] = product_revenue.get(pname, 0.0) + (price * qty)
+                product_quantity[pname] = product_quantity.get(pname, 0) + qty
+                
+    top_products_sorted = sorted(product_revenue.items(), key=lambda x: x[1], reverse=True)[:5]
+    top_products = []
+    for pname, rev in top_products_sorted:
+        top_products.append({
+            "name": pname,
+            "revenue": rev,
+            "quantity": product_quantity.get(pname, 0)
+        })
+        
+    sales_by_month = {}
+    for l in won_leads:
+        created = l.get("created_at") or l.get("updated_at")
+        if created:
+            month = created[:7]  # YYYY-MM
+            sales_by_month[month] = sales_by_month.get(month, 0.0) + float(l.get("value") or 0.0)
+            
+    sorted_months = sorted(sales_by_month.keys())
+    sales_trend = [{"month": m, "value": sales_by_month[m]} for m in sorted_months]
+
     return {
         "total_leads": len(leads),
         "total_contacts": len(contacts),
@@ -3305,6 +3363,14 @@ async def dashboard_metrics(user: User = Depends(get_current_user)):
             "overdue_tasks": overdue_brief,
             "no_response": no_response,
         },
+        "sales": {
+            "total_customers": total_customers,
+            "average_ticket": average_ticket,
+            "recurring_customers": recurring_customers,
+            "top_customers": top_customers,
+            "top_products": top_products,
+            "sales_trend": sales_trend
+        }
     }
 
 # ---------------------------------------------------------------------------
