@@ -59,6 +59,17 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
     },
   });
 
+  const updateContactSource = useMutation({
+    mutationFn: (source) => api.patch(`/contacts/${lead?.contact?.id}`, { lead_source: source }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lead", leadId] });
+      qc.invalidateQueries({ queryKey: ["leads"] });
+      qc.invalidateQueries({ queryKey: ["contacts"] });
+      toast.success("Origen de contacto actualizado");
+    },
+    onError: () => toast.error("No se pudo actualizar el origen del contacto"),
+  });
+
   const addNote = useMutation({
     mutationFn: () => api.post("/notes", { lead_id: leadId, body: note }),
     onSuccess: () => {
@@ -111,6 +122,25 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
               <div className="flex items-center gap-4 text-sm text-[#888888]">
                 <span className="flex items-center gap-1.5"><Phone className="h-3.5 w-3.5" /> {lead.contact?.phone}</span>
                 <span className="flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" /> {lead.contact?.company}</span>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-[#888888] font-semibold shrink-0">Origen del lead:</span>
+                <Select
+                  value={lead.contact?.lead_source || "Orgánico"}
+                  onValueChange={(val) => updateContactSource.mutate(val)}
+                >
+                  <SelectTrigger className="w-36 h-7 rounded-sm text-xs bg-white border border-[#E9E6DC]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Meta Ads">Meta Ads</SelectItem>
+                    <SelectItem value="WhatsApp">WhatsApp</SelectItem>
+                    <SelectItem value="Orgánico">Orgánico</SelectItem>
+                    <SelectItem value="Recomendado">Recomendado</SelectItem>
+                    <SelectItem value="Otro">Otro</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               {lead.contact?.lead_source === "Meta Ads" && (

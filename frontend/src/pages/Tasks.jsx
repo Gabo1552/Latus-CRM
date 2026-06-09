@@ -41,11 +41,17 @@ export default function Tasks() {
     ],
     [settingsQ.data],
   );
-  const taskStatusMeta = taskStatuses.map((status, index) => ({
-    ...status,
-    color: status.is_done ? "#064E3B" : ["#FF4500", "#0E8DDB", "#7C3AED", "#52525B"][index % 4],
-    bg: status.is_done ? "#ECFDF5" : ["#FFF7ED", "#EFF6FF", "#F5F3FF", "#F4F4F5"][index % 4],
-  }));
+  const taskStatusMeta = taskStatuses.map((status, index) => {
+    const defaultColor = status.is_done ? "#064E3B" : ["#FF4500", "#0E8DDB", "#7C3AED", "#52525B"][index % 4];
+    const defaultBg = status.is_done ? "#ECFDF5" : ["#FFF7ED", "#EFF6FF", "#F5F3FF", "#F4F4F5"][index % 4];
+    const color = status.color || defaultColor;
+    const bg = status.bg || (status.color ? status.color + "1a" : defaultBg);
+    return {
+      ...status,
+      color,
+      bg,
+    };
+  });
   const doneStatuses = useMemo(
     () => new Set(taskStatuses.filter((status) => status.is_done).map((status) => status.key)),
     [taskStatuses],

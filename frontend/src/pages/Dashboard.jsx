@@ -3,16 +3,30 @@ import { useQuery } from "@tanstack/react-query";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, Tooltip, AreaChart, Area } from "recharts";
 import {
   Target, DollarSign, TrendingUp, MessageSquare, Bot, CheckSquare, ArrowUpRight,
-  AlertTriangle, ArrowRightLeft, AlarmClock, Mail, UserX, Users, ShoppingBag
+  AlertTriangle, ArrowRightLeft, AlarmClock, Mail, UserX, Users, ShoppingBag, Calendar
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import api from "@/lib/api";
 import AppLayout from "@/components/AppLayout";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { LEAD_STATUSES, CONV_STATUSES, money, statusMeta } from "@/lib/constants";
 import { StatusBadge, Avatar } from "@/components/Bits";
 import { useAuth } from "@/context/AuthContext";
 
-function Metric({ icon: Icon, label, value, sub, testid }) {
+function Metric({ icon: Icon, label, value, sub, compareValue, testid }) {
+  let difference = null;
+  if (compareValue !== undefined && compareValue !== null) {
+    const valNum = typeof value === "number" ? value : parseFloat(String(value).replace(/[^0-9.-]+/g, ""));
+    const compNum = typeof compareValue === "number" ? compareValue : parseFloat(String(compareValue).replace(/[^0-9.-]+/g, ""));
+    if (!isNaN(valNum) && !isNaN(compNum) && compNum > 0) {
+      const diffPct = ((valNum - compNum) / compNum) * 100;
+      difference = {
+        pct: diffPct.toFixed(1),
+        isPositive: diffPct >= 0
+      };
+    }
+  }
+
   return (
     <div className="bg-white border border-[#E9E6DC] rounded-sm p-5 hover:border-zinc-400 hover:shadow-sm hover:-translate-y-0.5 transition-all duration-300" data-testid={testid}>
       <div className="flex items-center justify-between mb-3">
@@ -22,7 +36,14 @@ function Metric({ icon: Icon, label, value, sub, testid }) {
         </div>
       </div>
       <p className="text-3xl font-extrabold tracking-tighter text-[#0B1B26]">{value}</p>
-      {sub && <p className="text-xs text-[#888888] mt-1">{sub}</p>}
+      <div className="flex items-center justify-between mt-1 text-xs">
+        {sub && <span className="text-[#888888]">{sub}</span>}
+        {difference && (
+          <span className={`font-semibold ml-auto ${difference.isPositive ? "text-green-600" : "text-red-600"}`}>
+            {difference.isPositive ? "+" : ""}{difference.pct}% vs anterior
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -44,10 +65,45 @@ function AttnColumn({ icon: Icon, title, count, children, testid }) {
   );
 }
 
+const formatDate = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+const getPastDate = (daysAgo) => {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return formatDate(d);
+};
+
+const parseDateString = (str) => {
+  const [y, m, d] = str.split("-").map(Number);
+  return new Date(y, m - 1, d);
+};
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { data: m } = useQuery({ queryKey: ["metrics"], queryFn: () => api.get("/dashboard/metrics").then((r) => r.data) });
+
+  const [startDate, setStartDate] = useState(getPastDate(30));
+  const [endDate, setEndDate] = useState(formatDate(new Date()));
+  const [compare, setCompare] = useState(false);
+  const [compareStartDate, setCompareStartDate] = useState(getPastDate(60));
+  const [compareEndDate, setCompareEndDate] = useState(getPastDate(31));
+
+  const { data: m } = useQuery({ 
+    queryKey: ["metrics", startDate, endDate, compare, compareStartDate, compareEndDate], 
+    queryFn: () => api.get("/dashboard/metrics", {
+      params: {
+        start_date: startDate,
+        end_date: endDate,
+        compare_start_date: compare ? compareStartDate : undefined,
+        compare_end_date: compare ? compareEndDate : undefined
+      }
+    }).then((r) => r.data) 
+  });
   const { data: convs = [] } = useQuery({ queryKey: ["convs-recent"], queryFn: () => api.get("/conversations").then((r) => r.data) });
 
   const chartData = m
@@ -62,8 +118,168 @@ export default function Dashboard() {
 
   const [activeTab, setActiveTab] = useState("presales");
 
+  const handleCompareToggle = (checked) => {
+    setCompare(checked);
+    if (checked) {
+      const start = parseDateString(startDate);
+      const end = parseDateString(endDate);
+      const diffTime = Math.abs(end - start);
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      const compEnd = new Date(start);
+      compEnd.setDate(compEnd.getDate() - 1);
+      const compStart = new Date(compEnd);
+      compStart.setDate(compStart.getDate() - diffDays + 1);
+      
+      setCompareStartDate(formatDate(compStart));
+      setCompareEndDate(formatDate(compEnd));
+    }
+  };
+
+  const dateFilterActions = (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button 
+          className="flex items-center gap-2 px-3 py-1.5 bg-white border border-[#E9E6DC] hover:border-zinc-400 rounded-sm text-xs font-semibold text-[#0B1B26] transition-colors shadow-sm cursor-pointer"
+          data-testid="date-picker-trigger"
+        >
+          <Calendar className="h-3.5 w-3.5 text-[#0E8DDB]" />
+          <span>
+            {startDate} al {endDate}
+          </span>
+          {compare && (
+            <span className="text-[10px] text-zinc-500 font-normal">
+              (vs {compareStartDate} al {compareEndDate})
+            </span>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-5 bg-white border border-[#E9E6DC] rounded-sm shadow-md space-y-4">
+        {/* Presets */}
+        <div className="flex gap-1.5 border-b border-[#E9E6DC]/60 pb-3">
+          <button
+            onClick={() => {
+              setStartDate(getPastDate(7));
+              setEndDate(formatDate(new Date()));
+              if (compare) {
+                setCompareStartDate(getPastDate(14));
+                setCompareEndDate(getPastDate(8));
+              }
+            }}
+            className="px-2 py-1 bg-latus-warm-gray hover:bg-zinc-200 rounded-sm text-[10px] font-bold text-[#0B1B26] transition-colors cursor-pointer"
+            data-testid="preset-7d"
+          >
+            7 días
+          </button>
+          <button
+            onClick={() => {
+              setStartDate(getPastDate(30));
+              setEndDate(formatDate(new Date()));
+              if (compare) {
+                setCompareStartDate(getPastDate(60));
+                setCompareEndDate(getPastDate(31));
+              }
+            }}
+            className="px-2 py-1 bg-latus-warm-gray hover:bg-zinc-200 rounded-sm text-[10px] font-bold text-[#0B1B26] transition-colors cursor-pointer"
+            data-testid="preset-30d"
+          >
+            30 días
+          </button>
+          <button
+            onClick={() => {
+              const startOfMonth = new Date();
+              startOfMonth.setDate(1);
+              setStartDate(formatDate(startOfMonth));
+              setEndDate(formatDate(new Date()));
+              if (compare) {
+                const prevMonthStart = new Date();
+                prevMonthStart.setMonth(prevMonthStart.getMonth() - 1);
+                prevMonthStart.setDate(1);
+                const prevMonthEnd = new Date();
+                prevMonthEnd.setDate(0);
+                setCompareStartDate(formatDate(prevMonthStart));
+                setCompareEndDate(formatDate(prevMonthEnd));
+              }
+            }}
+            className="px-2 py-1 bg-latus-warm-gray hover:bg-zinc-200 rounded-sm text-[10px] font-bold text-[#0B1B26] transition-colors cursor-pointer"
+            data-testid="preset-month"
+          >
+            Este mes
+          </button>
+        </div>
+
+        <div className="space-y-1.5">
+          <h4 className="font-bold text-xs tracking-wider uppercase text-[#0B1B26]">Rango de fechas</h4>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <label className="text-[10px] text-[#888888] font-semibold">Desde</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full text-xs bg-white border border-[#E9E6DC] rounded-sm px-2 py-1 outline-none text-[#0B1B26]"
+                data-testid="filter-start-date"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] text-[#888888] font-semibold">Hasta</label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-full text-xs bg-white border border-[#E9E6DC] rounded-sm px-2 py-1 outline-none text-[#0B1B26]"
+                data-testid="filter-end-date"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-[#E9E6DC]/60 pt-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <label htmlFor="compare-checkbox" className="text-xs font-semibold text-[#888888] select-none cursor-pointer">
+              Comparar período anterior
+            </label>
+            <input
+              type="checkbox"
+              id="compare-checkbox"
+              checked={compare}
+              onChange={(e) => handleCompareToggle(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-[#E9E6DC] text-[#0E8DDB] focus:ring-[#0E8DDB] cursor-pointer"
+              data-testid="compare-checkbox"
+            />
+          </div>
+
+          {compare && (
+            <div className="grid grid-cols-2 gap-2 animate-in fade-in duration-200">
+              <div className="space-y-1">
+                <label className="text-[10px] text-[#888888] font-semibold">vs Desde</label>
+                <input
+                  type="date"
+                  value={compareStartDate}
+                  onChange={(e) => setCompareStartDate(e.target.value)}
+                  className="w-full text-xs bg-white border border-[#E9E6DC] rounded-sm px-2 py-1 outline-none text-[#0B1B26]"
+                  data-testid="compare-start-date"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] text-[#888888] font-semibold">vs Hasta</label>
+                <input
+                  type="date"
+                  value={compareEndDate}
+                  onChange={(e) => setCompareEndDate(e.target.value)}
+                  className="w-full text-xs bg-white border border-[#E9E6DC] rounded-sm px-2 py-1 outline-none text-[#0B1B26]"
+                  data-testid="compare-end-date"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+
   return (
-    <AppLayout title="Panel principal">
+    <AppLayout title="Panel principal" actions={dateFilterActions}>
       <div className="p-6 md:p-8 space-y-6 animate-in fade-in duration-300">
         
         {/* Welcome Section */}
@@ -113,9 +329,9 @@ export default function Dashboard() {
         {activeTab === "presales" ? (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <Metric icon={DollarSign} label="Valor del pipeline" value={money(m?.pipeline_value)} sub={`${money(m?.won_value)} ganado`} testid="metric-pipeline" />
-              <Metric icon={Target} label="Leads activos" value={m?.total_leads ?? "—"} sub={`${m?.total_contacts ?? 0} contactos`} testid="metric-leads" />
-              <Metric icon={TrendingUp} label="Conversión" value={`${m?.conversion_rate ?? 0}%`} sub="ganados / cerrados" testid="metric-conversion" />
+              <Metric icon={DollarSign} label="Valor del pipeline" value={money(m?.pipeline_value)} sub={`${money(m?.won_value)} ganado`} compareValue={compare ? money(m?.comparison?.pipeline_value) : undefined} testid="metric-pipeline" />
+              <Metric icon={Target} label="Leads activos" value={m?.total_leads ?? "—"} sub={`${m?.total_contacts ?? 0} contactos`} compareValue={compare ? (m?.comparison?.total_leads ?? 0) : undefined} testid="metric-leads" />
+              <Metric icon={TrendingUp} label="Conversión" value={`${m?.conversion_rate ?? 0}%`} sub="ganados / cerrados" compareValue={compare ? `${m?.comparison?.conversion_rate ?? 0}%` : undefined} testid="metric-conversion" />
               <Metric icon={MessageSquare} label="Chats abiertos" value={m?.open_conversations ?? "—"} sub={`${m?.pending_conversations ?? 0} pendientes`} testid="metric-chats" />
             </div>
 
@@ -220,6 +436,63 @@ export default function Dashboard() {
               </div>
             </div>
 
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Leads por día chart */}
+              <div className="bg-white border border-[#E9E6DC] rounded-sm p-6" data-testid="leads-per-day-chart">
+                <div>
+                  <h3 className="text-lg font-bold tracking-tight text-[#0B1B26]">Leads por día</h3>
+                  <p className="text-sm text-[#888888] mb-6">Cantidad de leads registrados por fecha</p>
+                </div>
+                {m?.leads_trend && m.leads_trend.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={240}>
+                    <AreaChart data={m.leads_trend}>
+                      <defs>
+                        <linearGradient id="colorLeads" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#0E8DDB" stopOpacity={0.2}/>
+                          <stop offset="95%" stopColor="#0E8DDB" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <XAxis dataKey="date" tick={{ fontSize: 12, fill: "#888888" }} axisLine={{ stroke: "#E4E4E7" }} tickLine={false} />
+                      <YAxis tick={{ fontSize: 12, fill: "#888888" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                      <Tooltip contentStyle={{ borderRadius: 2, border: "1px solid #E4E4E7", fontSize: 13 }} />
+                      <Area type="monotone" dataKey="value" stroke="#0E8DDB" name="Leads" strokeWidth={2} fillOpacity={1} fill="url(#colorLeads)" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-[240px] flex items-center justify-center text-sm text-[#888888] border border-dashed border-[#E9E6DC] rounded-sm">
+                    No hay datos de leads para el período seleccionado
+                  </div>
+                )}
+              </div>
+
+              {/* Distribución por origen chart */}
+              <div className="bg-white border border-[#E9E6DC] rounded-sm p-6" data-testid="leads-by-source-chart">
+                <div>
+                  <h3 className="text-lg font-bold tracking-tight text-[#0B1B26]">Distribución por origen</h3>
+                  <p className="text-sm text-[#888888] mb-6">Cantidad de leads por canal de proveniencia</p>
+                </div>
+                {m?.leads_by_source && m.leads_by_source.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={240}>
+                    <BarChart data={m.leads_by_source} barCategoryGap={16}>
+                      <XAxis dataKey="source" tick={{ fontSize: 12, fill: "#888888" }} axisLine={{ stroke: "#E4E4E7" }} tickLine={false} />
+                      <YAxis tick={{ fontSize: 12, fill: "#888888" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                      <Tooltip cursor={{ fill: "#F4F4F5" }} contentStyle={{ borderRadius: 2, border: "1px solid #E4E4E7", fontSize: 13 }} />
+                      <Bar dataKey="count" name="Leads" fill="#0E8DDB" radius={[2, 2, 0, 0]}>
+                        {m.leads_by_source.map((entry, index) => {
+                          const colors = ["#0E8DDB", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899"];
+                          return <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />;
+                        })}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-[240px] flex items-center justify-center text-sm text-[#888888] border border-dashed border-[#E9E6DC] rounded-sm">
+                    No hay datos de origen para el período seleccionado
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Recent conversations */}
             <div className="bg-white border border-[#E9E6DC] rounded-sm">
               <div className="flex items-center justify-between p-5 border-b border-[#E9E6DC]">
@@ -256,10 +529,10 @@ export default function Dashboard() {
           <>
             {/* Sales & Customers metrics */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <Metric icon={Users} label="Clientes totales" value={m?.sales?.total_customers ?? 0} sub="con compras ganadas" testid="metric-sales-customers" />
-              <Metric icon={DollarSign} label="Facturación total" value={money(m?.won_value)} sub="ventas realizadas" testid="metric-sales-billing" />
-              <Metric icon={TrendingUp} label="Ticket promedio" value={money(m?.sales?.average_ticket)} sub="por oportunidad ganada" testid="metric-sales-ticket" />
-              <Metric icon={ArrowRightLeft} label="Clientes recurrentes" value={m?.sales?.recurring_customers ?? 0} sub="compras múltiples" testid="metric-sales-recurring" />
+              <Metric icon={Users} label="Clientes totales" value={m?.sales?.total_customers ?? 0} sub="con compras ganadas" compareValue={compare ? (m?.comparison?.sales?.total_customers ?? 0) : undefined} testid="metric-sales-customers" />
+              <Metric icon={DollarSign} label="Facturación total" value={money(m?.won_value)} sub="ventas realizadas" compareValue={compare ? money(m?.comparison?.won_value) : undefined} testid="metric-sales-billing" />
+              <Metric icon={TrendingUp} label="Ticket promedio" value={money(m?.sales?.average_ticket)} sub="por oportunidad ganada" compareValue={compare ? money(m?.comparison?.sales?.average_ticket) : undefined} testid="metric-sales-ticket" />
+              <Metric icon={ArrowRightLeft} label="Clientes recurrentes" value={m?.sales?.recurring_customers ?? 0} sub="compras múltiples" compareValue={compare ? (m?.comparison?.sales?.recurring_customers ?? 0) : undefined} testid="metric-sales-recurring" />
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

@@ -252,6 +252,16 @@ class ContactCreate(BaseModel):
     notes: Optional[str] = None
 
 
+class ContactUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    company: Optional[str] = None
+    tags: Optional[List[str]] = None
+    notes: Optional[str] = None
+    lead_source: Optional[str] = None
+
+
 class LeadProduct(BaseModel):
     id: Optional[str] = None
     name: str
@@ -1514,6 +1524,22 @@ async def get_contact(contact_id: str, user: User = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Contact not found")
     return Contact(**doc)
 
+
+@api_router.patch("/contacts/{contact_id}", response_model=Contact)
+async def update_contact(contact_id: str, payload: ContactUpdate, user: User = Depends(get_current_user)):
+    update = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not update:
+        doc = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Contact not found")
+        return Contact(**doc)
+    await db.contacts.update_one({"id": contact_id}, {"$set": update})
+    doc = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return Contact(**doc)
+
+
 # ---------------------------------------------------------------------------
 # Leads
 # ---------------------------------------------------------------------------
@@ -1712,6 +1738,7 @@ DEFAULT_SETTINGS = {
         {"key": "done", "label": "Completada", "is_done": True},
     ],
     "catalog_categories": [],
+    "catalog_category_colors": {},
     "smtp_enabled": bool(RESEND_API_KEY and RESEND_FROM_EMAIL),
     "smtp_host": "smtp.resend.com" if RESEND_API_KEY else "",
     "smtp_port": 465 if RESEND_API_KEY else 587,
@@ -1741,6 +1768,7 @@ PUBLIC_SETTINGS_KEYS = {
     "business_timezone",
     "task_statuses",
     "catalog_categories",
+    "catalog_category_colors",
     "email_notif_unattended_enabled",
     "email_report_daily_enabled",
     "email_report_weekly_enabled",
@@ -1781,6 +1809,7 @@ class SettingsUpdate(BaseModel):
     business_timezone: Optional[str] = None
     task_statuses: Optional[List[dict[str, Any]]] = None
     catalog_categories: Optional[List[str]] = None
+    catalog_category_colors: Optional[dict[str, str]] = None
     smtp_enabled: Optional[bool] = None
     smtp_host: Optional[str] = None
     smtp_port: Optional[int] = None
@@ -1814,11 +1843,16 @@ def _normalize_task_statuses(items: list[dict[str, Any]] | None) -> list[dict[st
         key = _slugify_config_key(str(item.get("key") or label))
         if not label or not key or key in seen:
             continue
-        normalized.append({
+        status_dict = {
             "key": key,
             "label": label,
             "is_done": bool(item.get("is_done", False)),
-        })
+        }
+        if "color" in item:
+            status_dict["color"] = str(item["color"] or "").strip()
+        if "bg" in item:
+            status_dict["bg"] = str(item["bg"] or "").strip()
+        normalized.append(status_dict)
         seen.add(key)
     if not normalized:
         normalized = [dict(x) for x in DEFAULT_SETTINGS["task_statuses"]]
@@ -3241,94 +3275,46 @@ async def list_tags(user: User = Depends(get_current_user)):
 # Dashboard
 # ---------------------------------------------------------------------------
 
-@api_router.get("/dashboard/metrics")
-async def dashboard_metrics(user: User = Depends(get_current_user)):
-    leads = await db.leads.find({}, {"_id": 0}).to_list(2000)
-    convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
-    tasks = await db.tasks.find({}, {"_id": 0}).to_list(2000)
-    contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(2000)}
-
-    role = _normalize_role(user.role)
-    is_admin_or_supervisor = role in ("admin", "supervisor")
-    if not is_admin_or_supervisor:
-        leads = [l for l in leads if l.get("assigned_to") == user.user_id]
-        convs = [c for c in convs if c.get("assigned_to") == user.user_id]
-        tasks = [t for t in tasks if t.get("assigned_to") == user.user_id]
+def _compute_dashboard_stats(leads, convs, tasks, contacts, done_statuses, is_admin_or_supervisor, user_id, start_dt=None, end_dt=None):
+    # Filter leads by date range
+    filtered_leads = leads
+    if start_dt or end_dt:
+        filtered_leads = []
+        for l in leads:
+            created = l.get("created_at")
+            if not created:
+                continue
+            try:
+                dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                if start_dt and dt < start_dt:
+                    continue
+                if end_dt and dt > end_dt:
+                    continue
+                filtered_leads.append(l)
+            except Exception:
+                pass
 
     by_status = {s: 0 for s in LEAD_STATUSES}
     value_by_status = {s: 0.0 for s in LEAD_STATUSES}
     pipeline_value = 0.0
     won_value = 0.0
-    for l in leads:
+    for l in filtered_leads:
         st = l.get("status", "new")
         by_status[st] = by_status.get(st, 0) + 1
-        value_by_status[st] = value_by_status.get(st, 0) + l.get("value", 0)
+        value_by_status[st] = value_by_status.get(st, 0) + float(l.get("value", 0.0))
         if st == "won":
-            won_value += l.get("value", 0)
+            won_value += float(l.get("value", 0.0))
         elif st != "lost":
-            pipeline_value += l.get("value", 0)
+            pipeline_value += float(l.get("value", 0.0))
 
     won = by_status.get("won", 0)
     lost = by_status.get("lost", 0)
     closed = won + lost
     conv_rate = round((won / closed) * 100, 1) if closed else 0.0
 
-    open_convs = len([c for c in convs if c.get("status") == "open"])
-    pending_convs = len([c for c in convs if c.get("status") == "pending"])
-    human_handled = len([c for c in convs if not c.get("bot_enabled", True)])
-    done_statuses = await get_task_done_statuses()
-    open_tasks = len([t for t in tasks if t.get("status") not in done_statuses])
-
-    # --- Detect overdue / due-soon tasks and generate notifications ---
-    now = datetime.now(timezone.utc)
-    soon = now + timedelta(hours=24)
-    overdue_tasks = []
-    for t in tasks:
-        if t.get("status") in done_statuses or not t.get("due_date"):
-            continue
-        raw = t["due_date"]
-        try:
-            due = datetime.fromisoformat(raw if "T" in raw else raw + "T23:59:59")
-        except Exception:
-            continue
-        if due.tzinfo is None:
-            due = due.replace(tzinfo=timezone.utc)
-        lead = next((l for l in leads if l["id"] == t.get("lead_id")), None)
-        info = {**t, "lead": lead}
-        if due < now:
-            overdue_tasks.append(info)
-            await _notify_target(t.get("assigned_to"), "overdue_task", f"Tarea vencida: {t['title']}",
-                                 "Esta tarea pasó su fecha de vencimiento.", "task", t["id"], "high")
-        elif due <= soon:
-            await _notify_target(t.get("assigned_to"), "task_due_soon", f"Tarea próxima a vencer: {t['title']}",
-                                 "Esta tarea vence en las próximas 24 horas.", "task", t["id"], "medium")
-
-    def conv_brief(c):
-        ct = contacts.get(c["contact_id"], {})
-        return {
-            "id": c["id"], "contact_name": ct.get("name"), "contact_avatar": ct.get("avatar"),
-            "last_message": c.get("last_message"), "status": c.get("status"),
-            "priority": c.get("priority"), "unread": c.get("unread", 0),
-            "bot_enabled": c.get("bot_enabled", True), "assigned_to": c.get("assigned_to"),
-        }
-
-    open_handoffs = [conv_brief(c) for c in convs if not c.get("bot_enabled", True) and c.get("status") != "resolved"]
-    unread_conversations = [conv_brief(c) for c in convs if c.get("unread", 0) > 0]
-    overdue_brief = [{
-        "id": t["id"], "title": t["title"], "due_date": t.get("due_date"),
-        "priority": t.get("priority"), "assigned_to": t.get("assigned_to"),
-        "lead_title": (t.get("lead") or {}).get("title"),
-    } for t in overdue_tasks]
-
-    # lead_no_response automation: scan + collect qualifying conversations
-    no_response_convs = await scan_lead_no_response()
-    if not is_admin_or_supervisor:
-        no_response_convs = [c for c in no_response_convs if c.get("assigned_to") == user.user_id]
-    no_response = [conv_brief(c) for c in no_response_convs]
-
     # Calculate post-sales metrics
     from collections import Counter
-    won_leads = [l for l in leads if l.get("status") == "won"]
+    won_leads = [l for l in filtered_leads if l.get("status") == "won"]
     won_contact_ids = {l["contact_id"] for l in won_leads if l.get("contact_id")}
     total_customers = len(won_contact_ids)
     average_ticket = won_value / len(won_leads) if won_leads else 0.0
@@ -3384,24 +3370,34 @@ async def dashboard_metrics(user: User = Depends(get_current_user)):
     sorted_months = sorted(sales_by_month.keys())
     sales_trend = [{"month": m, "value": sales_by_month[m]} for m in sorted_months]
 
+    # Leads per day for this period
+    leads_by_day = {}
+    for l in filtered_leads:
+        created = l.get("created_at")
+        if created:
+            day = created[:10]  # YYYY-MM-DD
+            leads_by_day[day] = leads_by_day.get(day, 0) + 1
+    sorted_days = sorted(leads_by_day.keys())
+    leads_trend = [{"date": d, "value": leads_by_day[d]} for d in sorted_days]
+
+    # Leads per source for this period
+    source_counts = {}
+    for l in filtered_leads:
+        cid = l.get("contact_id")
+        ct = contacts.get(cid, {})
+        ls = ct.get("lead_source") or l.get("source") or "Orgánico"
+        source_counts[ls] = source_counts.get(ls, 0) + 1
+    leads_by_source = [{"source": k, "count": v} for k, v in source_counts.items()]
+
     return {
-        "total_leads": len(leads),
-        "total_contacts": len(contacts),
+        "total_leads": len(filtered_leads),
         "pipeline_value": pipeline_value,
         "won_value": won_value,
         "conversion_rate": conv_rate,
-        "open_conversations": open_convs,
-        "pending_conversations": pending_convs,
-        "human_handled": human_handled,
-        "open_tasks": open_tasks,
         "leads_by_status": by_status,
         "value_by_status": value_by_status,
-        "requires_attention": {
-            "open_handoffs": open_handoffs,
-            "unread_conversations": unread_conversations,
-            "overdue_tasks": overdue_brief,
-            "no_response": no_response,
-        },
+        "leads_trend": leads_trend,
+        "leads_by_source": leads_by_source,
         "sales": {
             "total_customers": total_customers,
             "average_ticket": average_ticket,
@@ -3410,6 +3406,126 @@ async def dashboard_metrics(user: User = Depends(get_current_user)):
             "top_products": top_products,
             "sales_trend": sales_trend
         }
+    }
+
+
+@api_router.get("/dashboard/metrics")
+async def dashboard_metrics(
+    user: User = Depends(get_current_user),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    compare_start_date: Optional[str] = None,
+    compare_end_date: Optional[str] = None,
+):
+    leads = await db.leads.find({}, {"_id": 0}).to_list(2000)
+    convs = await db.conversations.find({}, {"_id": 0}).to_list(2000)
+    tasks = await db.tasks.find({}, {"_id": 0}).to_list(2000)
+    contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(2000)}
+
+    role = _normalize_role(user.role)
+    is_admin_or_supervisor = role in ("admin", "supervisor")
+    if not is_admin_or_supervisor:
+        leads = [l for l in leads if l.get("assigned_to") == user.user_id]
+        convs = [c for c in convs if c.get("assigned_to") == user.user_id]
+        tasks = [t for t in tasks if t.get("assigned_to") == user.user_id]
+
+    open_convs = len([c for c in convs if c.get("status") == "open"])
+    pending_convs = len([c for c in convs if c.get("status") == "pending"])
+    human_handled = len([c for c in convs if not c.get("bot_enabled", True)])
+    done_statuses = await get_task_done_statuses()
+    open_tasks = len([t for t in tasks if t.get("status") not in done_statuses])
+
+    # --- Detect overdue / due-soon tasks and generate notifications ---
+    now = datetime.now(timezone.utc)
+    soon = now + timedelta(hours=24)
+    overdue_tasks = []
+    for t in tasks:
+        if t.get("status") in done_statuses or not t.get("due_date"):
+            continue
+        raw = t["due_date"]
+        try:
+            due = datetime.fromisoformat(raw if "T" in raw else raw + "T23:59:59")
+        except Exception:
+            continue
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        lead = next((l for l in leads if l["id"] == t.get("lead_id")), None)
+        info = {**t, "lead": lead}
+        if due < now:
+            overdue_tasks.append(info)
+            await _notify_target(t.get("assigned_to"), "overdue_task", f"Tarea vencida: {t['title']}",
+                                 "Esta tarea pasó su fecha de vencimiento.", "task", t["id"], "high")
+        elif due <= soon:
+            await _notify_target(t.get("assigned_to"), "task_due_soon", f"Tarea próxima a vencer: {t['title']}",
+                                 "Esta tarea vence en las próximas 24 horas.", "task", t["id"], "medium")
+
+    def conv_brief(c):
+        ct = contacts.get(c["contact_id"], {})
+        return {
+            "id": c["id"], "contact_name": ct.get("name"), "contact_avatar": ct.get("avatar"),
+            "last_message": c.get("last_message"), "status": c.get("status"),
+            "priority": c.get("priority"), "unread": c.get("unread", 0),
+            "bot_enabled": c.get("bot_enabled", True), "assigned_to": c.get("assigned_to"),
+        }
+
+    open_handoffs = [conv_brief(c) for c in convs if not c.get("bot_enabled", True) and c.get("status") != "resolved"]
+    unread_conversations = [conv_brief(c) for c in convs if c.get("unread", 0) > 0]
+    overdue_brief = [{
+        "id": t["id"], "title": t["title"], "due_date": t.get("due_date"),
+        "priority": t.get("priority"), "assigned_to": t.get("assigned_to"),
+        "lead_title": (t.get("lead") or {}).get("title"),
+    } for t in overdue_tasks]
+
+    # lead_no_response automation: scan + collect qualifying conversations
+    no_response_convs = await scan_lead_no_response()
+    if not is_admin_or_supervisor:
+        no_response_convs = [c for c in no_response_convs if c.get("assigned_to") == user.user_id]
+    no_response = [conv_brief(c) for c in no_response_convs]
+
+    # Parse range dates
+    start_dt = None
+    if start_date:
+        try:
+            start_dt = datetime.fromisoformat(start_date + "T00:00:00+00:00")
+        except Exception:
+            pass
+    end_dt = None
+    if end_date:
+        try:
+            end_dt = datetime.fromisoformat(end_date + "T23:59:59+00:00")
+        except Exception:
+            pass
+
+    current = _compute_dashboard_stats(leads, convs, tasks, contacts, done_statuses, is_admin_or_supervisor, user.user_id, start_dt, end_dt)
+
+    comparison = None
+    if compare_start_date and compare_end_date:
+        compare_start_dt = None
+        try:
+            compare_start_dt = datetime.fromisoformat(compare_start_date + "T00:00:00+00:00")
+        except Exception:
+            pass
+        compare_end_dt = None
+        try:
+            compare_end_dt = datetime.fromisoformat(compare_end_date + "T23:59:59+00:00")
+        except Exception:
+            pass
+        comparison = _compute_dashboard_stats(leads, convs, tasks, contacts, done_statuses, is_admin_or_supervisor, user.user_id, compare_start_dt, compare_end_dt)
+
+    return {
+        "total_contacts": len(contacts),
+        "open_conversations": open_convs,
+        "pending_conversations": pending_convs,
+        "human_handled": human_handled,
+        "open_tasks": open_tasks,
+        "requires_attention": {
+            "open_handoffs": open_handoffs,
+            "unread_conversations": unread_conversations,
+            "overdue_tasks": overdue_brief,
+            "no_response": no_response,
+        },
+        **current,
+        "comparison": comparison
     }
 
 # ---------------------------------------------------------------------------

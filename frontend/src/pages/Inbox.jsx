@@ -103,6 +103,16 @@ export default function Inbox() {
     },
   });
 
+  const updateContactSource = useMutation({
+    mutationFn: (source) => api.patch(`/contacts/${active?.contact?.id}`, { lead_source: source }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["conversations"] });
+      qc.invalidateQueries({ queryKey: ["conversation", activeId] });
+      toast.success("Origen de contacto actualizado");
+    },
+    onError: () => toast.error("No se pudo actualizar el origen del contacto"),
+  });
+
   // New AI bot endpoints (replace legacy ai-summary/ai-suggest UI). The legacy
   // backend endpoints stay intact for backwards compatibility — TODO: deprecate.
   const regenSummary = useMutation({
@@ -353,6 +363,25 @@ export default function Inbox() {
               <div className="space-y-1.5 text-sm text-[#888888]">
                 <p className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-[#0E8DDB]" /> {active.contact?.phone}</p>
                 <p className="flex items-center gap-2"><Building2 className="h-3.5 w-3.5 text-[#0E8DDB]" /> {active.contact?.company}</p>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs pt-1 border-t border-[#E9E6DC]/40">
+                <span className="text-[#888888] font-semibold shrink-0">Origen del lead:</span>
+                <Select
+                  value={active.contact?.lead_source || "Orgánico"}
+                  onValueChange={(val) => updateContactSource.mutate(val)}
+                >
+                  <SelectTrigger className="w-36 h-7 rounded-sm text-xs bg-white border border-[#E9E6DC]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Meta Ads">Meta Ads</SelectItem>
+                    <SelectItem value="WhatsApp">WhatsApp</SelectItem>
+                    <SelectItem value="Orgánico">Orgánico</SelectItem>
+                    <SelectItem value="Recomendado">Recomendado</SelectItem>
+                    <SelectItem value="Otro">Otro</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 

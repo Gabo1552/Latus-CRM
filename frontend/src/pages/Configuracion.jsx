@@ -1915,13 +1915,17 @@ function CRMConfigTab() {
   const [taskDraft, setTaskDraft] = useState([]);
   const [taskLabel, setTaskLabel] = useState("");
   const [taskIsDone, setTaskIsDone] = useState(false);
+  const [taskColor, setTaskColor] = useState("#52525B");
   const [categoryDraft, setCategoryDraft] = useState([]);
+  const [categoryColorsDraft, setCategoryColorsDraft] = useState({});
   const [categoryName, setCategoryName] = useState("");
+  const [categoryColor, setCategoryColor] = useState("#52525B");
 
   useEffect(() => {
     if (settingsQ.data) {
       setTaskDraft(settingsQ.data.task_statuses || []);
       setCategoryDraft(settingsQ.data.catalog_categories || []);
+      setCategoryColorsDraft(settingsQ.data.catalog_category_colors || {});
     }
   }, [settingsQ.data]);
 
@@ -1929,6 +1933,7 @@ function CRMConfigTab() {
     mutationFn: () => api.patch("/admin/settings", {
       task_statuses: taskDraft,
       catalog_categories: categoryDraft,
+      catalog_category_colors: categoryColorsDraft,
     }),
     onSuccess: () => {
       toast.success("Configuración actualizada");
@@ -1948,9 +1953,10 @@ function CRMConfigTab() {
       toast.error("Ese estado ya existe");
       return;
     }
-    setTaskDraft((prev) => [...prev, { key, label, is_done: taskIsDone }]);
+    setTaskDraft((prev) => [...prev, { key, label, is_done: taskIsDone, color: taskColor }]);
     setTaskLabel("");
     setTaskIsDone(false);
+    setTaskColor("#52525B");
   };
 
   const addCategory = () => {
@@ -1961,11 +1967,14 @@ function CRMConfigTab() {
       return;
     }
     setCategoryDraft((prev) => [...prev, value].sort((a, b) => a.localeCompare(b)));
+    setCategoryColorsDraft((prev) => ({ ...prev, [value]: categoryColor }));
     setCategoryName("");
+    setCategoryColor("#52525B");
   };
 
   const dirty = JSON.stringify(taskDraft) !== JSON.stringify(settingsQ.data?.task_statuses || [])
-    || JSON.stringify(categoryDraft) !== JSON.stringify(settingsQ.data?.catalog_categories || []);
+    || JSON.stringify(categoryDraft) !== JSON.stringify(settingsQ.data?.catalog_categories || [])
+    || JSON.stringify(categoryColorsDraft) !== JSON.stringify(settingsQ.data?.catalog_category_colors || {});
 
   return (
     <div data-testid="crm-config-tab" className="space-y-6">
@@ -1981,7 +1990,7 @@ function CRMConfigTab() {
             </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+          <div className="grid gap-3 md:grid-cols-[1fr_auto_auto]">
             <div>
               <Label className="text-xs font-semibold">Nuevo estado</Label>
               <Input
@@ -1991,6 +2000,17 @@ function CRMConfigTab() {
                 placeholder="Ej. En espera de cliente"
                 className="rounded-sm mt-1"
               />
+            </div>
+            <div className="flex flex-col justify-end">
+              <Label className="text-xs font-semibold pb-1">Color</Label>
+              <div className="flex items-center h-9 mt-1">
+                <input
+                  type="color"
+                  value={taskColor}
+                  onChange={(e) => setTaskColor(e.target.value)}
+                  className="w-8 h-8 rounded-full cursor-pointer border border-[#E9E6DC] p-0 overflow-hidden bg-transparent [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch]:rounded-full shrink-0"
+                />
+              </div>
             </div>
             <label className="flex items-center gap-2 text-sm text-[#888888] self-end pb-2">
               <Switch checked={taskIsDone} onCheckedChange={setTaskIsDone} />
@@ -2008,7 +2028,16 @@ function CRMConfigTab() {
                   <p className="font-semibold text-[#0B1B26]">{item.label}</p>
                   <p className="text-[11px] text-[#888888] font-mono">{item.key}</p>
                 </div>
-                <label className="flex items-center gap-2 text-xs text-[#888888]">
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-xs text-[#888888]">Color:</span>
+                  <input
+                    type="color"
+                    value={item.color || "#52525B"}
+                    onChange={(e) => setTaskDraft((prev) => prev.map((current) => current.key === item.key ? { ...current, color: e.target.value } : current))}
+                    className="w-7 h-7 rounded-full cursor-pointer border border-[#E9E6DC] p-0 overflow-hidden bg-transparent [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch]:rounded-full shrink-0"
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-xs text-[#888888] shrink-0">
                   <Switch
                     checked={!!item.is_done}
                     onCheckedChange={(checked) => setTaskDraft((prev) => prev.map((current) => current.key === item.key ? { ...current, is_done: checked } : current))}
@@ -2019,7 +2048,7 @@ function CRMConfigTab() {
                   type="button"
                   data-testid={`delete-task-status-${item.key}`}
                   onClick={() => setTaskDraft((prev) => prev.filter((current) => current.key !== item.key))}
-                  className="text-zinc-400 hover:text-red-500 transition-colors"
+                  className="text-zinc-400 hover:text-red-500 transition-colors shrink-0"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -2041,16 +2070,22 @@ function CRMConfigTab() {
 
           <div>
             <Label className="text-xs font-semibold">Nueva categoría</Label>
-            <div className="flex gap-2 mt-1">
+            <div className="flex gap-2 mt-1 items-center">
               <Input
                 data-testid="catalog-category-name"
                 value={categoryName}
                 onChange={(e) => setCategoryName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCategory(); } }}
                 placeholder="Ej. Accesorios"
-                className="rounded-sm"
+                className="rounded-sm flex-1"
               />
-              <Button type="button" variant="outline" className="rounded-sm" onClick={addCategory}>
+              <input
+                type="color"
+                value={categoryColor}
+                onChange={(e) => setCategoryColor(e.target.value)}
+                className="w-8 h-8 rounded-full cursor-pointer border border-[#E9E6DC] p-0 overflow-hidden bg-transparent [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch]:rounded-full shrink-0"
+              />
+              <Button type="button" variant="outline" className="rounded-sm shrink-0" onClick={addCategory}>
                 <Plus className="h-4 w-4 mr-1" /> Agregar
               </Button>
             </div>
@@ -2059,11 +2094,24 @@ function CRMConfigTab() {
           <div className="flex flex-wrap gap-2">
             {categoryDraft.map((item) => (
               <span key={item} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-sm bg-[#F9F8F6] border border-[#E9E6DC] text-sm text-[#0B1B26]">
+                <input
+                  type="color"
+                  value={categoryColorsDraft[item] || "#52525B"}
+                  onChange={(e) => setCategoryColorsDraft((prev) => ({ ...prev, [item]: e.target.value }))}
+                  className="w-4 h-4 rounded-full cursor-pointer border border-[#E9E6DC] p-0 overflow-hidden bg-transparent [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch]:rounded-full shrink-0"
+                />
                 {item}
                 <button
                   type="button"
                   data-testid={`delete-category-${item}`}
-                  onClick={() => setCategoryDraft((prev) => prev.filter((current) => current !== item))}
+                  onClick={() => {
+                    setCategoryDraft((prev) => prev.filter((current) => current !== item));
+                    setCategoryColorsDraft((prev) => {
+                      const next = { ...prev };
+                      delete next[item];
+                      return next;
+                    });
+                  }}
                   className="text-zinc-400 hover:text-red-500 transition-colors"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -2082,6 +2130,7 @@ function CRMConfigTab() {
           onClick={() => {
             setTaskDraft(settingsQ.data?.task_statuses || []);
             setCategoryDraft(settingsQ.data?.catalog_categories || []);
+            setCategoryColorsDraft(settingsQ.data?.catalog_category_colors || {});
           }}
         >
           Descartar cambios

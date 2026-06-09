@@ -137,7 +137,8 @@ class _FakeDB:
     def __init__(self):
         for name in ("users", "user_sessions", "contacts", "leads", "conversations",
                      "messages", "notifications", "settings", "wa_status",
-                     "whatsapp_events", "app_secrets", "tasks", "notes", "bot_events"):
+                     "whatsapp_events", "app_secrets", "tasks", "notes", "bot_events",
+                     "password_reset_tokens"):
             setattr(self, name, _Coll())
 
 
@@ -631,3 +632,110 @@ class TestWebhookSelfTest:
         # masked token shown, never the raw one
         assert "TOKEN-MISMATCH" not in r.text
         assert body["configured_verify_token_masked"].endswith("ATCH")
+
+
+# ====================================================================
+# CRM Colors configuration (Task Statuses & Catalog Categories)
+# ====================================================================
+class TestCRMColorsConfig:
+    def test_get_and_patch_crm_colors(self, srv):
+        server, fake, client = srv
+        
+        # 1. Fetch default settings
+        r = client.get("/api/settings", headers=_h())
+        assert r.status_code == 200
+        body = r.json()
+        assert "task_statuses" in body
+        assert "catalog_categories" in body
+        assert "catalog_category_colors" in body
+        assert body["catalog_category_colors"] == {}
+        
+        # Check task statuses defaults do not have colors initially
+        for status in body["task_statuses"]:
+            assert "color" not in status
+
+        # 2. Patch custom colors
+        custom_statuses = [
+            {"key": "todo", "label": "Pendiente", "is_done": False, "color": "#FF4500"},
+            {"key": "done", "label": "Completada", "is_done": True, "color": "#064E3B", "bg": "#ECFDF5"}
+        ]
+        custom_categories = ["Electrónica", "Ropa"]
+        custom_category_colors = {
+            "Electrónica": "#FF5733",
+            "Ropa": "#33FF57"
+        }
+        
+        r_patch = client.patch("/api/admin/settings", headers=_h(), json={
+            "task_statuses": custom_statuses,
+            "catalog_categories": custom_categories,
+            "catalog_category_colors": custom_category_colors
+        })
+        assert r_patch.status_code == 200, r_patch.text
+        
+        # 3. Verify changes persist
+        r_verify = client.get("/api/settings", headers=_h())
+        assert r_verify.status_code == 200
+        body_verify = r_verify.json()
+        
+        assert body_verify["catalog_category_colors"] == custom_category_colors
+        assert body_verify["catalog_categories"] == ["Electrónica", "Ropa"]
+        
+        statuses = body_verify["task_statuses"]
+        assert len(statuses) == 2
+        assert statuses[0]["key"] == "todo"
+        assert statuses[0]["color"] == "#FF4500"
+        assert "bg" not in statuses[0] # not sent
+        
+        assert statuses[1]["key"] == "done"
+        assert statuses[1]["color"] == "#064E3B"
+        assert statuses[1]["bg"] == "#ECFDF5"
+
+
+# ====================================================================
+# Dashboard Date Filters & Contact Update
+# ====================================================================
+class TestDashboardDateFilters:
+    def test_contact_lead_source_patch_and_dashboard_metrics(self, srv):
+        server, fake, client = srv
+        
+        # 1. Create a contact via API (which also creates a linked lead)
+        r_create = client.post("/api/contacts", headers=_h(), json={
+            "name": "Test Contact",
+            "phone": "+1234567890",
+            "email": "test@contact.com"
+        })
+        assert r_create.status_code == 200, r_create.text
+        contact_id = r_create.json()["id"]
+        
+        # 2. Patch contact lead source
+        r_patch = client.patch(f"/api/contacts/{contact_id}", headers=_h(), json={
+            "lead_source": "Meta Ads"
+        })
+        assert r_patch.status_code == 200, r_patch.text
+        assert r_patch.json()["lead_source"] == "Meta Ads"
+        
+        # 3. Get contact to verify persistence
+        r_get = client.get(f"/api/contacts/{contact_id}", headers=_h())
+        assert r_get.status_code == 200
+        assert r_get.json()["lead_source"] == "Meta Ads"
+        
+        # 4. Fetch dashboard metrics with query params (current & comparison)
+        r_dash = client.get("/api/dashboard/metrics", headers=_h(), params={
+            "start_date": "2026-06-01",
+            "end_date": "2026-06-15",
+            "compare_start_date": "2026-05-15",
+            "compare_end_date": "2026-05-31"
+        })
+        assert r_dash.status_code == 200, r_dash.text
+        body = r_dash.json()
+        
+        assert "total_leads" in body
+        assert "leads_trend" in body
+        assert "leads_by_source" in body
+        assert "comparison" in body
+        
+        comp = body["comparison"]
+        assert comp is not None
+        assert "total_leads" in comp
+        assert "leads_trend" in comp
+        assert "leads_by_source" in comp

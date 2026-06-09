@@ -6,6 +6,7 @@ import {
   FileSpreadsheet, X,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
+import { Badge } from "@/components/Bits";
 import { useAuth } from "@/context/AuthContext";
 import api from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -84,6 +85,13 @@ export default function Catalogo() {
     qc.invalidateQueries({ queryKey: ["catalog-stats"] });
     qc.invalidateQueries({ queryKey: ["catalog-categories"] });
   };
+
+  const settingsQ = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => api.get("/settings").then((r) => r.data),
+    enabled: !!user,
+  });
+  const categoryColors = settingsQ.data?.catalog_category_colors || {};
 
   const items = listQ.data?.items || [];
   const total = listQ.data?.total || 0;
@@ -231,7 +239,21 @@ export default function Catalogo() {
                         </div>
                       </td>
                       <td className="px-3 py-2 font-mono text-xs">{p.sku || "—"}</td>
-                      <td className="px-3 py-2">{p.category || "—"}</td>
+                      <td className="px-3 py-2">
+                        {p.category ? (
+                          categoryColors[p.category] ? (
+                            <Badge
+                              label={p.category}
+                              color={categoryColors[p.category]}
+                              bg={categoryColors[p.category] + "1a"}
+                            />
+                          ) : (
+                            p.category
+                          )
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-right">
                         <span className={p.promo_price ? "line-through text-[#888888]" : "font-bold text-[#0B1B26]"}>
                           {fmtPrice(p.price, p.currency)}
