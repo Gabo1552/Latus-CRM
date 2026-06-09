@@ -137,17 +137,38 @@ export default function Tasks() {
                   <div>
                     <Label className="text-xs font-semibold">Estado</Label>
                     <Select value={form.status || defaultOpenStatus} onValueChange={(v) => setForm({ ...form, status: v })}>
-                      <SelectTrigger className="rounded-sm mt-1"><SelectValue /></SelectTrigger>
-                      <SelectContent>{taskStatuses.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}</SelectContent>
+                      <SelectTrigger className="rounded-sm mt-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {taskStatuses.map((s) => (
+                          <SelectItem key={s.key} value={s.key}>
+                            <StatusBadge list={taskStatusMeta} value={s.key} />
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
                     </Select>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <Label className="text-xs font-semibold">Prioridad</Label>
                     <Select value={form.priority} onValueChange={(v) => setForm({ ...form, priority: v })}>
-                      <SelectTrigger className="rounded-sm mt-1"><SelectValue /></SelectTrigger>
-                      <SelectContent>{PRIORITIES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}</SelectContent>
+                      <SelectTrigger className="rounded-sm mt-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PRIORITIES.map((s) => (
+                          <SelectItem key={s.key} value={s.key}>
+                            <span
+                              className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold border"
+                              style={{ color: s.color, backgroundColor: s.bg, borderColor: s.color + "33" }}
+                            >
+                              {s.label}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
                     </Select>
                   </div>
                 </div>
@@ -227,6 +248,7 @@ export default function Tasks() {
           <div className="flex gap-4 overflow-x-auto pb-4 items-start h-[calc(100vh-12rem)]">
             {kanbanColumns.map((col, idx) => {
               const colTasks = tasks.filter((t) => t.status === col.key);
+              const colMeta = taskStatusMeta.find((m) => m.key === col.key) || col;
               return (
                 <div
                   key={col.key}
@@ -237,7 +259,7 @@ export default function Tasks() {
                 >
                   <div className="p-4 border-b border-[#E9E6DC] sticky top-0 bg-[#F9F8F6] z-10 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: col.is_done ? "#064E3B" : idx % 2 === 0 ? "#FF4500" : "#0E8DDB" }} />
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: colMeta.color }} />
                       <span className="font-bold text-sm text-[#0B1B26]">{col.label}</span>
                       <span className="text-xs font-semibold text-[#888888] bg-white border border-[#E9E6DC] rounded-full px-2">{colTasks.length}</span>
                     </div>
