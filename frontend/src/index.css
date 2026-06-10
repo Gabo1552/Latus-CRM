@@ -3,12 +3,48 @@
 @font-face {
   font-family: "Acumin Variable Concept";
   src: local("Acumin Variable Concept"),
-       local("AcuminVariableConcept"),
+       local("Acumin Pro Book"),
+       local("Acumin Pro Regular"),
        local("Acumin Pro"),
-       local("AcuminPro-Regular"),
-       local("AcuminPro"),
-       local("Acumin-Pro");
-  font-weight: 100 900;
+       local("Acumin-Pro-Book"),
+       url("./fonts/Acumin-Pro/Acumin Pro/Acumin Pro Book.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "Acumin Variable Concept";
+  src: local("Acumin Pro Medium"),
+       local("Acumin-Pro-Medium"),
+       url("./fonts/Acumin-Pro/Acumin Pro/Acumin Pro Medium.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "Acumin Variable Concept";
+  src: local("Acumin Pro Semibold"),
+       local("Acumin-Pro-Semibold"),
+       url("./fonts/Acumin-Pro/Acumin Pro/Acumin Pro Semibold.otf") format("opentype");
+  font-weight: 600;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "Acumin Variable Concept";
+  src: local("Acumin Pro Bold"),
+       local("Acumin-Pro-Bold"),
+       url("./fonts/Acumin-Pro/Acumin Pro/Acumin Pro Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "Acumin Variable Concept";
+  src: local("Acumin Pro Black"),
+       local("Acumin-Pro-Black"),
+       url("./fonts/Acumin-Pro/Acumin Pro/Acumin Pro Black.otf") format("opentype");
+  font-weight: 800;
   font-style: normal;
 }
 
