@@ -31,7 +31,7 @@ function Metric({ icon: Icon, label, value, sub, compareValue, testid }) {
     <div className="bg-white border border-[#E9E6DC] rounded-sm p-5 hover:border-zinc-400 hover:shadow-sm hover:-translate-y-0.5 transition-all duration-300" data-testid={testid}>
       <div className="flex items-center justify-between mb-3">
         <span className="text-xs tracking-[0.15em] uppercase font-bold text-[#888888]">{label}</span>
-        <div className="p-1.5 bg-[#E6F4FE] rounded-full">
+        <div className="p-1.5 bg-latus-ice rounded-full">
           <Icon className="h-4 w-4 text-[#0E8DDB]" />
         </div>
       </div>
@@ -295,7 +295,7 @@ export default function Dashboard() {
             </p>
           </div>
           {isAdminOrSupervisor && (
-            <div className="flex items-center gap-2 bg-[#E6F4FE] text-[#0E8DDB] font-semibold text-xs px-3 py-1.5 rounded-full border border-[#D0ECFD] w-fit">
+            <div className="flex items-center gap-2 bg-latus-ice text-[#0E8DDB] font-semibold text-xs px-3 py-1.5 rounded-full border border-latus-blue/20 w-fit">
               <span className="h-1.5 w-1.5 rounded-full bg-[#0E8DDB] animate-pulse" />
               Vista Administrador
             </div>

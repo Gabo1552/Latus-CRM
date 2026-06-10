@@ -58,6 +58,7 @@ module.exports = {
           'ink-soft': '#1A2F3D',
           blue: '#0E8DDB',
           'blue-deep': '#0a7ab8',
+          ice: '#D7EDF2',
           coral: '#EF5030',
           'coral-deep': '#d8451f',
           orange: '#F08050',
@@ -69,7 +70,7 @@ module.exports = {
         },
       },
       fontFamily: {
-        sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'sans-serif'],
+        sans: ['Acumin Variable Concept', 'Acumin Pro', 'Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'sans-serif'],
       },
       keyframes: {
         'accordion-down': {
