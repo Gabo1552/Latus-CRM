@@ -878,12 +878,19 @@ function BotIATab({ setTab }) {
   });
 
   const [draft, setDraft] = useState(null);
-  useEffect(() => { if (q.data && draft === null) setDraft({ ...q.data }); }, [q.data, draft]);
+  const [pendingKeys, setPendingKeys] = useState({});
+  useEffect(() => {
+    if (q.data && draft === null) {
+      setDraft({ ...q.data });
+      setPendingKeys({});
+    }
+  }, [q.data, draft]);
 
   const save = useMutation({
     mutationFn: (payload) => api.patch("/admin/bot-settings", payload),
     onSuccess: (r) => {
       setDraft({ ...r.data });
+      setPendingKeys({});
       qc.invalidateQueries({ queryKey: ["admin-bot-settings"] });
       toast.success("Cambios guardados");
     },
@@ -898,7 +905,7 @@ function BotIATab({ setTab }) {
   const ctxMax = Number(draft.recent_messages_context_max ?? 12);
   const threshInvalid = !(thresh >= 0 && thresh <= 1);
   const ctxInvalid = !(ctxMax >= 3 && ctxMax <= 50);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(q.data);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(q.data) || Object.keys(pendingKeys).length > 0;
   const providers = aiProviderQ.data?.supported_providers || Object.keys(PROVIDER_LABELS);
   const suggestionsList = (aiProviderQ.data?.model_suggestions || {})[draft.provider || "built_in"] || [];
 
@@ -919,7 +926,10 @@ function BotIATab({ setTab }) {
       bot_enabled_default: !!draft.bot_enabled_default,
       confidence_threshold: thresh,
       recent_messages_context_max: ctxMax,
-      business_instructions: draft.business_instructions || "",
+      business_instructions: draft.company_context || draft.business_instructions || "",
+      company_context: draft.company_context || "",
+      response_instructions: draft.response_instructions || "",
+      catalog_reading_enabled: draft.catalog_reading_enabled !== undefined ? !!draft.catalog_reading_enabled : true,
       handoff_rules: draft.handoff_rules || "",
       tone: draft.tone || "",
       provider: draft.provider || "built_in",
@@ -931,6 +941,17 @@ function BotIATab({ setTab }) {
         .map((f) => ({ q: (f.q || "").trim(), a: (f.a || "").trim() }))
         .filter((f) => f.q && f.a),
     };
+    
+    // Construct api_keys dictionary to patch
+    const apiKeysPayload = {};
+    Object.entries(pendingKeys).forEach(([prov, val]) => {
+      if (val === null) apiKeysPayload[prov] = null;
+      else if (val.trim()) apiKeysPayload[prov] = val.trim();
+    });
+    if (Object.keys(apiKeysPayload).length > 0) {
+      payload.api_keys = apiKeysPayload;
+    }
+    
     save.mutate(payload);
   };
 
@@ -1148,19 +1169,48 @@ function BotIATab({ setTab }) {
             />
           </div>
 
-          {/* Business instructions */}
+          {/* Contexto de la empresa */}
           <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
-            <Label className="text-sm font-bold text-[#0B1B26]">Instrucciones del negocio</Label>
+            <Label className="text-sm font-bold text-[#0B1B26]">Contexto de la empresa</Label>
             <p className="text-xs text-[#888888] mt-0.5 mb-2">
-              Información que el bot puede usar: productos, precios, condiciones, políticas, horarios.
-              Esto se inyecta como sistema en cada llamada al modelo.
+              Información del negocio que el bot usará como contexto: descripción institucional, políticas de la empresa, horarios de atención, etc.
             </p>
             <Textarea
-              data-testid="bot-setting-instructions"
-              value={draft.business_instructions || ""}
-              onChange={(e) => set({ business_instructions: e.target.value })}
-              className="rounded-sm min-h-[140px] font-mono text-xs"
-              placeholder="Ej.: Vendemos planes mensuales desde $X. Envío gratis a CABA y GBA. Horario de atención humana: lun a vie 9–18hs..."
+              data-testid="bot-setting-company-context"
+              value={draft.company_context || draft.business_instructions || ""}
+              onChange={(e) => set({ company_context: e.target.value })}
+              className="rounded-sm min-h-[120px] font-mono text-xs"
+              placeholder="Ej.: Somos Latus CRM, brindamos software de gestión comercial. Horario de atención humana: lunes a viernes 9 a 18 hs..."
+            />
+          </div>
+
+          {/* Instrucciones en las respuestas */}
+          <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
+            <Label className="text-sm font-bold text-[#0B1B26]">Instrucciones en las respuestas</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
+              Indicá pautas de comportamiento para las respuestas automáticas del bot: límites, cosas que debe evitar, formato de las respuestas (ej.: no usar más de 40 palabras, ser amable, etc.).
+            </p>
+            <Textarea
+              data-testid="bot-setting-response-instructions"
+              value={draft.response_instructions || ""}
+              onChange={(e) => set({ response_instructions: e.target.value })}
+              className="rounded-sm min-h-[120px] font-mono text-xs"
+              placeholder="Ej.: Respondé siempre con un saludo cálido. Sé extremadamente breve (menos de 50 palabras). Nunca inventes precios de servicios que no figuren en el catálogo..."
+            />
+          </div>
+
+          {/* Lectura del catálogo */}
+          <div className="flex items-start justify-between gap-4 p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
+            <div>
+              <Label className="text-sm font-bold text-[#0B1B26]">Lectura del catálogo e inventario</Label>
+              <p className="text-xs text-[#888888] mt-0.5">
+                Si está habilitado, cuando el bot detecte una intención de compra o consulta comercial (precios, stock, catálogo), buscará automáticamente en el catálogo de productos del CRM y usará la información real para responder, evitando alucinaciones.
+              </p>
+            </div>
+            <Switch
+              data-testid="bot-setting-catalog-reading"
+              checked={draft.catalog_reading_enabled !== undefined ? !!draft.catalog_reading_enabled : true}
+              onCheckedChange={(v) => set({ catalog_reading_enabled: v })}
             />
           </div>
 
@@ -1177,6 +1227,113 @@ function BotIATab({ setTab }) {
               className="rounded-sm min-h-[100px] text-xs"
               placeholder="Ej.: 1) cliente pide hablar con humano; 2) cliente comparte DNI/CBU/tarjeta; ..."
             />
+          </div>
+
+          {/* API Keys del Bot (Opcional) */}
+          <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
+            <details className="group">
+              <summary className="cursor-pointer text-sm font-bold text-[#0B1B26] flex items-center justify-between list-none">
+                <span className="flex items-center gap-2">
+                  <KeyRound className="h-4 w-4 text-[#0E8DDB]" />
+                  API Keys del Bot (Opcional)
+                </span>
+                <span className="text-xs text-[#888888] font-normal group-open:hidden">
+                  Ver/Configurar llaves dedicadas
+                </span>
+                <span className="text-xs text-[#888888] font-normal hidden group-open:inline">
+                  Ocultar
+                </span>
+              </summary>
+              
+              <div className="mt-3 pt-3 border-t border-[#E9E6DC] space-y-3">
+                <p className="text-xs text-[#888888]">
+                  Por defecto, el bot de atención utilizará las API Keys configuradas en el <strong>Asistente de IA</strong>. Si deseás que el bot de WhatsApp use claves distintas, podés configurarlas aquí.
+                </p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                  {KEY_REQUIRED_PROVIDERS.map((prov) => {
+                    const status = draft.keys_status?.[prov] || { configured: false, masked: "" };
+                    const isConfigured = status.configured;
+                    const maskedKey = status.masked;
+                    
+                    const isCleared = pendingKeys[prov] === null;
+                    const hasPendingValue = typeof pendingKeys[prov] === "string";
+                    const displayConfigured = isConfigured && !isCleared;
+                    
+                    return (
+                      <div key={prov} className="p-3 border border-[#E9E6DC] rounded-sm bg-[#FBFBFA] space-y-2 flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-bold text-[#0B1B26] uppercase tracking-wide">
+                              {PROVIDER_LABELS[prov] || prov}
+                            </span>
+                            <span className="text-[10px]">
+                              {displayConfigured ? (
+                                <span className="font-mono text-[#16A34A] bg-[#E8F8EE] px-1.5 py-0.5 rounded-sm font-semibold">{maskedKey || "configurada"}</span>
+                              ) : (
+                                <span className="font-mono text-[#888888] bg-[#F1F0EA] px-1.5 py-0.5 rounded-sm font-semibold">heredada del asistente</span>
+                              )}
+                            </span>
+                          </div>
+                        </div>
+                        
+                        <div className="space-y-1">
+                          <div className="flex gap-2">
+                            <Input
+                              type="password"
+                              placeholder={isConfigured && !isCleared ? "Dejar igual o reemplazar…" : "Pegá la API key dedicada aquí"}
+                              value={hasPendingValue ? pendingKeys[prov] : ""}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setPendingKeys((prev) => ({ ...prev, [prov]: val }));
+                              }}
+                              className="rounded-sm h-8 text-xs flex-1 font-mono bg-white"
+                            />
+                            {isConfigured && !isCleared && (
+                              <Button
+                                variant="outline"
+                                onClick={() => {
+                                  setPendingKeys((prev) => ({ ...prev, [prov]: null }));
+                                }}
+                                className="rounded-sm h-8 px-2 text-xs border border-[#E9E6DC]"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            {isCleared && (
+                              <Button
+                                variant="outline"
+                                onClick={() => {
+                                  setPendingKeys((prev) => {
+                                    const copy = { ...prev };
+                                    delete copy[prov];
+                                    return copy;
+                                  });
+                                }}
+                                className="rounded-sm h-8 px-2 text-xs border border-[#E9E6DC] text-[#0E8DDB]"
+                              >
+                                Deshacer
+                              </Button>
+                            )}
+                          </div>
+                          
+                          {isCleared && (
+                            <p className="text-[10px] text-[#DC2626]">
+                              Al guardar se borrará la API Key dedicada actual y volverá a heredar la del asistente.
+                            </p>
+                          )}
+                          {hasPendingValue && pendingKeys[prov] !== null && pendingKeys[prov].trim() !== "" && (
+                            <p className="text-[10px] text-[#0E8DDB]">
+                              Nueva API Key dedicada ingresada (sin guardar).
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </details>
           </div>
 
           {/* FAQs */}
@@ -1239,7 +1396,7 @@ function BotIATab({ setTab }) {
           <Button
             data-testid="bot-settings-reset"
             variant="outline"
-            onClick={() => setDraft({ ...q.data })}
+            onClick={() => { setDraft({ ...q.data }); setPendingKeys({}); }}
             disabled={!dirty}
             className="rounded-sm"
           >
@@ -1286,6 +1443,8 @@ const PROVIDER_LABELS = {
   custom_openai:  "Otro (compatible OpenAI)",
 };
 
+const KEY_REQUIRED_PROVIDERS = ["openai", "anthropic", "gemini", "openrouter", "custom_openai"];
+
 function AIAutoTab() {
   const qc = useQueryClient();
   const q = useQuery({
@@ -1293,13 +1452,11 @@ function AIAutoTab() {
     queryFn: () => api.get("/admin/ai-provider").then((r) => r.data),
   });
   const [draft, setDraft] = useState(null);
-  const [pendingKey, setPendingKey] = useState(""); // staged new key, sent on save
-  const [keyAction, setKeyAction] = useState("keep"); // 'keep' | 'replace' | 'clear'
+  const [pendingKeys, setPendingKeys] = useState({});
   useEffect(() => {
     if (q.data && draft === null) {
       setDraft({ ...q.data });
-      setPendingKey("");
-      setKeyAction("keep");
+      setPendingKeys({});
     }
   }, [q.data, draft]);
 
@@ -1307,8 +1464,7 @@ function AIAutoTab() {
     mutationFn: (payload) => api.put("/admin/ai-provider", payload),
     onSuccess: (r) => {
       setDraft({ ...r.data });
-      setPendingKey("");
-      setKeyAction("keep");
+      setPendingKeys({});
       qc.invalidateQueries({ queryKey: ["admin-ai-provider"] });
       toast.success("Cambios guardados");
     },
@@ -1337,21 +1493,25 @@ function AIAutoTab() {
   const tempBad = !(temp >= 0 && temp <= 2);
   const maxTokBad = !(maxTok >= 100 && maxTok <= 4096);
   const minConfBad = !(minConf >= 0 && minConf <= 1);
-  const keyMissing = needsKey && keyAction !== "replace" && !draft.api_key_configured;
 
   const onSave = () => {
     if (tempBad)   { toast.error("La temperatura debe estar entre 0 y 2"); return; }
     if (maxTokBad) { toast.error("El máximo de tokens debe estar entre 100 y 4096"); return; }
     if (minConfBad){ toast.error("El umbral de confianza debe estar entre 0 y 1"); return; }
-    if (needsKey && keyAction === "clear") {
-      toast.error("Para este proveedor necesitás una API Key"); return;
-    }
-    if (needsKey && !draft.api_key_configured && keyAction !== "replace") {
-      toast.error("Ingresá la API Key del proveedor"); return;
-    }
     if (needsBaseUrl && !(draft.base_url || "").trim()) {
       toast.error("Para 'Otro (compatible OpenAI)' la URL base es obligatoria"); return;
     }
+    
+    // Check if key is configured for the active provider
+    const activeKeyStatus = draft.keys_status?.[draft.provider] || { configured: false };
+    const isCleared = pendingKeys[draft.provider] === null;
+    const hasPendingValue = typeof pendingKeys[draft.provider] === "string" && pendingKeys[draft.provider].trim() !== "";
+    const activeKeyConfigured = activeKeyStatus.configured && !isCleared;
+    
+    if (needsKey && !activeKeyConfigured && !hasPendingValue) {
+      toast.error("Ingresá la API Key del proveedor activo"); return;
+    }
+    
     const payload = {
       provider: draft.provider,
       model: draft.model,
@@ -1364,12 +1524,21 @@ function AIAutoTab() {
       auto_handoff_enabled: !!draft.auto_handoff_enabled,
       min_confidence_for_auto_reply: minConf,
     };
-    if (keyAction === "replace") payload.api_key = pendingKey;
-    if (keyAction === "clear")   payload.api_key = null;
+    
+    // Construct api_keys dictionary to patch
+    const apiKeysPayload = {};
+    Object.entries(pendingKeys).forEach(([prov, val]) => {
+      if (val === null) apiKeysPayload[prov] = null;
+      else if (val.trim()) apiKeysPayload[prov] = val.trim();
+    });
+    if (Object.keys(apiKeysPayload).length > 0) {
+      payload.api_keys = apiKeysPayload;
+    }
+    
     save.mutate(payload);
   };
 
-  const dirty = JSON.stringify(draft) !== JSON.stringify(q.data) || keyAction !== "keep";
+  const dirty = JSON.stringify(draft) !== JSON.stringify(q.data) || Object.keys(pendingKeys).length > 0;
 
   return (
     <div className="space-y-6" data-testid="ai-auto-tab">
@@ -1475,51 +1644,98 @@ function AIAutoTab() {
             )}
           </div>
 
-          {/* API key */}
-          {needsKey && (
-            <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
-              <Label className="text-sm font-bold text-[#0B1B26]">API Key</Label>
-              <p className="text-xs text-[#888888] mt-0.5 mb-2">
-                Se guarda cifrada y nunca se muestra en claro. Estado actual:{" "}
-                {draft.api_key_configured
-                  ? <span className="font-mono text-[#16A34A]">{draft.api_key_masked || "configurada"}</span>
-                  : <span className="font-mono text-[#0E8DDB]">no configurada</span>}
+          {/* API key configuration per provider */}
+          <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2 space-y-4">
+            <div>
+              <Label className="text-sm font-bold text-[#0B1B26]">Configuración de API Keys (Múltiples Proveedores)</Label>
+              <p className="text-xs text-[#888888] mt-0.5">
+                Podés guardar las claves de API de los diferentes proveedores de forma paralela. Las claves se almacenan de manera cifrada y segura.
               </p>
-              <div className="flex gap-2">
-                <Input
-                  data-testid="ai-setting-apikey"
-                  type="password"
-                  placeholder={draft.api_key_configured ? "Dejar igual o reemplazar…" : "Pegá la API key del proveedor"}
-                  value={pendingKey}
-                  onChange={(e) => {
-                    setPendingKey(e.target.value);
-                    setKeyAction(e.target.value ? "replace" : "keep");
-                  }}
-                  className="rounded-sm h-9 flex-1 font-mono"
-                />
-                {draft.api_key_configured && (
-                  <Button
-                    data-testid="ai-setting-apikey-clear"
-                    variant="outline"
-                    onClick={() => { setPendingKey(""); setKeyAction("clear"); }}
-                    className="rounded-sm h-9"
-                  >
-                    <Trash2 className="h-3.5 w-3.5 mr-1" /> Limpiar
-                  </Button>
-                )}
-              </div>
-              {keyMissing && (
-                <p className="text-[11px] text-[#DC2626] mt-1">
-                  Este proveedor necesita una API Key.
-                </p>
-              )}
-              {keyAction === "clear" && (
-                <p className="text-[11px] text-[#0E8DDB] mt-1">
-                  Al guardar se borrará la API Key actual.
-                </p>
-              )}
             </div>
-          )}
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+              {KEY_REQUIRED_PROVIDERS.map((prov) => {
+                const status = draft.keys_status?.[prov] || { configured: false, masked: "" };
+                const isConfigured = status.configured;
+                const maskedKey = status.masked;
+                
+                const isCleared = pendingKeys[prov] === null;
+                const hasPendingValue = typeof pendingKeys[prov] === "string";
+                const displayConfigured = isConfigured && !isCleared;
+                
+                return (
+                  <div key={prov} className="p-3 border border-[#E9E6DC] rounded-sm bg-[#FBFBFA] space-y-2 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-bold text-[#0B1B26] uppercase tracking-wide">
+                          {PROVIDER_LABELS[prov] || prov}
+                        </span>
+                        <span className="text-[10px]">
+                          {displayConfigured ? (
+                            <span className="font-mono text-[#16A34A] bg-[#E8F8EE] px-1.5 py-0.5 rounded-sm font-semibold">{maskedKey || "configurada"}</span>
+                          ) : (
+                            <span className="font-mono text-[#888888] bg-[#F1F0EA] px-1.5 py-0.5 rounded-sm font-semibold">no configurada</span>
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-1">
+                      <div className="flex gap-2">
+                        <Input
+                          type="password"
+                          placeholder={isConfigured && !isCleared ? "Dejar igual o reemplazar…" : "Pegá la API key aquí"}
+                          value={hasPendingValue ? pendingKeys[prov] : ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setPendingKeys((prev) => ({ ...prev, [prov]: val }));
+                          }}
+                          className="rounded-sm h-8 text-xs flex-1 font-mono bg-white"
+                        />
+                        {isConfigured && !isCleared && (
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              setPendingKeys((prev) => ({ ...prev, [prov]: null }));
+                            }}
+                            className="rounded-sm h-8 px-2 text-xs border border-[#E9E6DC]"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        {isCleared && (
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              setPendingKeys((prev) => {
+                                const copy = { ...prev };
+                                delete copy[prov];
+                                return copy;
+                              });
+                            }}
+                            className="rounded-sm h-8 px-2 text-xs border border-[#E9E6DC] text-[#0E8DDB]"
+                          >
+                            Deshacer
+                          </Button>
+                        )}
+                      </div>
+                      
+                      {isCleared && (
+                        <p className="text-[10px] text-[#DC2626]">
+                          Al guardar se borrará la API Key actual.
+                        </p>
+                      )}
+                      {hasPendingValue && pendingKeys[prov] !== null && pendingKeys[prov].trim() !== "" && (
+                        <p className="text-[10px] text-[#0E8DDB]">
+                          Nueva API Key ingresada (sin guardar).
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
 
           {/* Base URL */}
           {needsBaseUrl && (
@@ -1645,7 +1861,7 @@ function AIAutoTab() {
             data-testid="ai-test-button"
             variant="outline"
             onClick={() => test.mutate()}
-            disabled={test.isPending || !draft.ai_enabled || keyMissing}
+            disabled={test.isPending || !draft.ai_enabled || (needsKey && !(draft.keys_status?.[draft.provider]?.configured && pendingKeys[draft.provider] !== null) && !(typeof pendingKeys[draft.provider] === "string" && pendingKeys[draft.provider].trim() !== ""))}
             className="rounded-sm"
           >
             {test.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : <CheckCircle2 className="h-3.5 w-3.5 mr-1" />}
@@ -1655,7 +1871,7 @@ function AIAutoTab() {
             <Button
               data-testid="ai-settings-reset"
               variant="outline"
-              onClick={() => { setDraft({ ...q.data }); setPendingKey(""); setKeyAction("keep"); }}
+              onClick={() => { setDraft({ ...q.data }); setPendingKeys({}); }}
               disabled={!dirty}
               className="rounded-sm"
             >

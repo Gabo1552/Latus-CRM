@@ -52,6 +52,9 @@ DEFAULT_BOT_SETTINGS = {
     "bot_name": "Bot",
     "include_client_info": True,
     "default_handoff_user_id": None,
+    "company_context": "",
+    "response_instructions": "",
+    "catalog_reading_enabled": True,
 }
 
 # Sensitive data patterns (Argentinian DNI, CBU, credit card-like)
@@ -91,10 +94,13 @@ async def regenerate_summary(db, conv_id: str, *, user_id: str | None = None) ->
     ai_cfg = await ai_providers.load_settings(db)
     global_provider = ai_cfg.get("provider", "built_in")
     global_model = ai_cfg.get("model", "gpt-4o-mini")
+    base = (ai_cfg.get("system_prompt_base") or "").strip()
+    instructions = build_summary_only_prompt()
+    system_prompt = (base + "\n\n" + instructions).strip() if base else instructions
     try:
         parsed, raw = await call_llm_json(
             db=db,
-            system_prompt=build_summary_only_prompt(),
+            system_prompt=system_prompt,
             user_messages_block=block or "(sin mensajes)",
             provider=global_provider,
             model=global_model,
@@ -159,13 +165,13 @@ async def suggest_reply(db, conv_id: str, *, user_id: str | None = None) -> dict
                              faqs=settings["faqs"], handoff_rules=settings["handoff_rules"],
                              bot_name=settings.get("bot_name", "Bot"),
                              client_info=client_info)
-    bot_provider = settings.get("provider", "built_in")
-    bot_model = settings.get("model", "gpt-4o-mini")
+    asst_provider = ai_cfg.get("provider", "built_in")
+    asst_model = ai_cfg.get("model", "gpt-4o-mini")
     try:
         parsed, _ = await call_llm_json(db=db, system_prompt=sp,
                                         user_messages_block=block,
-                                        provider=bot_provider,
-                                        model=bot_model,
+                                        provider=asst_provider,
+                                        model=asst_model,
                                         purpose="suggest_reply",
                                         conversation_id=conv_id,
                                         user_id=user_id)
@@ -247,11 +253,11 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             return await _finish(db, event, decision="require_human",
                                  reason=human_reason)
 
-        # Catalog hook — inject real product data when the message looks commercial
+        # Catalog hook — inject real product data when the message looks commercial and catalog reading is enabled
         cat_intent = cs.detect_commercial_intent(last_text)
         catalog_block = ""
         products_returned = 0
-        if cat_intent["is_commercial"]:
+        if settings.get("catalog_reading_enabled", True) and cat_intent["is_commercial"]:
             query = cs.extract_product_query(last_text)
             products = await cs.search_catalog(db, query, limit=5)
             products_returned = len(products)
@@ -264,17 +270,19 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         # Call LLM unless forced handoff (still call for summary)
         block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
         base = (ai_cfg.get("system_prompt_base") or "").strip()
-        biz = settings.get("business_instructions") or ""
-        merged_biz = (base + "\n\n" + biz).strip() if base else biz
+        cc = settings.get("company_context") or settings.get("business_instructions") or ""
+        merged_cc = (base + "\n\n" + cc).strip() if base else cc
         if catalog_block:
-            merged_biz = (merged_biz + "\n\n" + catalog_block).strip()
+            merged_cc = (merged_cc + "\n\n" + catalog_block).strip()
         client_info = await _compile_client_info(db, conv, settings)
         sp = build_system_prompt(tone=settings["tone"],
-                                 business_instructions=merged_biz,
+                                 company_context=merged_cc,
+                                 response_instructions=settings.get("response_instructions") or "",
                                  faqs=settings["faqs"],
                                  handoff_rules=settings["handoff_rules"],
                                  bot_name=settings.get("bot_name", "Bot"),
-                                 client_info=client_info)
+                                 client_info=client_info,
+                                 auto_reply_enabled=ai_cfg.get("whatsapp_auto_reply_enabled", True))
         parsed: dict = {}
         raw = ""
         bot_provider = settings.get("provider", "built_in")
@@ -321,10 +329,9 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             decision = "require_human"
             human_reason = human_reason or f"Confianza baja ({confidence:.2f} < {thresh:.2f})"
 
-        # Enforce classification-only: bot never sends replies to the customer, only classifies
-        if decision == "reply_with_bot":
-            if not ai_cfg.get("whatsapp_auto_reply_enabled", True):
-                event["auto_reply_suppressed"] = True
+        # Enforce classification-only if whatsapp_auto_reply_enabled is False
+        if decision == "reply_with_bot" and not ai_cfg.get("whatsapp_auto_reply_enabled", True):
+            event["auto_reply_suppressed"] = True
             decision = "update_status_only"
             reply = ""
 

@@ -285,3 +285,38 @@ class TestPipelineGlobalFlags:
         conv = fake.conversations.docs[0]
         assert conv.get("detected_intent") == "precios"
         assert conv.get("summary") == "Cliente preguntó por precios"
+
+    def test_provider_api_key_separation(self, srv):
+        server, fake, client = srv
+        from ai import providers as ai_providers
+        from utils import crypto
+        
+        # 1. Configure assistant key
+        _run(fake.app_secrets.update_one(
+            {"_id": "ai_provider"},
+            {"$set": {"api_key_openai_enc": crypto.encrypt("assistant_key")}},
+            upsert=True
+        ))
+        
+        # 2. Get provider for assistant (for_bot=False) -> should resolve to assistant_key
+        prov_asst = _run(ai_providers.get_provider(fake, override_provider="openai", for_bot=False))
+        assert prov_asst.api_key == "assistant_key"
+        
+        # 3. Get provider for bot (for_bot=True) with fallback -> should resolve to assistant_key since no bot key exists
+        prov_bot_fallback = _run(ai_providers.get_provider(fake, override_provider="openai", for_bot=True))
+        assert prov_bot_fallback.api_key == "assistant_key"
+        
+        # 4. Configure bot-specific key
+        _run(fake.app_secrets.update_one(
+            {"_id": "bot_provider"},
+            {"$set": {"api_key_openai_enc": crypto.encrypt("bot_key")}},
+            upsert=True
+        ))
+        
+        # 5. Get provider for bot (for_bot=True) -> should resolve to bot_key
+        prov_bot = _run(ai_providers.get_provider(fake, override_provider="openai", for_bot=True))
+        assert prov_bot.api_key == "bot_key"
+        
+        # 6. Get provider for assistant (for_bot=False) -> should still resolve to assistant_key
+        prov_asst_sep = _run(ai_providers.get_provider(fake, override_provider="openai", for_bot=False))
+        assert prov_asst_sep.api_key == "assistant_key"

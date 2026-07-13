@@ -24,7 +24,17 @@ JSON_SCHEMA_HINT = """Respond ONLY with a valid JSON object with this exact shap
 }"""
 
 
-def build_system_prompt(*, tone: str, business_instructions: str, faqs, handoff_rules: str, bot_name: str = "Bot", client_info: str | None = None) -> str:
+def build_system_prompt(
+    *,
+    tone: str,
+    company_context: str,
+    response_instructions: str,
+    faqs,
+    handoff_rules: str,
+    bot_name: str = "Bot",
+    client_info: str | None = None,
+    auto_reply_enabled: bool = True
+) -> str:
     faq_block = ""
     if faqs:
         lines = []
@@ -35,23 +45,37 @@ def build_system_prompt(*, tone: str, business_instructions: str, faqs, handoff_
                 lines.append(f"  - P: {q}\n    R: {a}")
         if lines:
             faq_block = "\nPreguntas frecuentes (usá solo si aplica):\n" + "\n".join(lines)
-    bi = (business_instructions or "").strip() or "(sin instrucciones específicas del negocio)"
+    cc = (company_context or "").strip() or "(sin contexto de la empresa específico)"
+    ri = (response_instructions or "").strip() or "(sin instrucciones específicas para respuestas)"
     hr = (handoff_rules or "").strip() or DEFAULT_HANDOFF_RULES
     client_block = ""
     if client_info:
         client_block = f"\nInformación del cliente actual:\n{client_info.strip()}\n"
-    return f"""Sos el clasificador de leads de Latus CRM. Tu única función es analizar la conversación de WhatsApp con el cliente y clasificar el estado del lead para asignarlo al pipeline de ventas (campo lead_status_suggested).
-Tu decisión (campo decision) SIEMPRE debe ser "update_status_only" o bien "require_human" si detectas que requiere atención urgente de un operador humano según las reglas de derivación.
-NO debes generar respuestas automáticas para enviar al cliente (deja el campo reply vacío).
 
-Tono esperado para el análisis: {tone}.
+    if auto_reply_enabled:
+        role_description = f"""Sos el asistente de atención por WhatsApp y clasificador de leads de Latus CRM. Tu nombre es "{bot_name}".
+Tus funciones principales son:
+1. Responder al cliente de forma amable, profesional y natural, ayudándole a resolver dudas, dándole información sobre la empresa o el catálogo. (Cuando respondas, pon la decisión como "reply_with_bot" y escribe la respuesta en el campo "reply").
+2. Clasificar el estado del lead para el pipeline de ventas (campo lead_status_suggested).
+3. Detectar si el caso requiere atención urgente de un operador humano y derivarlo de inmediato (campo decision = "require_human" y escribe por qué en "human_required_reason")."""
+    else:
+        role_description = f"""Sos el clasificador de leads de Latus CRM. Tu única función es analizar la conversación de WhatsApp con el cliente y clasificar el estado del lead para asignarlo al pipeline de ventas (campo lead_status_suggested).
+Tu decisión (campo decision) SIEMPRE debe ser "update_status_only" o bien "require_human" si detectas que requiere atención urgente de un operador humano según las reglas de derivación.
+NO debes generar respuestas automáticas para enviar al cliente (deja el campo "reply" vacío)."""
+
+    return f"""{role_description}
+
+Tono de comunicación esperado: {tone}.
 {client_block}
 
-Instrucciones del negocio / Contexto:
-{bi}
+Contexto de la empresa:
+{cc}
+
+Instrucciones para tus respuestas / Comportamiento:
+{ri}
 {faq_block}
 
-Reglas de derivación a humano:
+Reglas de derivación a humano (si se cumple alguna de estas condiciones, debes transferir al cliente):
 {hr}
 
 {JSON_SCHEMA_HINT}"""

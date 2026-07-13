@@ -157,14 +157,30 @@ class TestPipeline:
         monkeypatch.setattr(pipeline_mod, "call_llm_json",
                             _llm_factory(decision="reply_with_bot", confidence=0.9))
         ev = _run(pipeline_mod.process_inbound(db, cv, "wamid.IN1", wa_send=wa_send))
-        # Enforce classification-only: reply_with_bot degraded to update_status_only
+        # Now it should reply directly since whatsapp_auto_reply_enabled defaults to True
+        assert ev["decision"] == "reply_with_bot"
+        assert sent == ["¡Hola Ana!"]
+        bots = [m for m in db.messages.docs if m["sender_type"] == "bot"]
+        assert len(bots) == 1
+        assert bots[0]["body"] == "¡Hola Ana!"
+        conv = _run(db.conversations.find_one({"id": cv}))
+        assert conv["bot_status"] == "esperando_cliente"
+        assert conv["summary"] == "Cliente preguntó por precios."
+
+    def test_01b_reply_with_bot_degraded_when_auto_reply_disabled(self, pipeline_mod, monkeypatch):
+        db = _DB()
+        _run(db.app_secrets.insert_one({"_id": "ai_provider", "whatsapp_auto_reply_enabled": False}))
+        cv = _seed_conv(db)
+        sent = []
+        async def wa_send(conv, text): sent.append(text); return {"ok": True}
+        monkeypatch.setattr(pipeline_mod, "call_llm_json",
+                            _llm_factory(decision="reply_with_bot", confidence=0.9))
+        ev = _run(pipeline_mod.process_inbound(db, cv, "wamid.IN1", wa_send=wa_send))
+        # With auto reply disabled, it should degrade to update_status_only
         assert ev["decision"] == "update_status_only"
         assert sent == []
         bots = [m for m in db.messages.docs if m["sender_type"] == "bot"]
         assert len(bots) == 0
-        conv = _run(db.conversations.find_one({"id": cv}))
-        assert conv["bot_status"] == "bot_activo"
-        assert conv["summary"] == "Cliente preguntó por precios."
 
     def test_02_bot_disabled_no_llm_call(self, pipeline_mod, monkeypatch):
         db = _DB()
@@ -237,7 +253,7 @@ class TestPipeline:
         assert len([e for e in db.bot_events.docs
                     if e.get("triggered_by_message_id") == "wamid.DUP"]) == 1
         bots = [m for m in db.messages.docs if m["sender_type"] == "bot"]
-        assert len(bots) == 0
+        assert len(bots) == 1
 
     def test_08_handoff_routes_to_default_handoff_user_id(self, pipeline_mod, monkeypatch):
         db = _DB(); cv = _seed_conv(db)
@@ -277,3 +293,28 @@ class TestPipeline:
         from server import _ALLOWED_BOT_MODELS
         assert "gpt-4o-mini" in _ALLOWED_BOT_MODELS
         assert "gpt-3.5-turbo" not in _ALLOWED_BOT_MODELS
+
+    def test_11_catalog_reading_enabled(self, pipeline_mod, monkeypatch):
+        db = _DB()
+        cv = _seed_conv(db, last_text="Hola, tienen stock de Cursos?")
+        # Seed catalog setting as False
+        _run(db.bot_settings.insert_one({"_id": "default", "catalog_reading_enabled": False}))
+        
+        called_llm_args = {}
+        async def fake_llm(**kw):
+            nonlocal called_llm_args
+            called_llm_args = kw
+            return ({
+                "intent": "stock", "confidence": 0.9, "decision": "update_status_only",
+                "reply": "", "summary": "Cliente preguntó por stock.",
+                "human_required_reason": None, "next_best_action": None,
+                "lead_status_suggested": None, "bot_status_suggested": None,
+                "evidence_for_status_change": "",
+            }, "")
+        monkeypatch.setattr(pipeline_mod, "call_llm_json", fake_llm)
+        
+        _run(pipeline_mod.process_inbound(db, cv, "wamid.IN1", wa_send=AsyncMock()))
+        
+        # Verify that catalog block is NOT injected in system_prompt
+        sp = called_llm_args.get("system_prompt", "")
+        assert "CATÁLOGO" not in sp

@@ -31,7 +31,7 @@ async def call_llm_json(
     user_id: str | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Call the configured LLM, log usage, and return ``(parsed_json, raw_text)``."""
-    provider_obj = await get_provider(db, override_provider=provider, override_model=model)
+    provider_obj = await get_provider(db, override_provider=provider, override_model=model, for_bot=(purpose == "bot_pipeline"))
     res = await call_with_logging(
         db, provider_obj,
         system_prompt=system_prompt,

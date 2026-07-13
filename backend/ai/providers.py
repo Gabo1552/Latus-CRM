@@ -100,12 +100,23 @@ async def save_settings(db, patch: dict, user_id: str | None) -> dict:
                 set_fields[f"api_key_{provider}_enc"] = crypto.encrypt(v.strip())
         elif k in DEFAULTS:
             set_fields[k] = v
+    # Support multiple api keys patch
+    api_keys = patch.get("api_keys")
+    if api_keys:
+        for prov, val in api_keys.items():
+            if val is None:
+                unset_fields[f"api_key_{prov}_enc"] = ""
+            elif isinstance(val, str) and val.strip():
+                set_fields[f"api_key_{prov}_enc"] = crypto.encrypt(val.strip())
     set_fields["updated_at"] = _now_iso()
     set_fields["updated_by"] = user_id
-    update: dict[str, Any] = {"$set": set_fields}
+    update: dict[str, Any] = {}
+    if set_fields:
+        update["$set"] = set_fields
     if unset_fields:
         update["$unset"] = unset_fields
-    await db.app_secrets.update_one({"_id": "ai_provider"}, update, upsert=True)
+    if update:
+        await db.app_secrets.update_one({"_id": "ai_provider"}, update, upsert=True)
     return await load_settings(db)
 
 
@@ -119,6 +130,35 @@ async def _resolve_api_key(db, provider: str) -> str:
     except Exception:
         logger.error("ai_provider: cannot decrypt api_key for provider %s", provider)
         return ""
+
+
+async def _resolve_bot_api_key(db, provider: str) -> str:
+    doc = await db.app_secrets.find_one({"_id": "bot_provider"}, {"_id": 0}) or {}
+    enc = doc.get(f"api_key_{provider}_enc") or doc.get("api_key_enc")
+    if not enc:
+        return ""
+    try:
+        return crypto.decrypt(enc)
+    except Exception:
+        logger.error("bot_provider: cannot decrypt api_key for provider %s", provider)
+        return ""
+
+
+async def save_bot_api_keys(db, api_keys: dict[str, str | None], user_id: str | None) -> None:
+    set_fields = {}
+    unset_fields = {}
+    for prov, val in api_keys.items():
+        if val is None:
+            unset_fields[f"api_key_{prov}_enc"] = ""
+        elif isinstance(val, str) and val.strip():
+            set_fields[f"api_key_{prov}_enc"] = crypto.encrypt(val.strip())
+    update = {}
+    if set_fields:
+        update["$set"] = set_fields
+    if unset_fields:
+        update["$unset"] = unset_fields
+    if update:
+        await db.app_secrets.update_one({"_id": "bot_provider"}, update, upsert=True)
 
 
 # ----------------------------------------------------------------------------
@@ -195,11 +235,19 @@ def validate_patch(patch: dict, current: dict) -> dict:
                             and patch["api_key"].strip())
         if explicit_clear:
             raise ValueError("API Key requerida para este proveedor")
-        if not provides_new_key and not current.get("api_key_configured"):
+        # Only enforce active provider key configured if we're not sending api_keys dict
+        if "api_keys" not in patch and not provides_new_key and not current.get("api_key_configured"):
             raise ValueError("API Key requerida para este proveedor")
 
     if "api_key" in patch:
         out["api_key"] = patch["api_key"]
+    if "api_keys" in patch:
+        if isinstance(patch["api_keys"], dict):
+            clean_keys = {}
+            for k, v in patch["api_keys"].items():
+                if k in SUPPORTED_PROVIDERS:
+                    clean_keys[k] = str(v) if v is not None else None
+            out["api_keys"] = clean_keys
     return out
 
 
@@ -464,7 +512,7 @@ _PROVIDER_CLASSES: dict[str, type[AIProvider]] = {
 }
 
 
-async def get_provider(db, *, override_provider: str | None = None, override_model: str | None = None) -> AIProvider:
+async def get_provider(db, *, override_provider: str | None = None, override_model: str | None = None, for_bot: bool = False) -> AIProvider:
     """Construct the configured provider, ready to call ``.chat(...)``."""
     s = await load_settings(db)
     if not s.get("ai_enabled", True):
@@ -473,7 +521,10 @@ async def get_provider(db, *, override_provider: str | None = None, override_mod
     cls = _PROVIDER_CLASSES.get(active_provider, BuiltInProvider)
     key = ""
     if active_provider in KEY_REQUIRED_PROVIDERS:
-        key = await _resolve_api_key(db, active_provider)
+        if for_bot:
+            key = await _resolve_bot_api_key(db, active_provider)
+        if not key:
+            key = await _resolve_api_key(db, active_provider)
         if not key:
             raise LLMUnavailable(f"API Key del proveedor '{active_provider}' no configurada")
     return cls(

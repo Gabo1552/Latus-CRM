@@ -2636,6 +2636,10 @@ class BotSettingsUpdate(BaseModel):
     bot_name: Optional[str] = None
     include_client_info: Optional[bool] = None
     default_handoff_user_id: Optional[str] = None
+    company_context: Optional[str] = None
+    response_instructions: Optional[str] = None
+    catalog_reading_enabled: Optional[bool] = None
+    api_keys: Optional[dict] = None
 
 
 _ALLOWED_BOT_MODELS = {
@@ -2647,8 +2651,21 @@ _ALLOWED_BOT_MODELS = {
 @api_router.get("/admin/bot-settings")
 async def admin_get_bot_settings(admin: User = Depends(require_perm("configure_ai"))):
     from ai.pipeline import DEFAULT_BOT_SETTINGS
+    from ai import providers as ai_providers
     doc = await db.bot_settings.find_one({"_id": "default"}, {"_id": 0}) or {}
-    return {**DEFAULT_BOT_SETTINGS, **doc}
+    # Build keys_status for the bot's keys
+    keys_status = {}
+    for prov in ai_providers.KEY_REQUIRED_PROVIDERS:
+        raw = await ai_providers._resolve_bot_api_key(db, prov)
+        keys_status[prov] = {
+            "configured": bool(raw),
+            "masked": ai_providers.mask_key(raw)
+        }
+    return {
+        **DEFAULT_BOT_SETTINGS,
+        **doc,
+        "keys_status": keys_status
+    }
 
 
 @api_router.patch("/admin/bot-settings")
@@ -2701,6 +2718,23 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
             update["default_handoff_user_id"] = uid
         else:
             update["default_handoff_user_id"] = None
+    if "company_context" in update:
+        update["company_context"] = str(update["company_context"])
+        update["business_instructions"] = update["company_context"]
+    if "response_instructions" in update:
+        update["response_instructions"] = str(update["response_instructions"])
+    if "catalog_reading_enabled" in update:
+        update["catalog_reading_enabled"] = bool(update["catalog_reading_enabled"])
+    if "api_keys" in update:
+        api_keys = update.pop("api_keys")
+        if isinstance(api_keys, dict):
+            from ai import providers as ai_providers
+            clean_keys = {}
+            for k, v in api_keys.items():
+                if k in ai_providers.KEY_REQUIRED_PROVIDERS:
+                    clean_keys[k] = str(v) if v is not None else None
+            if clean_keys:
+                await ai_providers.save_bot_api_keys(db, clean_keys, user_id=admin.user_id)
     update["updated_at"] = now_iso()
     update["updated_by"] = admin.user_id
     await db.bot_settings.update_one({"_id": "default"},
@@ -2717,15 +2751,21 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
 async def admin_get_ai_provider(admin: User = Depends(require_perm("configure_ai"))):
     from ai import providers as ai_providers
     s = await ai_providers.load_settings(db)
-    # never leak the encrypted blob or the plain key
-    masked = ""
-    if s.get("api_key_configured"):
-        raw = await ai_providers._resolve_api_key(db, s.get("provider", "built_in"))
-        masked = ai_providers.mask_key(raw)
+    # Build keys_status for all key-required providers
+    keys_status = {}
+    for prov in ai_providers.KEY_REQUIRED_PROVIDERS:
+        raw = await ai_providers._resolve_api_key(db, prov)
+        keys_status[prov] = {
+            "configured": bool(raw),
+            "masked": ai_providers.mask_key(raw)
+        }
+    provider = s.get("provider", "built_in")
+    masked = keys_status.get(provider, {}).get("masked", "")
     return {
         **{k: s[k] for k in ai_providers.DEFAULTS.keys()},
         "api_key_configured": s.get("api_key_configured", False),
         "api_key_masked": masked,
+        "keys_status": keys_status,
         "model_suggestions": ai_providers.MODEL_SUGGESTIONS,
         "supported_providers": list(ai_providers.SUPPORTED_PROVIDERS),
         "updated_at": s.get("updated_at"),
@@ -3542,22 +3582,14 @@ async def _build_transcript(conv_id: str) -> str:
 
 
 async def _llm(system: str, prompt: str) -> str:
-    if not SYSTEM_LLM_KEY:
-        raise HTTPException(500, "Clave del sistema de IA no configurada")
-    import importlib
+    from ai import providers as ai_providers
     try:
-        mod = importlib.import_module(base64.b64decode(b'ZW1lcmdlbnRpbnRlZ3JhdGlvbnMubGxtLmNoYXQ=').decode('utf-8'))
-        LlmChat = mod.LlmChat
-        UserMessage = mod.UserMessage
-    except (ImportError, AttributeError) as e:
-        raise HTTPException(500, f"Integración del sistema de IA no disponible: {e}")
-    chat = LlmChat(
-        api_key=SYSTEM_LLM_KEY,
-        session_id=f"crm-{uuid.uuid4().hex[:8]}",
-        system_message=system,
-    ).with_model("anthropic", "claude-sonnet-4-6")
-    resp = await chat.send_message(UserMessage(text=prompt))
-    return resp if isinstance(resp, str) else str(resp)
+        provider_obj = await ai_providers.get_provider(db, for_bot=False)
+        res = await provider_obj.chat(system_prompt=system, user_block=prompt, json_mode=False)
+        return res.content
+    except Exception as e:
+        logger.exception("Error calling LLM in _llm helper")
+        raise HTTPException(500, f"Servicio de IA no disponible: {e}")
 
 
 @api_router.post("/conversations/{conv_id}/ai-summary")
