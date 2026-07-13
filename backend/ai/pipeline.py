@@ -56,6 +56,10 @@ DEFAULT_BOT_SETTINGS = {
     "response_instructions": "",
     "catalog_reading_enabled": True,
     "bot_inactive_close_hours": 48,
+    "appointment_scheduling_enabled": False,
+    "appointment_available_days": [1, 2, 3, 4, 5],  # 1=Monday, 5=Friday
+    "appointment_business_hours": "09:00-18:00",
+    "appointment_duration_minutes": 30,
 }
 
 # Sensitive data patterns (Argentinian DNI, CBU, credit card-like)
@@ -289,6 +293,42 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         if catalog_block:
             merged_cc = (merged_cc + "\n\n" + catalog_block).strip()
         client_info = await _compile_client_info(db, conv, settings)
+        appointment_context = ""
+        if settings.get("appointment_scheduling_enabled"):
+            from datetime import datetime, timedelta
+            now_dt = datetime.now()
+            end_dt = now_dt + timedelta(days=7)
+            # Find appointments in next 7 days
+            appts = await db.appointments.find({
+                "start_time": {"$gte": now_dt.isoformat(), "$lte": end_dt.isoformat()}
+            }, {"_id": 0}).to_list(100)
+            
+            avail_days = settings.get("appointment_available_days") or [1, 2, 3, 4, 5]
+            biz_hours = settings.get("appointment_business_hours") or "09:00-18:00"
+            duration = settings.get("appointment_duration_minutes") or 30
+            
+            days_map = {0: "Lunes", 1: "Martes", 2: "Miércoles", 3: "Jueves", 4: "Viernes", 5: "Sábado", 6: "Domingo"}
+            avail_days_str = ", ".join(days_map.get(d, str(d)) for d in avail_days)
+            
+            appt_lines = [f"- {a.get('start_time')} a {a.get('end_time')} ({a.get('title')})" for a in appts]
+            booked_str = "\n".join(appt_lines) if appt_lines else "Ninguna cita agendada en los próximos 7 días."
+            
+            appointment_context = f"""[Módulo de Agendamiento Activo]
+El bot puede agendar reuniones/citas.
+- Días hábiles configurados: {avail_days_str}
+- Horario comercial: {biz_hours}
+- Duración por cita: {duration} minutos
+- Fecha y hora actual del sistema: {now_dt.isoformat()}
+
+Citas ya ocupadas (próximos 7 días):
+{booked_str}
+
+Reglas para agendar:
+1. Solo agendar en los días hábiles y horarios comerciales especificados.
+2. Evitar superposición con citas ya ocupadas.
+3. Si el cliente acepta un horario, devuelve "decision": "schedule_appointment" y "appointment_start_time" con la hora ISO-8601 en la que empieza la cita.
+"""
+
         sp = build_system_prompt(tone=settings["tone"],
                                  company_context=merged_cc,
                                  response_instructions=settings.get("response_instructions") or "",
@@ -297,7 +337,8 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                                  bot_name=settings.get("bot_name", "Bot"),
                                  client_info=client_info,
                                  auto_reply_enabled=ai_cfg.get("whatsapp_auto_reply_enabled", True),
-                                 work_areas=work_areas)
+                                 work_areas=work_areas,
+                                 appointment_context=appointment_context if appointment_context else None)
         parsed: dict = {}
         raw = ""
         bot_provider = settings.get("provider", "built_in")
@@ -412,6 +453,64 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             event["decision"] = "require_human"
         elif decision == "update_status_only":
             event["decision"] = "update_status_only"
+        elif decision == "schedule_appointment":
+            event["decision"] = "schedule_appointment"
+            appt_start = parsed.get("appointment_start_time")
+            if appt_start and settings.get("appointment_scheduling_enabled"):
+                try:
+                    from datetime import datetime, timedelta
+                    # Parse ISO to naive datetime
+                    start_dt = datetime.fromisoformat(appt_start.replace("Z", ""))
+                    duration = settings.get("appointment_duration_minutes") or 30
+                    end_dt = start_dt + timedelta(minutes=duration)
+                    
+                    # Insert in DB
+                    appt_doc = {
+                        "id": "appt_" + uuid.uuid4().hex[:12],
+                        "contact_id": conv.get("contact_id"),
+                        "lead_id": conv.get("lead_id"),
+                        "title": f"Cita con {client_info.splitlines()[0] if client_info else 'Cliente'}",
+                        "start_time": start_dt.isoformat(),
+                        "end_time": end_dt.isoformat(),
+                        "status": "scheduled",
+                        "assigned_to": conv.get("assigned_to"),
+                        "created_by_bot": True,
+                        "created_at": _now_iso(),
+                    }
+                    await db.appointments.insert_one(appt_doc)
+                    event["appointment_created"] = appt_doc["id"]
+                    
+                    # Send notification to assigned agent or generic
+                    target_uid = conv.get("assigned_to")
+                    cname = client_info.splitlines()[0] if client_info else "un cliente"
+                    notif_payload = (
+                        "appointment_created",
+                        f"Nueva cita agendada: {cname}",
+                        f"El bot agendó una cita para el {start_dt.strftime('%d/%m %H:%M')}"
+                    )
+                    
+                    # If we need to send a confirmation reply
+                    if reply and wa_send is not None:
+                        try:
+                            await wa_send(conv, reply)
+                            await db.messages.insert_one({
+                                "id": "msg_" + uuid.uuid4().hex[:12],
+                                "conversation_id": conv_id,
+                                "sender_type": "bot",
+                                "sender_name": settings.get("bot_name", "Bot"),
+                                "body": reply,
+                                "direction": "outbound",
+                                "delivery_status": "sent",
+                                "channel": conv.get("channel"),
+                                "created_at": _now_iso(),
+                            })
+                            conv_set["last_message"] = reply
+                            conv_set["last_message_at"] = _now_iso()
+                        except Exception as e:
+                            logger.exception("wa_send failed for appointment confirmation")
+                except Exception as e:
+                    logger.exception("Failed to schedule appointment")
+                    event["error_message"] = f"schedule failed: {e}"
         else:
             event["decision"] = "no_action"
 

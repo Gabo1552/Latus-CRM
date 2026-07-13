@@ -2749,6 +2749,10 @@ class BotSettingsUpdate(BaseModel):
     catalog_reading_enabled: Optional[bool] = None
     api_keys: Optional[dict] = None
     bot_inactive_close_hours: Optional[int] = None
+    appointment_scheduling_enabled: Optional[bool] = None
+    appointment_available_days: Optional[List[int]] = None
+    appointment_business_hours: Optional[str] = None
+    appointment_duration_minutes: Optional[int] = None
 
 
 _ALLOWED_BOT_MODELS = {
@@ -3467,6 +3471,78 @@ async def update_task(task_id: str, payload: TaskUpdate, user: User = Depends(ge
 @api_router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str, user: User = Depends(get_current_user)):
     await db.tasks.delete_one({"id": task_id})
+    return {"ok": True}
+
+# ---------------------------------------------------------------------------
+# Appointments
+# ---------------------------------------------------------------------------
+
+@api_router.get("/appointments")
+async def list_appointments(
+    user: User = Depends(get_current_user),
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+):
+    q = {}
+    if start or end:
+        date_q = {}
+        if start:
+            date_q["$gte"] = start
+        if end:
+            date_q["$lte"] = end
+        q["start_time"] = date_q
+
+    role = _normalize_role(user.role)
+    is_admin_or_supervisor = role in ("admin", "supervisor")
+    if not is_admin_or_supervisor:
+        q["assigned_to"] = user.user_id
+    elif assigned_to:
+        q["assigned_to"] = assigned_to
+
+    docs = await db.appointments.find(q, {"_id": 0}).sort("start_time", 1).to_list(1000)
+    
+    # Expand lead/contact
+    leads = {l["id"]: l for l in await db.leads.find({}, {"_id": 0}).to_list(1000)}
+    contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(1000)}
+    for d in docs:
+        if d.get("lead_id"):
+            lead = leads.get(d.get("lead_id"))
+            if lead:
+                lead["contact"] = contacts.get(lead.get("contact_id"))
+                d["lead"] = lead
+        elif d.get("contact_id"):
+            d["contact"] = contacts.get(d.get("contact_id"))
+            
+    return docs
+
+@api_router.post("/appointments", response_model=Appointment)
+async def create_appointment(payload: AppointmentCreate, user: User = Depends(get_current_user)):
+    data = payload.model_dump()
+    if not data.get("assigned_to"):
+        data["assigned_to"] = user.user_id
+    appt = Appointment(**data)
+    await db.appointments.insert_one(appt.model_dump())
+    return appt
+
+@api_router.patch("/appointments/{appt_id}", response_model=Appointment)
+async def update_appointment(appt_id: str, payload: AppointmentUpdate, user: User = Depends(get_current_user)):
+    update = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not update:
+        doc = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Appointment not found")
+        return Appointment(**doc)
+        
+    await db.appointments.update_one({"id": appt_id}, {"$set": update})
+    doc = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    return Appointment(**doc)
+
+@api_router.delete("/appointments/{appt_id}")
+async def delete_appointment(appt_id: str, user: User = Depends(get_current_user)):
+    await db.appointments.delete_one({"id": appt_id})
     return {"ok": True}
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ import Admin from "@/pages/Admin";
 import Configuracion from "@/pages/Configuracion";
 import ConsumoIA from "@/pages/ConsumoIA";
 import Catalogo from "@/pages/Catalogo";
+import Calendario from "@/pages/Calendario";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -47,6 +48,7 @@ function AppRouter() {
       <Route path="/inbox" element={<Protected><Inbox /></Protected>} />
       <Route path="/leads" element={<Protected><Leads /></Protected>} />
       <Route path="/pipeline" element={<Protected><Pipeline /></Protected>} />
+      <Route path="/calendario" element={<Protected><Calendario /></Protected>} />
       <Route path="/contacts" element={<Protected><Contacts /></Protected>} />
       <Route path="/tasks" element={<Protected><Tasks /></Protected>} />
       <Route path="/admin" element={<Protected><Admin /></Protected>} />

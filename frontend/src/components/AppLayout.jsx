@@ -1,7 +1,7 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, Target, MessageSquare, KanbanSquare,
-  CheckSquare, Shield, Settings, LogOut, MessageSquareText, DollarSign, Package,
+  CheckSquare, Shield, Settings, LogOut, MessageSquareText, DollarSign, Package, Calendar
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { initials, roleLabel } from "@/lib/constants";
@@ -10,6 +10,7 @@ import NotificationBell from "@/components/NotificationBell";
 const NAV = [
   { to: "/dashboard", label: "Panel principal", icon: LayoutDashboard, testid: "nav-dashboard" },
   { to: "/inbox", label: "Bandeja", icon: MessageSquare, testid: "nav-inbox" },
+  { to: "/calendario", label: "Calendario", icon: Calendar, testid: "nav-calendario" },
   { to: "/leads", label: "Leads", icon: Target, testid: "nav-leads" },
   { to: "/pipeline", label: "Pipeline", icon: KanbanSquare, testid: "nav-pipeline" },
   { to: "/contacts", label: "Clientes", icon: Users, testid: "nav-contacts" },

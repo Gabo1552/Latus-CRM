@@ -13,7 +13,7 @@ JSON_SCHEMA_HINT = """Respond ONLY with a valid JSON object with this exact shap
 {
   "intent": "...",
   "confidence": 0.0-1.0,
-  "decision": "reply_with_bot|require_human|update_status_only|no_action",
+  "decision": "reply_with_bot|require_human|update_status_only|no_action|schedule_appointment",
   "reply": "texto en espa\u00f1ol o vac\u00edo",
   "human_required_reason": "... o null",
   "next_best_action": "... o null",
@@ -21,7 +21,8 @@ JSON_SCHEMA_HINT = """Respond ONLY with a valid JSON object with this exact shap
   "lead_status_suggested": "nuevo|calificando|calificado|propuesta_solicitada|propuesta_enviada|negociacion|ganado|perdido|no_responde|null",
   "bot_status_suggested": "bot_activo|esperando_cliente|requiere_humano|cerrada|null",
   "evidence_for_status_change": "razon concreta o null",
-  "target_work_area": "ID de área de trabajo o null"
+  "target_work_area": "ID de área de trabajo o null",
+  "appointment_start_time": "ISO-8601 (YYYY-MM-DDTHH:MM:00) o null"
 }"""
 
 
@@ -35,7 +36,8 @@ def build_system_prompt(
     bot_name: str = "Bot",
     client_info: str | None = None,
     auto_reply_enabled: bool = True,
-    work_areas: list[dict] | None = None
+    work_areas: list[dict] | None = None,
+    appointment_context: str | None = None
 ) -> str:
     faq_block = ""
     if faqs:
@@ -77,6 +79,10 @@ NO debes generar respuestas automáticas para enviar al cliente (deja el campo "
         if wa_lines:
             wa_block = "\nÁreas de trabajo disponibles para derivación (campo 'target_work_area'):\n" + "\n".join(wa_lines) + "\n\nColocá el ID exacto del área correspondiente en el campo 'target_work_area' de tu JSON cuando derives la conversación a humano. Si no corresponde a ningún área en particular, colocá null.\n"
 
+    appt_block = ""
+    if appointment_context:
+        appt_block = f"\n{appointment_context}\n"
+
     return f"""{role_description}
 
 Tono de comunicación esperado: {tone}.
@@ -91,9 +97,7 @@ Instrucciones para tus respuestas / Comportamiento:
 
 Reglas de derivación a humano (si se cumple alguna de estas condiciones, debes transferir al cliente):
 {hr}
-
-{wa_block}
-
+{wa_block}{appt_block}
 {JSON_SCHEMA_HINT}"""
 
 
