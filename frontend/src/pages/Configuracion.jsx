@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import {
   Users as UsersIcon, MessageSquareText, Plus, MoreHorizontal, Search,
   Copy, RefreshCw, CheckCircle2, AlertTriangle, KeyRound, Trash2, Eye, EyeOff,
-  Bot, Sparkles, Lightbulb, Shield, Check, CheckSquare, Package,
+  Bot, Sparkles, Lightbulb, Shield, Check, CheckSquare, Package, Building2,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import { useAuth } from "@/context/AuthContext";
@@ -379,6 +379,14 @@ function UserFormDialog({ open, mode, initialUser, onClose, onSaved }) {
   const [role, setRole] = useState("agent");
   const [authProvider, setAuthProvider] = useState("google");
   const [password, setPassword] = useState("");
+  const [selectedWorkAreas, setSelectedWorkAreas] = useState([]);
+
+  const workAreasQ = useQuery({
+    queryKey: ["work-areas"],
+    queryFn: () => api.get("/admin/work-areas").then((r) => r.data),
+    enabled: open,
+  });
+  const workAreas = workAreasQ.data || [];
 
   useEffect(() => {
     if (open) {
@@ -387,6 +395,7 @@ function UserFormDialog({ open, mode, initialUser, onClose, onSaved }) {
       setRole(initialUser?.role || "agent");
       setAuthProvider(initialUser?.auth_provider || "google");
       setPassword("");
+      setSelectedWorkAreas(initialUser?.work_areas || []);
     }
   }, [open, initialUser]);
 
@@ -395,11 +404,13 @@ function UserFormDialog({ open, mode, initialUser, onClose, onSaved }) {
       if (isEdit) {
         return api.patch(`/admin/users/${initialUser.user_id}`, {
           name, role, auth_provider: authProvider,
+          work_areas: selectedWorkAreas,
         });
       }
       return api.post("/admin/users", {
         name, email, role, auth_provider: authProvider,
         password: ["local", "both"].includes(authProvider) ? password : undefined,
+        work_areas: selectedWorkAreas,
       });
     },
     onSuccess: (res) => {
@@ -493,6 +504,34 @@ function UserFormDialog({ open, mode, initialUser, onClose, onSaved }) {
               )}
             </div>
           )}
+          <div>
+            <Label className="text-xs font-semibold">Áreas de Trabajo</Label>
+            <div className="grid grid-cols-2 gap-2 mt-1.5 p-2.5 border border-[#E9E6DC] rounded-sm max-h-32 overflow-y-auto">
+              {workAreas.map((wa) => {
+                const isChecked = selectedWorkAreas.includes(wa.id);
+                return (
+                  <label key={wa.id} className="flex items-center gap-2 text-xs text-[#0B1B26] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => {
+                        if (isChecked) {
+                          setSelectedWorkAreas(selectedWorkAreas.filter((id) => id !== wa.id));
+                        } else {
+                          setSelectedWorkAreas([...selectedWorkAreas, wa.id]);
+                        }
+                      }}
+                      className="rounded-sm border-zinc-300 text-[#0E8DDB] focus:ring-[#0E8DDB] h-3.5 w-3.5"
+                    />
+                    {wa.name}
+                  </label>
+                );
+              })}
+              {workAreas.length === 0 && (
+                <p className="col-span-2 text-xs text-[#888888] italic">No hay áreas de trabajo creadas.</p>
+              )}
+            </div>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} className="rounded-sm">Cancelar</Button>
@@ -1152,6 +1191,21 @@ function BotIATab({ setTab }) {
                   ))}
               </SelectContent>
             </Select>
+          </div>
+
+          {/* Cierre automático por inactividad (horas) */}
+          <div className="p-3 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Cierre automático por inactividad (horas)</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
+              Tiempo en horas de inactividad para cerrar el chat y rearmar el bot.
+            </p>
+            <Input
+              data-testid="bot-setting-inactive-hours"
+              type="number" min="1" max="168"
+              value={draft.bot_inactive_close_hours ?? 48}
+              onChange={(e) => set({ bot_inactive_close_hours: parseInt(e.target.value, 10) || 48 })}
+              className="rounded-sm h-9"
+            />
           </div>
 
           {/* Tone */}
@@ -1889,6 +1943,244 @@ function AIAutoTab() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+// =============================================================================
+// WORK AREAS TAB
+// =============================================================================
+function WorkAreasTab() {
+  const qc = useQueryClient();
+  const [showCreate, setShowCreate] = useState(false);
+  const [newId, setNewId] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+  const [newRules, setNewRules] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const workAreasQ = useQuery({
+    queryKey: ["work-areas"],
+    queryFn: () => api.get("/admin/work-areas").then((r) => r.data),
+  });
+
+  const createArea = useMutation({
+    mutationFn: (payload) => api.post("/admin/work-areas", payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["work-areas"] });
+      toast.success("Área de trabajo creada con éxito");
+      setShowCreate(false);
+      setNewId("");
+      setNewName("");
+      setNewDesc("");
+      setNewRules("");
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.detail || "No se pudo crear el área de trabajo");
+    },
+  });
+
+  const deleteArea = useMutation({
+    mutationFn: (id) => api.delete(`/admin/work-areas/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["work-areas"] });
+      toast.success("Área de trabajo eliminada");
+      setDeleteTarget(null);
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.detail || "No se pudo eliminar el área de trabajo");
+    },
+  });
+
+  const handleCreateSubmit = (e) => {
+    e.preventDefault();
+    if (!newId.trim() || !newName.trim()) {
+      toast.error("El ID y el Nombre son requeridos");
+      return;
+    }
+    createArea.mutate({
+      id: newId.trim(),
+      name: newName.trim(),
+      description: newDesc.trim(),
+      routing_rules: newRules.trim(),
+    });
+  };
+
+  const areas = workAreasQ.data || [];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-bold text-[#0B1B26]">Áreas de Trabajo</h2>
+          <p className="text-xs text-[#888888]">
+            Gestioná las áreas o departamentos de la empresa para la asignación y derivación inteligente de chats.
+          </p>
+        </div>
+        <Button
+          onClick={() => setShowCreate(true)}
+          className="bg-[#0E8DDB] hover:bg-[#0B72B2] text-white flex items-center gap-1.5 rounded-sm"
+          data-testid="create-work-area-btn"
+        >
+          <Plus className="h-4 w-4" /> Nueva Área
+        </Button>
+      </div>
+
+      {workAreasQ.isLoading ? (
+        <div className="text-center py-8 text-xs text-[#888888]">Cargando áreas de trabajo...</div>
+      ) : areas.length === 0 ? (
+        <div className="border border-dashed border-[#E9E6DC] rounded-sm p-8 text-center bg-latus-cream">
+          <Building2 className="h-8 w-8 mx-auto text-latus-muted mb-2" />
+          <p className="text-sm font-semibold text-[#0B1B26]">No hay áreas de trabajo creadas</p>
+          <p className="text-xs text-[#888888] mt-1">
+            Creá áreas para poder asignar agentes y configurar reglas de derivación específicas para el bot.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {areas.map((wa) => (
+            <div key={wa.id} className="border border-[#E9E6DC] bg-white rounded-sm p-4 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between" data-testid={`work-area-card-${wa.id}`}>
+              <div>
+                <div className="flex items-center justify-between gap-2 border-b border-[#F4F2EC] pb-2 mb-3">
+                  <div>
+                    <h3 className="font-bold text-[#0B1B26] text-sm flex items-center gap-1.5">
+                      <Building2 className="h-4 w-4 text-[#0E8DDB]" />
+                      {wa.name}
+                    </h3>
+                    <code className="text-[10px] bg-[#F4F2EC] text-[#888888] px-1 py-px rounded font-mono uppercase">
+                      ID: {wa.id}
+                    </code>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    onClick={() => setDeleteTarget(wa.id)}
+                    className="h-8 w-8 p-0 text-[#E15151] hover:bg-[#FDF2F2]"
+                    data-testid={`delete-work-area-${wa.id}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <span className="text-[10px] font-bold text-[#888888] block uppercase">Descripción</span>
+                    <p className="text-xs text-[#444444] mt-0.5 line-clamp-2">
+                      {wa.description || <span className="italic text-[#888888]">(Sin descripción)</span>}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold text-[#888888] block uppercase">Reglas del Bot</span>
+                    <p className="text-xs text-[#444444] mt-0.5 whitespace-pre-line line-clamp-3 bg-latus-cream p-2 rounded-sm border border-[#E9E6DC] italic font-mono text-[11px]">
+                      {wa.routing_rules || <span className="text-[#888888]">(Sin reglas específicas. El bot derivará usando las reglas generales)</span>}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* CREATE DIALOG */}
+      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+        <DialogContent className="max-w-md bg-white border border-[#E9E6DC] rounded-sm">
+          <DialogHeader>
+            <DialogTitle className="text-[#0B1B26] font-bold text-base">Crear Área de Trabajo</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleCreateSubmit} className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-[#0B1B26]">ID del Área (slug único)</Label>
+              <Input
+                placeholder="ej: administracion, finanzas, soporte"
+                value={newId}
+                onChange={(e) => setNewId(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ""))}
+                className="h-9 rounded-sm border-[#E9E6DC]"
+                required
+                data-testid="work-area-id-input"
+              />
+              <p className="text-[10px] text-[#888888]">Solo letras minúsculas, números, guiones y guiones bajos.</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-[#0B1B26]">Nombre del Área</Label>
+              <Input
+                placeholder="ej: Administración, Cobranzas y Finanzas"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                className="h-9 rounded-sm border-[#E9E6DC]"
+                required
+                data-testid="work-area-name-input"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-[#0B1B26]">Descripción</Label>
+              <Textarea
+                placeholder="Breve descripción interna..."
+                value={newDesc}
+                onChange={(e) => setNewDesc(e.target.value)}
+                className="rounded-sm border-[#E9E6DC] resize-none"
+                rows={2}
+                data-testid="work-area-desc-input"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-[#0B1B26] flex items-center gap-1">
+                <Bot className="h-3 w-3 text-[#0E8DDB]" /> Instrucciones de derivación para el Bot IA
+              </Label>
+              <Textarea
+                placeholder="ej: Derivar cuando el cliente pregunte por facturas, estados de cuenta, transferencias, comprobantes de pago o CBU."
+                value={newRules}
+                onChange={(e) => setNewRules(e.target.value)}
+                className="rounded-sm border-[#E9E6DC]"
+                rows={3}
+                data-testid="work-area-rules-input"
+              />
+              <p className="text-[10px] text-[#888888]">
+                El Bot usará estas instrucciones para identificar consultas correspondientes a este departamento y derivar automáticamente.
+              </p>
+            </div>
+            <DialogFooter className="mt-6">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowCreate(false)}
+                className="rounded-sm h-9 border-[#E9E6DC] text-[#444444]"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                disabled={createArea.isPending}
+                className="bg-[#0E8DDB] hover:bg-[#0B72B2] text-white rounded-sm h-9 px-4"
+                data-testid="submit-work-area-btn"
+              >
+                {createArea.isPending ? "Creando..." : "Crear Área"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* DELETE CONFIRM DIALOG */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
+        <AlertDialogContent className="bg-white border border-[#E9E6DC] rounded-sm max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-[#0B1B26] font-bold text-sm">¿Eliminar área de trabajo?</AlertDialogTitle>
+            <AlertDialogDescription className="text-xs text-[#888888]">
+              Esta acción no se puede deshacer. El área será removida de todos los usuarios asignados a ella.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-sm h-8 text-xs border-[#E9E6DC]">Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteArea.mutate(deleteTarget)}
+              className="bg-[#E15151] hover:bg-[#C93B3B] text-white rounded-sm h-8 text-xs px-4"
+              data-testid="confirm-delete-work-area"
+            >
+              Eliminar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -2669,6 +2961,7 @@ export default function Configuracion() {
   if (hasPerm("configure_ai"))      tabs.push({ key: "bot",      label: "Bot IA",              icon: Bot,              testid: "tab-bot-ia" });
   if (hasPerm("configure_ai"))      tabs.push({ key: "ai",       label: "IA y automatización", icon: Sparkles,         testid: "tab-ai-auto" });
   if (hasPerm("manage_users"))      tabs.push({ key: "roles",    label: "Roles y Accesos",     icon: Shield,           testid: "tab-roles" });
+  if (hasPerm("manage_users"))      tabs.push({ key: "work-areas", label: "Áreas de Trabajo",   icon: Building2,        testid: "tab-work-areas" });
   if (hasPerm("manage_settings"))   tabs.push({ key: "crm",      label: "Tareas y catálogo",   icon: Package,          testid: "tab-crm-config" });
   if (hasPerm("manage_settings"))   tabs.push({ key: "email",    label: "Email",               icon: MessageSquareText, testid: "tab-email-config" });
 
@@ -2699,6 +2992,7 @@ export default function Configuracion() {
         {activeTab === "bot" && <BotIATab setTab={setTab} />}
         {activeTab === "ai" && <AIAutoTab />}
         {activeTab === "roles" && <RolesTab />}
+        {activeTab === "work-areas" && <WorkAreasTab />}
         {activeTab === "crm" && <CRMConfigTab />}
         {activeTab === "email" && <EmailSettingsTab />}
       </div>

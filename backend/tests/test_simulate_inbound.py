@@ -203,7 +203,7 @@ class _FakeDB:
                      "conversations", "messages", "notifications", "settings",
                      "wa_status", "whatsapp_events", "app_secrets", "tasks",
                      "notes", "bot_events", "bot_settings", "ai_usage_logs",
-                     "pricing_config", "products"):
+                     "pricing_config", "products", "work_areas"):
             setattr(self, name, _Coll(name))
 
 

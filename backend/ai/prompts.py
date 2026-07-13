@@ -20,7 +20,8 @@ JSON_SCHEMA_HINT = """Respond ONLY with a valid JSON object with this exact shap
   "summary": "resumen actualizado en espa\u00f1ol (m\u00e1x 400 chars)",
   "lead_status_suggested": "nuevo|calificando|calificado|propuesta_solicitada|propuesta_enviada|negociacion|ganado|perdido|no_responde|null",
   "bot_status_suggested": "bot_activo|esperando_cliente|requiere_humano|cerrada|null",
-  "evidence_for_status_change": "razon concreta o null"
+  "evidence_for_status_change": "razon concreta o null",
+  "target_work_area": "ID de área de trabajo o null"
 }"""
 
 
@@ -33,7 +34,8 @@ def build_system_prompt(
     handoff_rules: str,
     bot_name: str = "Bot",
     client_info: str | None = None,
-    auto_reply_enabled: bool = True
+    auto_reply_enabled: bool = True,
+    work_areas: list[dict] | None = None
 ) -> str:
     faq_block = ""
     if faqs:
@@ -63,6 +65,18 @@ Tus funciones principales son:
 Tu decisión (campo decision) SIEMPRE debe ser "update_status_only" o bien "require_human" si detectas que requiere atención urgente de un operador humano según las reglas de derivación.
 NO debes generar respuestas automáticas para enviar al cliente (deja el campo "reply" vacío)."""
 
+    wa_block = ""
+    if work_areas:
+        wa_lines = []
+        for wa in work_areas:
+            wa_id = wa.get("id")
+            wa_name = wa.get("name")
+            wa_desc = wa.get("description") or ""
+            wa_rules = wa.get("routing_rules") or wa_desc
+            wa_lines.append(f"  - {wa_id}: {wa_name}. Reglas de derivación: {wa_rules}")
+        if wa_lines:
+            wa_block = "\nÁreas de trabajo disponibles para derivación (campo 'target_work_area'):\n" + "\n".join(wa_lines) + "\n\nColocá el ID exacto del área correspondiente en el campo 'target_work_area' de tu JSON cuando derives la conversación a humano. Si no corresponde a ningún área en particular, colocá null.\n"
+
     return f"""{role_description}
 
 Tono de comunicación esperado: {tone}.
@@ -77,6 +91,8 @@ Instrucciones para tus respuestas / Comportamiento:
 
 Reglas de derivación a humano (si se cumple alguna de estas condiciones, debes transferir al cliente):
 {hr}
+
+{wa_block}
 
 {JSON_SCHEMA_HINT}"""
 

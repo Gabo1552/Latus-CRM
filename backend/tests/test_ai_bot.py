@@ -88,7 +88,8 @@ class _DB:
     def __init__(self):
         for n in ("users", "contacts", "leads", "conversations", "messages",
                   "notifications", "bot_events", "bot_settings", "settings",
-                  "user_sessions", "wa_status", "whatsapp_events", "app_secrets"):
+                  "user_sessions", "wa_status", "whatsapp_events", "app_secrets",
+                  "work_areas"):
             setattr(self, n, _Coll())
 
 
@@ -318,3 +319,153 @@ class TestPipeline:
         # Verify that catalog block is NOT injected in system_prompt
         sp = called_llm_args.get("system_prompt", "")
         assert "CATÁLOGO" not in sp
+
+
+class TestBotInactivityAndTransitions:
+    def test_auto_close_inactivity(self, monkeypatch):
+        from server import close_inactive_conversations
+        from datetime import datetime, timezone, timedelta
+        
+        # 1. Clean collections
+        db = _DB()
+        monkeypatch.setattr("server.db", db)
+        
+        # 2. Configure 48 hours inactivity threshold
+        _run(db.bot_settings.insert_one({"_id": "default", "bot_inactive_close_hours": 48}))
+        
+        now = datetime.now(timezone.utc)
+        old_time = (now - timedelta(hours=50)).isoformat()
+        new_time = (now - timedelta(hours=10)).isoformat()
+        
+        # 3. Insert inactive conversation
+        _run(db.conversations.insert_one({
+            "id": "conv_old",
+            "status": "open",
+            "bot_status": "bot_activo",
+            "bot_enabled": False,
+            "last_message_at": old_time,
+        }))
+        
+        # 4. Insert active/recent conversation
+        _run(db.conversations.insert_one({
+            "id": "conv_new",
+            "status": "open",
+            "bot_status": "bot_activo",
+            "bot_enabled": False,
+            "last_message_at": new_time,
+        }))
+        
+        # 5. Run scanner
+        _run(close_inactive_conversations(db))
+        
+        # 6. Verify inactive conversation closed and bot re-armed
+        c_old = _run(db.conversations.find_one({"id": "conv_old"}))
+        assert c_old["status"] == "resolved"
+        assert c_old["bot_status"] == "cerrada"
+        assert c_old["bot_enabled"] is True
+        
+        # 7. Verify recent conversation remains open
+        c_new = _run(db.conversations.find_one({"id": "conv_new"}))
+        assert c_new["status"] == "open"
+        assert c_new["bot_enabled"] is False
+        
+        # 8. Verify system transition messages logged
+        msgs = _run(db.messages.find({"conversation_id": "conv_old"}).to_list(10))
+        assert len(msgs) == 2
+        assert msgs[0]["sender_type"] == "system"
+        assert "cerrada automáticamente" in msgs[0]["body"]
+        assert msgs[1]["sender_type"] == "system"
+        assert "Bot reactivado" in msgs[1]["body"]
+
+    def test_reopen_re_enables_bot(self, monkeypatch):
+        from server import _handle_inbound_message
+        
+        # 1. Clean collections
+        db = _DB()
+        monkeypatch.setattr("server.db", db)
+        
+        # 2. Insert resolved conversation with bot disabled
+        _run(db.conversations.insert_one({
+            "id": "conv_res",
+            "contact_id": "c1",
+            "status": "resolved",
+            "bot_status": "cerrada",
+            "bot_enabled": False,
+        }))
+        
+        # 3. Simulate inbound message (reopen)
+        _run(_handle_inbound_message({
+            "id": "conv_res",
+            "contact_id": "c1",
+            "status": "resolved",
+            "bot_status": "cerrada",
+            "bot_enabled": False,
+        }, "Hola de nuevo"))
+        
+        # 4. Verify conversation is open, bot re-armed
+        c = _run(db.conversations.find_one({"id": "conv_res"}))
+        assert c["status"] == "open"
+        assert c["bot_enabled"] is True
+        assert c["bot_status"] == "bot_activo"
+        
+        # 5. Verify system reopen message logged
+        msgs = _run(db.messages.find({"conversation_id": "conv_res", "sender_type": "system"}).to_list(10))
+        assert len(msgs) == 1
+        assert "Reapertura de chat" in msgs[0]["body"]
+
+    def test_work_area_routing_and_notification(self, monkeypatch):
+        import ai.pipeline as pipeline_mod
+        
+        # 1. Clean and seed mock database
+        db = _DB()
+        monkeypatch.setattr("server.db", db)
+        
+        cv = _seed_conv(db)
+        
+        # Seed work area "finanzas"
+        _run(db.work_areas.insert_one({
+            "id": "finanzas",
+            "name": "Finanzas",
+            "description": "Temas de cobranza y finanzas",
+            "routing_rules": "Derivar consultas de pagos",
+        }))
+        
+        # Seed user belonging to finanzas
+        _run(db.users.insert_one({
+            "user_id": "agent_finanzas",
+            "email": "finanzas@latus.test",
+            "name": "Agente Finanzas",
+            "role": "agent",
+            "active": True,
+            "work_areas": ["finanzas"]
+        }))
+        
+        # 2. Mock LLM call to return decision="require_human", target_work_area="finanzas"
+        async def fake_llm(**kw):
+            # Verify work areas block was injected in system_prompt
+            sp = kw.get("system_prompt", "")
+            assert "finanzas: Finanzas" in sp
+            assert "Derivar consultas de pagos" in sp
+            return ({
+                "intent": "precios", "confidence": 0.95, "decision": "require_human",
+                "reply": "", "summary": "Cliente pregunta por formas de pago",
+                "human_required_reason": "Consulta financiera", "next_best_action": None,
+                "lead_status_suggested": None, "bot_status_suggested": None,
+                "evidence_for_status_change": "",
+                "target_work_area": "finanzas"
+            }, "")
+            
+        monkeypatch.setattr(pipeline_mod, "call_llm_json", fake_llm)
+        
+        # 3. Run pipeline
+        _run(pipeline_mod.process_inbound(db, cv, "wamid.IN1", wa_send=AsyncMock()))
+        
+        # 4. Verify conversation work area set, assigned_to is cleared/None
+        c = _run(db.conversations.find_one({"id": cv}))
+        assert c["assigned_work_area"] == "finanzas"
+        assert c["assigned_to"] is None
+        
+        # 5. Verify notification created specifically for agent_finanzas
+        notifs = [n for n in db.notifications.docs if n["type"] == "handoff_required"]
+        assert len(notifs) == 1
+        assert notifs[0]["assigned_user_id"] == "agent_finanzas"

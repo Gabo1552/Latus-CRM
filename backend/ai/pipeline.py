@@ -55,6 +55,7 @@ DEFAULT_BOT_SETTINGS = {
     "company_context": "",
     "response_instructions": "",
     "catalog_reading_enabled": True,
+    "bot_inactive_close_hours": 48,
 }
 
 # Sensitive data patterns (Argentinian DNI, CBU, credit card-like)
@@ -221,6 +222,7 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             return await _finish(db, event, decision="no_action",
                                  reason="ia_desactivada")
         settings = await _load_bot_settings(db)
+        work_areas = await db.work_areas.find({}, {"_id": 0}).to_list(100)
 
         # Guard: should bot run?
         if not conversation_bot_should_run(conv, settings):
@@ -250,6 +252,18 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                 {"$set": {"bot_enabled": False, "bot_status": "requiere_humano",
                           "human_required_reason": human_reason}},
             )
+            await db.messages.insert_one({
+                "id": f"msg_{uuid.uuid4().hex[:12]}",
+                "conversation_id": conv_id,
+                "sender_type": "system",
+                "sender_name": "Sistema",
+                "body": f"Control humano activado - Derivación automática: {human_reason}",
+                "created_at": _now_iso(),
+                "direction": "outbound",
+                "delivery_status": "sent",
+                "message_type": "text",
+                "channel": "whatsapp",
+            })
             return await _finish(db, event, decision="require_human",
                                  reason=human_reason)
 
@@ -282,7 +296,8 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                                  handoff_rules=settings["handoff_rules"],
                                  bot_name=settings.get("bot_name", "Bot"),
                                  client_info=client_info,
-                                 auto_reply_enabled=ai_cfg.get("whatsapp_auto_reply_enabled", True))
+                                 auto_reply_enabled=ai_cfg.get("whatsapp_auto_reply_enabled", True),
+                                 work_areas=work_areas)
         parsed: dict = {}
         raw = ""
         bot_provider = settings.get("provider", "built_in")
@@ -376,10 +391,15 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                 conv_set["bot_enabled"] = False
                 conv_set["bot_status"] = "requiere_humano"
                 conv_set["human_required_reason"] = human_reason or "Derivación solicitada por el bot"
-                # Route handoff to the configured default user if specified
-                handoff_uid = settings.get("default_handoff_user_id")
-                if handoff_uid:
-                    conv_set["assigned_to"] = handoff_uid
+                target_work_area = parsed.get("target_work_area")
+                if target_work_area:
+                    conv_set["assigned_work_area"] = target_work_area
+                    conv_set["assigned_to"] = None
+                else:
+                    # Route handoff to the configured default user if specified
+                    handoff_uid = settings.get("default_handoff_user_id")
+                    if handoff_uid:
+                        conv_set["assigned_to"] = handoff_uid
                     if conv.get("lead_id"):
                         await db.leads.update_one({"id": conv["lead_id"]}, {"$set": {"assigned_to": handoff_uid}})
             else:
@@ -419,18 +439,46 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         # Persist conversation updates
         if conv_set:
             await db.conversations.update_one({"id": conv_id}, {"$set": conv_set})
+            if conv_set.get("bot_enabled") is False and conv.get("bot_enabled", True) is True:
+                reason = conv_set.get("human_required_reason") or "Derivación automática"
+                await db.messages.insert_one({
+                    "id": f"msg_{uuid.uuid4().hex[:12]}",
+                    "conversation_id": conv_id,
+                    "sender_type": "system",
+                    "sender_name": "Sistema",
+                    "body": f"Control humano activado - Derivación automática: {reason}",
+                    "created_at": _now_iso(),
+                    "direction": "outbound",
+                    "delivery_status": "sent",
+                    "message_type": "text",
+                    "channel": "whatsapp",
+                })
 
         # Notifications
         if notif_payload:
             kind, title, msg = notif_payload
-            target_uid = conv.get("assigned_to")
-            if not target_uid:
-                admins = await db.users.find(
-                    {"role": {"$in": ["admin", "supervisor"]}, "active": True,
-                     "deleted_at": None}, {"_id": 0, "user_id": 1}).to_list(20)
-                targets = [a["user_id"] for a in admins] or [None]
-            else:
-                targets = [target_uid]
+            target_uid = conv_set.get("assigned_to") or conv.get("assigned_to")
+            
+            targets = []
+            assigned_wa = conv_set.get("assigned_work_area") or conv.get("assigned_work_area")
+            if assigned_wa:
+                all_active = await db.users.find({
+                    "active": True,
+                    "deleted_at": None
+                }, {"_id": 0, "user_id": 1, "work_areas": 1}).to_list(100)
+                targets = [
+                    u["user_id"] for u in all_active
+                    if u.get("work_areas") and assigned_wa in u["work_areas"]
+                ]
+            
+            if not targets:
+                if not target_uid:
+                    admins = await db.users.find(
+                        {"role": {"$in": ["admin", "supervisor"]}, "active": True,
+                         "deleted_at": None}, {"_id": 0, "user_id": 1}).to_list(20)
+                    targets = [a["user_id"] for a in admins] or [None]
+                else:
+                    targets = [target_uid]
             for uid in targets:
                 await db.notifications.insert_one({
                     "id": "ntf_" + uuid.uuid4().hex[:10],

@@ -197,6 +197,7 @@ class User(BaseModel):
     auth_provider: str = "google"   # one of: google | local | both
     last_login_at: Optional[str] = None
     permissions: Optional[List[str]] = None
+    work_areas: Optional[List[str]] = None
     created_at: str = Field(default_factory=now_iso)
 
     @field_validator("created_at", mode="before")
@@ -314,6 +315,7 @@ class Conversation(BaseModel):
     priority: str = "medium"
     bot_enabled: bool = True
     assigned_to: Optional[str] = None
+    assigned_work_area: Optional[str] = None
     last_message: str = ""
     last_message_at: str = Field(default_factory=now_iso)
     unread: int = 0
@@ -325,6 +327,7 @@ class ConversationUpdate(BaseModel):
     priority: Optional[str] = None
     bot_enabled: Optional[bool] = None
     assigned_to: Optional[str] = None
+    assigned_work_area: Optional[str] = None
 
 
 class Message(BaseModel):
@@ -369,6 +372,38 @@ class TaskUpdate(BaseModel):
     due_date: Optional[str] = None
     status: Optional[str] = None
     priority: Optional[str] = None
+    assigned_to: Optional[str] = None
+
+
+class Appointment(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("appt"))
+    contact_id: Optional[str] = None
+    lead_id: Optional[str] = None
+    title: str
+    start_time: str
+    end_time: str
+    status: str = "scheduled"  # scheduled, completed, cancelled
+    assigned_to: Optional[str] = None
+    created_by_bot: bool = False
+    created_at: str = Field(default_factory=now_iso)
+
+
+class AppointmentCreate(BaseModel):
+    contact_id: Optional[str] = None
+    lead_id: Optional[str] = None
+    title: str
+    start_time: str
+    end_time: str
+    status: str = "scheduled"
+    assigned_to: Optional[str] = None
+    created_by_bot: bool = False
+
+
+class AppointmentUpdate(BaseModel):
+    title: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    status: Optional[str] = None
     assigned_to: Optional[str] = None
 
 
@@ -1007,6 +1042,61 @@ async def delete_custom_role(role_id: str, user: User = Depends(require_perm("ma
 
 
 # ---------------------------------------------------------------------------
+# Admin · Work Areas CRUD
+# ---------------------------------------------------------------------------
+
+class WorkAreaCreate(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = ""
+    routing_rules: Optional[str] = ""
+
+
+@api_router.get("/admin/work-areas")
+async def list_work_areas(admin: User = Depends(require_perm("manage_users"))):
+    docs = await db.work_areas.find({}, {"_id": 0}).to_list(100)
+    return docs
+
+
+@api_router.post("/admin/work-areas")
+async def create_work_area(payload: WorkAreaCreate, admin: User = Depends(require_perm("manage_users"))):
+    import re
+    wa_id = payload.id.strip().lower()
+    name = payload.name.strip()
+    if not wa_id or not name:
+        raise HTTPException(status_code=400, detail="El ID y el nombre son requeridos")
+    if not re.match(r"^[a-z0-9_-]+$", wa_id):
+        raise HTTPException(status_code=400, detail="El ID solo puede contener letras minúsculas, números, guiones y guiones bajos")
+    
+    exist = await db.work_areas.find_one({"id": wa_id})
+    if exist:
+        raise HTTPException(status_code=400, detail="El área de trabajo ya existe")
+        
+    doc = {
+        "id": wa_id,
+        "name": name,
+        "description": payload.description.strip(),
+        "routing_rules": payload.routing_rules.strip(),
+        "created_at": now_iso(),
+    }
+    await db.work_areas.insert_one(doc)
+    return doc
+
+
+@api_router.delete("/admin/work-areas/{wa_id}")
+async def delete_work_area(wa_id: str, admin: User = Depends(require_perm("manage_users"))):
+    wa_id = wa_id.strip().lower()
+    exist = await db.work_areas.find_one({"id": wa_id})
+    if not exist:
+        raise HTTPException(status_code=404, detail="Área de trabajo no encontrada")
+        
+    await db.work_areas.delete_one({"id": wa_id})
+    # Remove from all users
+    await db.users.update_many({}, {"$pull": {"work_areas": wa_id}})
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # Admin · Users CRUD
 # ---------------------------------------------------------------------------
 
@@ -1017,6 +1107,7 @@ class AdminUserCreate(BaseModel):
     role: str
     auth_provider: str  # google | local | both
     password: Optional[str] = None
+    work_areas: Optional[List[str]] = None
 
 
 class AdminUserUpdate(BaseModel):
@@ -1024,6 +1115,7 @@ class AdminUserUpdate(BaseModel):
     role: Optional[str] = None
     auth_provider: Optional[str] = None
     is_active: Optional[bool] = None
+    work_areas: Optional[List[str]] = None
 
 
 AUTH_PROVIDERS = ("google", "local", "both")
@@ -1045,6 +1137,7 @@ def _public_user(d: dict) -> dict:
         "created_at": d.get("created_at"),
         "updated_at": d.get("updated_at"),
         "deleted_at": d.get("deleted_at"),
+        "work_areas": d.get("work_areas") or [],
     }
     return out
 
@@ -1117,6 +1210,7 @@ async def admin_create_user(payload: AdminUserCreate, request: Request,
         "auth_provider": ap,
         "active": True,
         "is_demo": False,
+        "work_areas": payload.work_areas or [],
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "created_by": admin.user_id,
@@ -1165,6 +1259,8 @@ async def admin_update_user(uid: str, payload: AdminUserUpdate, admin: User = De
             if await _count_active_admins() <= 1:
                 raise HTTPException(status_code=400, detail="No se puede desactivar al último administrador activo")
         update["active"] = payload.is_active
+    if payload.work_areas is not None:
+        update["work_areas"] = payload.work_areas
     if not update:
         return _public_user(target)
     update["updated_at"] = now_iso()
@@ -2432,6 +2528,7 @@ async def list_conversations(
     status: Optional[str] = None,
     priority: Optional[str] = None,
     assigned_to: Optional[str] = None,
+    assigned_work_area: Optional[str] = None,
 ):
     q = {}
     if status:
@@ -2444,6 +2541,13 @@ async def list_conversations(
         q["assigned_to"] = user.user_id
     elif assigned_to:
         q["assigned_to"] = assigned_to
+        
+    if assigned_work_area:
+        if assigned_work_area == "unassigned":
+            q["assigned_work_area"] = {"$in": [None, ""]}
+        else:
+            q["assigned_work_area"] = assigned_work_area
+
     docs = await db.conversations.find(q, {"_id": 0}).sort("last_message_at", -1).to_list(1000)
     contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(1000)}
     for d in docs:
@@ -2560,6 +2664,10 @@ async def _handle_inbound_message(
     # Re-open conversations that were resolved when the customer writes back
     if conv.get("status") == "resolved":
         set_fields["status"] = "open"
+        set_fields["bot_enabled"] = True
+        set_fields["bot_status"] = "bot_activo"
+        set_fields["human_required_reason"] = None
+        await _log_system_message(db, conv["id"], "Bot reactivado - Control de bot encendido (Reapertura de chat)")
     await db.conversations.update_one(
         {"id": conv["id"]}, {"$inc": {"unread": 1}, "$set": set_fields},
     )
@@ -2640,12 +2748,32 @@ class BotSettingsUpdate(BaseModel):
     response_instructions: Optional[str] = None
     catalog_reading_enabled: Optional[bool] = None
     api_keys: Optional[dict] = None
+    bot_inactive_close_hours: Optional[int] = None
 
 
 _ALLOWED_BOT_MODELS = {
     "gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet-20241022",
     "gemini-2.0-flash", "gemini-1.5-flash", "claude-sonnet-4-6"
 }
+
+
+async def _log_system_message(db, conv_id: str, text: str):
+    import uuid
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    msg_doc = {
+        "id": f"msg_{uuid.uuid4().hex[:12]}",
+        "conversation_id": conv_id,
+        "sender_type": "system",
+        "sender_name": "Sistema",
+        "body": text,
+        "created_at": now,
+        "direction": "outbound",
+        "delivery_status": "sent",
+        "message_type": "text",
+        "channel": "whatsapp",
+    }
+    await db.messages.insert_one(msg_doc)
 
 
 @api_router.get("/admin/bot-settings")
@@ -2725,6 +2853,16 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
         update["response_instructions"] = str(update["response_instructions"])
     if "catalog_reading_enabled" in update:
         update["catalog_reading_enabled"] = bool(update["catalog_reading_enabled"])
+    if "bot_inactive_close_hours" in update:
+        val = update["bot_inactive_close_hours"]
+        if val is not None:
+            try:
+                val = int(val)
+                if not (1 <= val <= 168):
+                    raise ValueError()
+                update["bot_inactive_close_hours"] = val
+            except Exception:
+                raise HTTPException(400, "El cierre automático debe ser entre 1 y 168 horas")
     if "api_keys" in update:
         api_keys = update.pop("api_keys")
         if isinstance(api_keys, dict):
@@ -3189,6 +3327,22 @@ async def bot_reactivate(conv_id: str, user: User = Depends(get_current_user)):
         "bot_enabled": True, "bot_status": "bot_activo",
         "human_required_reason": None,
     }})
+    await _log_system_message(db, conv_id, f"Bot reactivado - Control de bot encendido (Agente: {user.name})")
+    return await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+
+
+@api_router.post("/conversations/{conv_id}/bot/deactivate")
+async def bot_deactivate(conv_id: str, user: User = Depends(get_current_user)):
+    conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+    if not conv:
+        raise HTTPException(404, "Conversation not found")
+    if not await _can_use_bot_for_conv(conv, user):
+        raise HTTPException(403, "Sin permisos")
+    await db.conversations.update_one({"id": conv_id}, {"$set": {
+        "bot_enabled": False, "bot_status": "en_atencion_humana",
+        "human_required_reason": "Desactivado por agente",
+    }})
+    await _log_system_message(db, conv_id, f"Control humano activado - Bot apagado (Agente: {user.name})")
     return await db.conversations.find_one({"id": conv_id}, {"_id": 0})
 
 
@@ -3212,6 +3366,12 @@ async def update_conversation(conv_id: str, payload: ConversationUpdate, user: U
             update["assigned_to"] = None
         else:
             update["assigned_to"] = str(val).strip()
+    if "assigned_work_area" in payload.model_fields_set:
+        val = payload.assigned_work_area
+        if val is None or (isinstance(val, str) and val.strip() == ""):
+            update["assigned_work_area"] = None
+        else:
+            update["assigned_work_area"] = str(val).strip()
 
     await db.conversations.update_one({"id": conv_id}, {"$set": update})
     
@@ -3222,6 +3382,14 @@ async def update_conversation(conv_id: str, payload: ConversationUpdate, user: U
             await db.leads.update_one({"id": conv["lead_id"]}, {"$set": {"assigned_to": update["assigned_to"]}})
     # log bot handoff event
     if "bot_enabled" in update:
+        conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+        was_enabled = conv.get("bot_enabled", True) if conv else True
+        is_enabled = bool(update["bot_enabled"])
+        if was_enabled != is_enabled:
+            if is_enabled:
+                await _log_system_message(db, conv_id, f"Bot reactivado - Control de bot encendido (Agente: {user.name})")
+            else:
+                await _log_system_message(db, conv_id, f"Control humano activado - Bot apagado (Agente: {user.name})")
         await db.bot_events.insert_one({
             "id": new_id("evt"),
             "conversation_id": conv_id,
@@ -3230,7 +3398,6 @@ async def update_conversation(conv_id: str, payload: ConversationUpdate, user: U
             "created_at": now_iso(),
         })
         if not update["bot_enabled"]:
-            conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
             contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0}) if conv else None
             cname = contact["name"] if contact else "a customer"
             await _notify_target(
@@ -4185,6 +4352,43 @@ async def check_and_send_scheduled_reports():
 # Scheduler: lead-no-response scan every 5 minutes
 # ---------------------------------------------------------------------------
 
+
+async def close_inactive_conversations(db):
+    """Scan and close conversations with no activity for more than X hours."""
+    bot_cfg_doc = await db.bot_settings.find_one({"_id": "default"}, {"_id": 0}) or {}
+    inactive_hours = bot_cfg_doc.get("bot_inactive_close_hours", 48)
+    
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(hours=inactive_hours)
+    
+    convs = await db.conversations.find({"status": {"$ne": "resolved"}}, {"_id": 0}).to_list(1000)
+    for c in convs:
+        last_at_str = c.get("last_message_at") or c.get("updated_at")
+        if not last_at_str:
+            continue
+        try:
+            last_at = datetime.fromisoformat(last_at_str.replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if last_at.tzinfo is None:
+            last_at = last_at.replace(tzinfo=timezone.utc)
+            
+        if last_at < cutoff:
+            conv_id = c["id"]
+            await db.conversations.update_one(
+                {"id": conv_id},
+                {"$set": {
+                    "status": "resolved",
+                    "bot_status": "cerrada",
+                    "bot_enabled": True,
+                    "human_required_reason": None,
+                }}
+            )
+            await _log_system_message(db, conv_id, f"Conversación cerrada automáticamente por inactividad de {inactive_hours} hs")
+            await _log_system_message(db, conv_id, "Bot reactivado - Control de bot encendido")
+            logger.info("Automatically closed inactive conversation %s after %s hours", conv_id, inactive_hours)
+
+
 _scheduler = None  # singleton at module level — safe-start guard
 
 
@@ -4208,6 +4412,10 @@ def _start_scheduler():
             await scan_lead_no_response()
         except Exception:  # pragma: no cover - log only
             logger.exception("scheduled scan_lead_no_response failed")
+        try:
+            await close_inactive_conversations(db)
+        except Exception:
+            logger.exception("scheduled close_inactive_conversations failed")
         try:
             await check_and_send_scheduled_reports()
         except Exception:  # pragma: no cover - log only

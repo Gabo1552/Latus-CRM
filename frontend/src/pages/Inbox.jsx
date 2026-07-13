@@ -28,12 +28,17 @@ export default function Inbox() {
   useEffect(() => {
     if (location.state?.convId) setActiveId(location.state.convId);
   }, [location.state]);
-  const [filters, setFilters] = useState({ status: "all", priority: "all" });
+  const [filters, setFilters] = useState({ status: "all", priority: "all", assigned_work_area: "all" });
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState("");
   const [suggestionDraft, setSuggestionDraft] = useState("");
   const [suggestionMeta, setSuggestionMeta] = useState(null); // {confidence, intent}
   const scrollRef = useRef(null);
+
+  const { data: workAreas = [] } = useQuery({
+    queryKey: ["work-areas"],
+    queryFn: () => api.get("/admin/work-areas").then((r) => r.data).catch(() => []),
+  });
 
   const params = {};
   Object.entries(filters).forEach(([k, v]) => { if (v !== "all") params[k] = v; });
@@ -152,6 +157,16 @@ export default function Inbox() {
     onError: () => toast.error("No se pudo reactivar el bot"),
   });
 
+  const deactivateBot = useMutation({
+    mutationFn: () => api.post(`/conversations/${activeId}/bot/deactivate`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["conversation", activeId] });
+      qc.invalidateQueries({ queryKey: ["conversations"] });
+      toast.success("Bot desactivado");
+    },
+    onError: () => toast.error("No se pudo desactivar el bot"),
+  });
+
   const simulateInbound = useMutation({
     mutationFn: () => api.post(`/conversations/${activeId}/simulate-inbound`),
     onSuccess: () => {
@@ -175,19 +190,31 @@ export default function Inbox() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-latus-muted" />
               <Input data-testid="inbox-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar chats…" className="pl-9 rounded-sm bg-white h-9" />
             </div>
-            <div className="flex gap-2">
-              <Select value={filters.status} onValueChange={(v) => setFilters({ ...filters, status: v })}>
-                <SelectTrigger data-testid="inbox-filter-status" className="rounded-sm bg-white h-8 text-xs"><SelectValue placeholder="Estado" /></SelectTrigger>
+            <div className="space-y-1.5">
+              <div className="flex gap-2">
+                <Select value={filters.status} onValueChange={(v) => setFilters({ ...filters, status: v })}>
+                  <SelectTrigger data-testid="inbox-filter-status" className="rounded-sm bg-white h-8 text-xs"><SelectValue placeholder="Estado" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos los estados</SelectItem>
+                    {CONV_STATUSES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Select value={filters.priority} onValueChange={(v) => setFilters({ ...filters, priority: v })}>
+                  <SelectTrigger data-testid="inbox-filter-priority" className="rounded-sm bg-white h-8 text-xs"><SelectValue placeholder="Prioridad" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas las prioridades</SelectItem>
+                    {PRIORITIES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Select value={filters.assigned_work_area} onValueChange={(v) => setFilters({ ...filters, assigned_work_area: v })}>
+                <SelectTrigger data-testid="inbox-filter-work-area" className="rounded-sm bg-white h-8 text-xs w-full"><SelectValue placeholder="Filtrar por Área" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Todos los estados</SelectItem>
-                  {CONV_STATUSES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Select value={filters.priority} onValueChange={(v) => setFilters({ ...filters, priority: v })}>
-                <SelectTrigger data-testid="inbox-filter-priority" className="rounded-sm bg-white h-8 text-xs"><SelectValue placeholder="Prioridad" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todas las prioridades</SelectItem>
-                  {PRIORITIES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
+                  <SelectItem value="all">Todas las áreas</SelectItem>
+                  <SelectItem value="unassigned">Sin área asignada</SelectItem>
+                  {workAreas.map((wa) => (
+                    <SelectItem key={wa.id} value={wa.id}>{wa.name}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -207,10 +234,15 @@ export default function Inbox() {
                     {c.unread > 0 && <span className="bg-[#0E8DDB] text-white text-[10px] font-bold rounded-full h-4 min-w-4 px-1 flex items-center justify-center">{c.unread}</span>}
                   </div>
                   <p className="text-xs text-[#888888] truncate mt-0.5">{c.last_message}</p>
-                  <div className="flex items-center gap-1.5 mt-1.5">
+                  <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                     {!c.bot_enabled
                       ? <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#0E8DDB] bg-[#F4F2EC] border border-[#EFE3E1] rounded-full px-1.5 py-px"><UserIcon className="h-2.5 w-2.5" />HUMANO</span>
                       : <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#888888] bg-latus-warm-gray rounded-full px-1.5 py-px"><Bot className="h-2.5 w-2.5" />BOT</span>}
+                    {c.assigned_work_area && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#71717A] bg-[#E9E6DC] rounded-full px-1.5 py-px uppercase">
+                        {c.assigned_work_area}
+                      </span>
+                    )}
                     <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: statusMeta(PRIORITIES, c.priority).color }} />
                   </div>
                 </div>
@@ -245,29 +277,39 @@ export default function Inbox() {
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
-                  <button
-                    data-testid="simulate-inbound-button"
-                    onClick={() => simulateInbound.mutate()}
-                    disabled={simulateInbound.isPending}
-                    className="text-xs font-semibold text-[#888888] hover:text-[#0E8DDB] border border-[#E9E6DC] rounded-sm px-2.5 py-1.5 transition-colors"
-                    title="Simular un mensaje entrante de WhatsApp del cliente"
-                  >
-                    + Respuesta del cliente
-                  </button>
-                  <div className={`flex items-center gap-2 px-3 py-1.5 rounded-sm border ${active.bot_enabled ? "border-[#E9E6DC] bg-latus-cream" : "border-[#EFE3E1] bg-[#F4F2EC]"}`} data-testid="handoff-control" title="Tomar control / Devolver al bot">
-                    <ArrowRightLeft className="h-3.5 w-3.5 text-[#0E8DDB]" />
-                    <span className="text-xs font-bold text-[#0B1B26]">{active.bot_enabled ? "Bot activo" : "Solo humano"}</span>
-                    <Switch
-                      data-testid="bot-toggle"
-                      checked={active.bot_enabled}
-                      disabled={readOnly}
-                      onCheckedChange={(v) => { patchConv.mutate({ bot_enabled: v }); toast.success(v ? "Bot reactivado" : "Traspasado a un agente"); }}
-                      className="data-[state=checked]:bg-zinc-400 data-[state=unchecked]:bg-[#0E8DDB]"
-                    />
+                  <div className="flex items-center gap-2" data-testid="handoff-control">
+                    <Button
+                      data-testid="bot-status-header-button"
+                      disabled={readOnly || deactivateBot.isPending || reactivateBot.isPending}
+                      onClick={() => {
+                        if (active.bot_enabled) {
+                          deactivateBot.mutate();
+                        } else {
+                          reactivateBot.mutate();
+                        }
+                      }}
+                      className={`rounded-sm h-8 px-3 text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 ${
+                        active.bot_enabled
+                          ? "bg-[#22C55E] hover:bg-[#16A34A] text-white"
+                          : "bg-[#71717A] hover:bg-[#52525B] text-white"
+                      }`}
+                    >
+                      <Bot className="h-3.5 w-3.5" />
+                      {active.bot_enabled ? "Bot Activo" : "Control Humano"}
+                    </Button>
                   </div>
                   <Select value={active.status} onValueChange={(v) => patchConv.mutate({ status: v })}>
                     <SelectTrigger data-testid="conv-status-select" className="w-32 rounded-sm h-9 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>{CONV_STATUSES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Select value={active.assigned_work_area || "none"} onValueChange={(v) => patchConv.mutate({ assigned_work_area: v === "none" ? null : v })}>
+                    <SelectTrigger data-testid="conv-work-area-select" className="w-36 rounded-sm h-9 text-xs"><SelectValue placeholder="Área" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Sin área</SelectItem>
+                      {workAreas.map((wa) => (
+                        <SelectItem key={wa.id} value={wa.id}>{wa.name}</SelectItem>
+                      ))}
+                    </SelectContent>
                   </Select>
                 </div>
               </div>
@@ -275,6 +317,16 @@ export default function Inbox() {
               {/* messages */}
               <div ref={scrollRef} className="flex-1 overflow-auto p-5 space-y-3" style={{ background: "#FAFAF9" }} data-testid="message-thread">
                 {active.messages?.map((m) => {
+                  const isSystem = m.sender_type === "system";
+                  if (isSystem) {
+                    return (
+                      <div key={m.id} className="flex justify-center my-2.5" data-testid={`system-message-${m.id}`}>
+                        <div className="bg-[#E9E6DC] text-[#71717A] text-[11px] font-bold uppercase tracking-wider px-3.5 py-1.5 rounded-full shadow-sm max-w-[90%] text-center border border-[#DCD9CE]">
+                          {m.body}
+                        </div>
+                      </div>
+                    );
+                  }
                   const isCustomer = m.sender_type === "contact";
                   const isBot = m.sender_type === "bot";
                   const isOutbound = !isCustomer;
@@ -321,7 +373,7 @@ export default function Inbox() {
                 )}
                 {active.channel === "whatsapp" && waStatus && !waStatus.configured && (
                   <p data-testid="wa-not-configured-banner" className="text-[11px] font-semibold text-[#0E8DDB] mb-2">
-                    WhatsApp no configurado — el envío real está deshabilitado. Podés seguir usando &quot;+ Respuesta del cliente&quot; como simulador.
+                    WhatsApp no configurado — el envío real está deshabilitado.
                   </p>
                 )}
                 <div className="flex items-end gap-2">
@@ -489,6 +541,7 @@ export default function Inbox() {
               regenSummary={regenSummary}
               suggestReply={suggestReply}
               reactivateBot={reactivateBot}
+              deactivateBot={deactivateBot}
               suggestionDraft={suggestionDraft}
               setSuggestionDraft={setSuggestionDraft}
               suggestionMeta={suggestionMeta}
@@ -528,7 +581,7 @@ function BotStatusPill({ status }) {
 }
 
 function BotPanel({
-  conv, readOnly, regenSummary, suggestReply, reactivateBot,
+  conv, readOnly, regenSummary, suggestReply, reactivateBot, deactivateBot,
   suggestionDraft, setSuggestionDraft, suggestionMeta, clearSuggestion, onUseDraft,
 }) {
   const summary = conv?.summary || "";
@@ -552,18 +605,30 @@ function BotPanel({
         <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#888888] mb-1.5">Estado del bot</p>
         <div className="flex items-center justify-between gap-2">
           <BotStatusPill status={botStatus} />
-          {!conv?.bot_enabled && (
-            <Button
-              data-testid="bot-reactivate-button"
-              size="sm"
-              disabled={readOnly || reactivateBot.isPending}
-              onClick={() => reactivateBot.mutate()}
-              className="bg-[#0B1B26] hover:bg-[#0E8DDB] rounded-sm h-7 text-xs"
-            >
-              {reactivateBot.isPending ? <RefreshCw className="h-3 w-3 animate-spin mr-1" /> : <Bot className="h-3 w-3 mr-1" />}
-              Reactivar bot
-            </Button>
-          )}
+          <Button
+            data-testid="bot-toggle-sidebar"
+            size="sm"
+            disabled={readOnly || reactivateBot.isPending || deactivateBot.isPending}
+            onClick={() => {
+              if (conv?.bot_enabled) {
+                deactivateBot.mutate();
+              } else {
+                reactivateBot.mutate();
+              }
+            }}
+            className={`rounded-sm h-7 text-xs font-bold ${
+              conv?.bot_enabled
+                ? "bg-[#22C55E] hover:bg-[#16A34A] text-white"
+                : "bg-[#71717A] hover:bg-[#52525B] text-white"
+            }`}
+          >
+            {reactivateBot.isPending || deactivateBot.isPending ? (
+              <RefreshCw className="h-3 w-3 animate-spin mr-1" />
+            ) : (
+              <Bot className="h-3 w-3 mr-1" />
+            )}
+            {conv?.bot_enabled ? "Desactivar bot" : "Reactivar bot"}
+          </Button>
         </div>
       </div>
 
