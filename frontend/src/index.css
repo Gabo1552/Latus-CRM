@@ -53,17 +53,19 @@
 @tailwind utilities;
 
 :root {
-  --latus-ink: #0B1B26;
-  --latus-ink-soft: #1A2F3D;
-  --latus-blue: #0E8DDB;
-  --latus-ice: #D7EDF2;
-  --latus-coral: #EF5030;
-  --latus-orange: #F08050;
-  --latus-cream: #F4F2EC;
-  --latus-warm-gray: #E9E6DC;
-  --latus-warm-border: #D8D4C7;
-  --latus-muted: #888888;
-  --latus-blush: #EFE3E1;
+  --latus-ink: #0d1f2a;
+  --latus-ink-soft: #223249;
+  --latus-blue: #1997d7;
+  --latus-ice: #d8edf2;
+  --latus-coral: #f44d2f;
+  --latus-orange: #f08050;
+  --latus-cream: #f4f1ea;
+  --latus-surface: #faf8f3;
+  --latus-warm-gray: #e7e2d8;
+  --latus-warm-border: #d8d2c6;
+  --latus-muted: #858585;
+  --latus-blush: #efe3e1;
+  --latus-grain: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='.23'/%3E%3C/svg%3E");
 }
 
 body {
@@ -79,6 +81,92 @@ body {
 h1, h2, h3, h4, h5, .font-heading {
   font-family: "Acumin Variable Concept", "Acumin Pro", "Inter", ui-sans-serif, system-ui, sans-serif;
   letter-spacing: -0.015em;
+}
+
+.latus-wordmark,
+.latus-editorial {
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-weight: 700;
+  letter-spacing: -0.045em;
+}
+
+.latus-grain {
+  background-color: var(--latus-cream);
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.18)),
+    var(--latus-grain);
+  background-blend-mode: normal, soft-light;
+}
+
+.latus-main-surface {
+  background-color: var(--latus-cream);
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.12)),
+    var(--latus-grain);
+  background-blend-mode: normal, soft-light;
+}
+
+.latus-surface {
+  background: rgba(250, 248, 243, 0.94);
+  border: 1px solid rgba(216, 210, 198, 0.9);
+  border-radius: 8px;
+}
+
+.latus-card {
+  background: rgba(250, 248, 243, 0.96);
+  border: 1px solid rgba(216, 210, 198, 0.92);
+  border-radius: 7px;
+  box-shadow: 0 12px 30px rgba(13, 31, 42, 0.035);
+}
+
+.latus-app-shell button,
+.latus-app-shell a,
+.latus-auth-shell button,
+.latus-auth-shell a,
+.latus-auth-shell input {
+  outline-color: var(--latus-blue);
+}
+
+.latus-app-shell button:focus-visible,
+.latus-app-shell a:focus-visible,
+.latus-auth-shell button:focus-visible,
+.latus-auth-shell a:focus-visible,
+.latus-auth-shell input:focus-visible {
+  outline: 2px solid var(--latus-blue);
+  outline-offset: 2px;
+}
+
+.latus-app-shell .bg-white {
+  background-color: rgba(250, 248, 243, 0.97);
+}
+
+.latus-app-shell input.bg-white,
+.latus-app-shell textarea.bg-white,
+.latus-app-shell [role="dialog"].bg-white,
+.latus-app-shell [role="menu"].bg-white,
+.latus-app-shell [role="listbox"].bg-white {
+  background-color: #fffdfa;
+}
+
+.calendar-has-events {
+  position: relative;
+}
+
+.calendar-has-events::after {
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  content: "";
+  border-radius: 999px;
+  background: var(--latus-coral);
+  transform: translateX(-50%);
+}
+
+.calendar-has-events[aria-selected="true"]::after {
+  background: white;
 }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -107,7 +195,7 @@ h1, h2, h3, h4, h5, .font-heading {
     --border: 240 6% 90%;
     --input: 240 6% 90%;
     --ring: 16 100% 50%;
-    --radius: 0.25rem;
+    --radius: 0.625rem;
   }
 }
 

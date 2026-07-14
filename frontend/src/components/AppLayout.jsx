@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, Target, MessageSquare, KanbanSquare,
-  CheckSquare, Shield, Settings, LogOut, MessageSquareText, DollarSign, Package, Calendar
+  CheckSquare, Shield, Settings, LogOut, DollarSign, Package, Calendar,
+  Menu, X
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { initials, roleLabel } from "@/lib/constants";
@@ -20,9 +22,10 @@ const NAV = [
 export default function AppLayout({ children, title, actions }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const perms = user?.permissions || [];
-  const hasPerm = (p) => perms.includes(p);
+  const hasPerm = (permission) => perms.includes(permission);
   const hasAnyAdmin = hasPerm("manage_users") || hasPerm("configure_whatsapp") || hasPerm("configure_ai") || hasPerm("manage_settings");
 
   const nav = [...NAV];
@@ -35,83 +38,113 @@ export default function AppLayout({ children, title, actions }) {
     nav.push({ to: "/configuracion", label: "Configuración", icon: Settings, testid: "nav-configuracion" });
   }
 
+  const profile = user?.picture ? (
+    <img src={user.picture} alt="" className="h-9 w-9 rounded-full object-cover ring-1 ring-latus-warm-border" />
+  ) : (
+    <div className="h-9 w-9 rounded-full bg-latus-ink flex items-center justify-center text-white text-xs font-bold">
+      {initials(user?.name)}
+    </div>
+  );
+
   return (
-    <div className="flex h-screen bg-latus-cream overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-60 bg-latus-ink flex flex-col shrink-0">
-        <div className="h-16 flex items-center gap-2.5 px-5 border-b border-white/10">
-          <div className="h-8 w-8 bg-latus-blue flex items-center justify-center rounded-md">
-            <MessageSquareText className="h-4.5 w-4.5 text-white" strokeWidth={2.5} />
+    <div className="latus-app-shell flex h-screen overflow-hidden bg-latus-cream text-latus-ink">
+      {menuOpen && (
+        <button
+          type="button"
+          aria-label="Cerrar navegación"
+          data-testid="mobile-nav-backdrop"
+          onClick={() => setMenuOpen(false)}
+          className="fixed inset-0 z-40 bg-latus-ink/45 lg:hidden"
+        />
+      )}
+
+      <aside className={`fixed inset-y-0 left-0 z-50 flex w-[17rem] shrink-0 flex-col bg-latus-ink text-white transition-transform duration-300 lg:static lg:translate-x-0 ${menuOpen ? "translate-x-0" : "-translate-x-full"}`}>
+        <div className="px-6 pb-5 pt-6">
+          <div className="flex min-h-14 items-center justify-between rounded-[14px] border border-dashed border-white/65 px-4">
+            <div className="flex items-baseline gap-1.5">
+              <span className="latus-wordmark text-[1.65rem] leading-none text-latus-ice">Latus</span>
+              <span className="text-lg font-light tracking-tight text-latus-ice">CRM</span>
+            </div>
+            <button type="button" onClick={() => setMenuOpen(false)} className="p-1 text-white/70 lg:hidden" aria-label="Cerrar menú">
+              <X className="h-5 w-5" />
+            </button>
           </div>
-          <span className="text-white font-bold text-lg" style={{letterSpacing: "-0.02em"}}>Latus CRM</span>
         </div>
 
-        <nav className="flex-1 px-3 py-5 space-y-0.5">
+        <nav className="flex-1 space-y-1 overflow-y-auto px-4 pb-5" aria-label="Navegación principal">
           {nav.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               data-testid={item.testid}
+              onClick={() => setMenuOpen(false)}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors relative ${
+                `group relative flex items-center gap-3 rounded-md px-4 py-3 text-[15px] font-medium transition-colors ${
                   isActive
                     ? "bg-latus-ink-soft text-white"
-                    : "text-white/70 hover:text-white hover:bg-white/5"
+                    : "text-latus-ice/85 hover:bg-white/[0.06] hover:text-white"
                 }`
               }
             >
               {({ isActive }) => (
                 <>
-                  {isActive && (
-                    <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] bg-latus-blue rounded-r-sm" />
-                  )}
-                  <item.icon className="h-[18px] w-[18px]" />
-                  {item.label}
+                  <item.icon className={`h-[19px] w-[19px] ${isActive ? "text-white" : "text-latus-ice/90 group-hover:text-white"}`} strokeWidth={2} />
+                  <span>{item.label}</span>
+                  {isActive && <span className="absolute inset-y-2 left-0 w-[3px] rounded-r bg-latus-blue" />}
                 </>
               )}
             </NavLink>
           ))}
         </nav>
 
-        <div className="p-3 border-t border-white/10">
+        <div className="mx-5 border-t border-white/10 py-5">
           <button
-            onClick={() => navigate("/profile")}
-            className="w-full flex items-center gap-3 px-2 py-2 rounded-md hover:bg-white/5 transition-colors text-left"
-            data-testid="sidebar-profile"
-          >
-            {user?.picture ? (
-              <img src={user.picture} alt="" className="h-8 w-8 rounded-md object-cover" />
-            ) : (
-              <div className="h-8 w-8 rounded-md bg-latus-blue flex items-center justify-center text-white text-xs font-bold">
-                {initials(user?.name)}
-              </div>
-            )}
-            <div className="flex-1 min-w-0">
-              <p className="text-white text-sm font-semibold truncate">{user?.name}</p>
-              <p className="text-white/50 text-xs">{roleLabel(user?.role)}</p>
-            </div>
-          </button>
-          <button
+            type="button"
             onClick={logout}
             data-testid="logout-button"
-            className="mt-1 w-full flex items-center gap-3 px-2 py-2 rounded-md text-white/70 hover:text-white hover:bg-white/5 text-sm font-medium transition-colors"
+            className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-latus-ice/70 transition-colors hover:bg-white/[0.06] hover:text-white"
           >
             <LogOut className="h-[18px] w-[18px]" />
             Cerrar sesión
           </button>
+          <div className="mt-4 flex items-baseline justify-center gap-1.5 text-latus-ice">
+            <span className="latus-wordmark text-2xl">Latus</span>
+            <span className="text-xl font-light">CRM</span>
+          </div>
         </div>
       </aside>
 
-      {/* Main */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 bg-white border-b border-[#E9E6DC] flex items-center justify-between px-6 shrink-0">
-          <h1 className="text-xl font-bold tracking-tight text-[#0B1B26]" data-testid="page-title">{title}</h1>
-          <div className="flex items-center gap-3">
-            {actions}
+      <div className="min-w-0 flex-1 flex flex-col">
+        <header className="latus-grain flex min-h-[72px] shrink-0 items-center justify-between border-b border-latus-warm-border px-4 md:px-7">
+          <div className="flex min-w-0 items-center gap-3">
+            <button
+              type="button"
+              data-testid="mobile-nav-toggle"
+              onClick={() => setMenuOpen(true)}
+              className="rounded-md border border-latus-warm-border bg-latus-surface p-2 text-latus-ink lg:hidden"
+              aria-label="Abrir navegación"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+            <h1 className="truncate text-2xl font-bold tracking-tight text-latus-ink md:text-[1.75rem]" data-testid="page-title">{title}</h1>
+          </div>
+          <div className="flex items-center gap-2.5 md:gap-4">
+            <div className="hidden items-center gap-3 sm:flex">{actions}</div>
             <NotificationBell />
+            <button
+              type="button"
+              onClick={() => navigate("/configuracion")}
+              className="flex items-center gap-2 rounded-full"
+              data-testid="sidebar-profile"
+              title={`${user?.name || "Usuario"} · ${roleLabel(user?.role)}`}
+            >
+              {profile}
+              <span className="sr-only">Abrir perfil</span>
+            </button>
           </div>
         </header>
-        <main className="flex-1 overflow-auto">{children}</main>
+        {actions && <div className="latus-grain border-b border-latus-warm-border px-4 py-2 sm:hidden">{actions}</div>}
+        <main className="latus-main-surface flex-1 overflow-auto">{children}</main>
       </div>
     </div>
   );

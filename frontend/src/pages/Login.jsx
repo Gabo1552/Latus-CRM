@@ -1,10 +1,13 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { MessageSquare, TrendingUp, Zap, ArrowRight, Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { LOGIN } from "@/constants/testIds/auth";
+
+const inputClass = "w-full rounded-lg border border-white/65 bg-latus-ink/45 px-4 py-3.5 text-sm text-white placeholder:text-white/35 shadow-inner shadow-black/10 transition-all focus:border-latus-blue focus:outline-none focus:ring-2 focus:ring-latus-blue/40";
+const labelClass = "text-sm font-medium text-white/90";
 
 export default function Login() {
   const { login } = useAuth();
@@ -23,8 +26,8 @@ export default function Login() {
   const isResetMode = !!resetToken;
   const pwdValid = useMemo(() => /^(?=.*[A-Z])(?=.*\d).{8,}$/.test(newPassword), [newPassword]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (event) => {
+    event.preventDefault();
     if (!email || !password) {
       toast.error("Por favor completa todos los campos");
       return;
@@ -33,35 +36,35 @@ export default function Login() {
     try {
       await login(email, password);
       toast.success("¡Bienvenido!");
-    } catch (err) {
-      console.error(err);
-      toast.error(err.response?.data?.detail || "Credenciales inválidas o error de conexión");
+    } catch (error) {
+      console.error(error);
+      toast.error(error.response?.data?.detail || "Credenciales inválidas o error de conexión");
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleForgot = async (e) => {
-    e.preventDefault();
+  const handleForgot = async (event) => {
+    event.preventDefault();
     if (!forgotEmail) {
       toast.error("Ingresá tu email");
       return;
     }
     setIsSubmittingForgot(true);
     try {
-      const res = await api.post("/auth/password/forgot", { email: forgotEmail });
-      toast.success(res.data?.message || "Si el email existe, te enviamos instrucciones.");
+      const response = await api.post("/auth/password/forgot", { email: forgotEmail });
+      toast.success(response.data?.message || "Si el email existe, te enviamos instrucciones.");
       setShowForgot(false);
       setForgotEmail("");
-    } catch (err) {
-      toast.error(err.response?.data?.detail || "No se pudo iniciar la recuperación");
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "No se pudo iniciar la recuperación");
     } finally {
       setIsSubmittingForgot(false);
     }
   };
 
-  const handleResetPassword = async (e) => {
-    e.preventDefault();
+  const handleResetPassword = async (event) => {
+    event.preventDefault();
     if (!pwdValid) {
       toast.error("La contraseña debe tener al menos 8 caracteres, una mayúscula y un número");
       return;
@@ -77,149 +80,125 @@ export default function Login() {
       setNewPassword("");
       setConfirmPassword("");
       setSearchParams({});
-    } catch (err) {
-      toast.error(err.response?.data?.detail || "No se pudo restablecer la contraseña");
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "No se pudo restablecer la contraseña");
     } finally {
       setIsResetting(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex bg-[#F9F9F7]">
-      {/* Left: brand panel */}
-      <div className="hidden lg:flex flex-col justify-between w-[44%] bg-[#0B1B26] p-12 relative overflow-hidden">
-        <div
-          className="absolute inset-0 opacity-40 mix-blend-screen"
-          style={{
-            backgroundImage:
-              "url(https://images.unsplash.com/photo-1707324148764-99647364afa3?crop=entropy&cs=srgb&fm=jpg&w=900&q=80)",
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-          }}
-        />
-        <div className="relative z-10 flex items-center gap-2">
-          <div className="h-9 w-9 bg-[#0E8DDB] flex items-center justify-center rounded-sm">
-            <MessageSquare className="h-5 w-5 text-white" strokeWidth={2.5} />
-          </div>
-          <span className="text-white font-extrabold text-xl tracking-tighter">Latus CRM</span>
-        </div>
+    <div className="latus-auth-shell latus-grain relative min-h-screen overflow-hidden text-latus-ink">
+      <div className="pointer-events-none absolute -left-28 -top-36 h-[30rem] w-[30rem] rounded-full bg-latus-coral/90 blur-[70px]" />
+      <div className="pointer-events-none absolute -bottom-52 -right-40 h-[38rem] w-[38rem] rounded-full bg-latus-coral/95 blur-[85px]" />
+      <div className="pointer-events-none absolute left-[12%] top-[8%] h-48 w-48 rounded-full bg-white/80 blur-[70px]" />
 
-        <div className="relative z-10 space-y-6">
-          <h1 className="text-white text-5xl font-extrabold tracking-tighter leading-[1.05]">
-            Cerrá más ventas<br />desde WhatsApp.
+      <main className="relative z-10 mx-auto grid min-h-screen max-w-[1540px] items-center gap-12 px-6 py-12 sm:px-10 lg:grid-cols-[1.08fr_.92fr] lg:px-20 lg:py-16 xl:gap-20">
+        <section className="max-w-3xl lg:pb-6">
+          <div className="mb-10 inline-flex items-baseline gap-2 rounded-full bg-latus-ink px-7 py-3 text-latus-ice shadow-[0_14px_30px_rgba(13,31,42,0.12)]">
+            <span className="latus-wordmark text-4xl leading-none">Latus</span>
+            <span className="text-3xl font-light leading-none">CRM</span>
+          </div>
+
+          <h1 className="max-w-[740px] text-[3.5rem] font-light leading-[0.96] tracking-[-0.055em] text-latus-ink sm:text-[4.6rem] xl:text-[5.5rem]">
+            Cerrá <span className="latus-editorial font-bold">más ventas</span>
+            <br />desde WhatsApp
           </h1>
-          <p className="text-latus-muted text-base max-w-sm leading-relaxed">
-            El centro de comando para equipos de ventas. Gestioná leads, conversaciones, pipeline y respuestas asistidas por IA en un solo lugar.
+          <p className="mt-7 max-w-2xl text-base leading-relaxed text-latus-ink/65 sm:text-lg">
+            Conversaciones, oportunidades y respuestas asistidas por IA en un solo espacio de ventas.
           </p>
-          <div className="flex gap-6 pt-4">
-            {[
-              { icon: TrendingUp, label: "Pipeline en vivo" },
-              { icon: MessageSquare, label: "Bandeja unificada" },
-              { icon: Zap, label: "Respuestas IA" },
-            ].map((f) => (
-              <div key={f.label} className="flex items-center gap-2 text-zinc-300 text-sm">
-                <f.icon className="h-4 w-4 text-[#0E8DDB]" />
-                {f.label}
-              </div>
+
+          <div className="mt-8 flex max-w-3xl flex-wrap gap-2.5 text-sm text-latus-ink/65 sm:text-base">
+            {["Pipeline en vivo", "Respuestas automatizadas con IA", "Bandeja unificada", "Catálogo"].map((feature) => (
+              <span key={feature} className="rounded-full border border-latus-ink/75 bg-latus-surface/35 px-4 py-1.5 backdrop-blur-[1px]">
+                {feature}
+              </span>
             ))}
           </div>
-        </div>
-        <div className="relative z-10 text-zinc-600 text-xs tracking-[0.2em] uppercase font-bold">
-          CRM de ventas por WhatsApp
-        </div>
-      </div>
+        </section>
 
-      {/* Right: login */}
-      <div className="flex-1 flex items-center justify-center p-8 bg-[#F9F9F7]">
-        <div className="w-full max-w-sm">
-          <div className="lg:hidden flex items-center gap-2 mb-10">
-            <div className="h-9 w-9 bg-[#0E8DDB] flex items-center justify-center rounded-sm">
-              <MessageSquare className="h-5 w-5 text-white" strokeWidth={2.5} />
-            </div>
-            <span className="font-extrabold text-xl tracking-tighter">Latus CRM</span>
+        <section className="w-full max-w-[590px] justify-self-end rounded-[24px] bg-gradient-to-br from-latus-ink to-latus-ink-soft p-7 text-white shadow-[0_28px_70px_rgba(13,31,42,0.18)] sm:p-10 xl:p-12">
+          <div className="mb-9 text-center">
+            <h2 className="text-3xl font-light tracking-[-0.035em] sm:text-4xl">
+              {isResetMode ? (
+                "Creá una nueva contraseña"
+              ) : (
+                <>Ingresá a <span className="latus-editorial text-latus-ice">Latus</span> <span className="text-latus-ice">CRM</span></>
+              )}
+            </h2>
+            <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-white/55">
+              {isResetMode
+                ? "Definí tu nueva contraseña para recuperar el acceso al CRM."
+                : "Accedé a tu espacio de ventas y retomá cada conversación donde la dejaste."}
+            </p>
           </div>
-
-          <p className="text-xs tracking-[0.2em] uppercase font-bold text-[#888888] mb-3">{isResetMode ? "Recuperación segura" : "Bienvenido de nuevo"}</p>
-          <h2 className="text-3xl font-extrabold tracking-tighter text-[#0B1B26] mb-2">{isResetMode ? "Creá una nueva contraseña" : "Ingresá a Latus CRM"}</h2>
-          <p className="text-sm text-[#888888] mb-8 leading-relaxed">
-            {isResetMode
-              ? "Definí tu nueva contraseña para recuperar el acceso al CRM."
-              : "Ingresá tus credenciales para acceder a tu espacio de ventas."}
-          </p>
 
           {isResetMode ? (
             <form onSubmit={handleResetPassword} className="space-y-5">
-              <div className="space-y-1.5">
-                <label htmlFor="reset-password" className="text-xs font-bold uppercase tracking-wider text-[#0B1B26]">
-                  Nueva contraseña
-                </label>
+              <div className="space-y-2">
+                <label htmlFor="reset-password" className={labelClass}>Nueva contraseña</label>
                 <input
                   id="reset-password"
                   type="password"
                   required
                   value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
+                  onChange={(event) => setNewPassword(event.target.value)}
                   data-testid={LOGIN.resetPasswordInput}
                   placeholder="Mín. 8 caracteres, 1 mayúscula, 1 número"
-                  className="w-full px-3.5 py-2.5 border border-[#D8D4C7] rounded-sm bg-white text-[#0B1B26] placeholder:text-[#888888] focus:outline-none focus:ring-2 focus:ring-[#0E8DDB] focus:border-transparent transition-all text-sm"
+                  className={inputClass}
                 />
               </div>
-              <div className="space-y-1.5">
-                <label htmlFor="reset-password-confirm" className="text-xs font-bold uppercase tracking-wider text-[#0B1B26]">
-                  Confirmar contraseña
-                </label>
+              <div className="space-y-2">
+                <label htmlFor="reset-password-confirm" className={labelClass}>Confirmar contraseña</label>
                 <input
                   id="reset-password-confirm"
                   type="password"
                   required
                   value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
                   data-testid={LOGIN.resetPasswordConfirmInput}
                   placeholder="Repetí la contraseña"
-                  className="w-full px-3.5 py-2.5 border border-[#D8D4C7] rounded-sm bg-white text-[#0B1B26] placeholder:text-[#888888] focus:outline-none focus:ring-2 focus:ring-[#0E8DDB] focus:border-transparent transition-all text-sm"
+                  className={inputClass}
                 />
               </div>
               <button
                 type="submit"
                 disabled={isResetting}
                 data-testid={LOGIN.resetPasswordSubmitButton}
-                className="group w-full flex items-center justify-center gap-3 bg-[#0B1B26] hover:bg-[#0E8DDB] disabled:bg-[#888888] text-white font-semibold py-3.5 rounded-sm transition-colors cursor-pointer"
+                className="mt-3 flex w-full items-center justify-center rounded-lg bg-latus-blue py-3.5 font-semibold text-white transition-colors hover:bg-latus-blue-deep disabled:bg-white/25"
               >
-                {isResetting ? <div className="h-5 w-5 border-2 border-white border-t-transparent rounded-full animate-spin" /> : "Guardar nueva contraseña"}
+                {isResetting ? <span className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" /> : "Guardar nueva contraseña"}
               </button>
-              <button type="button" onClick={() => setSearchParams({})} className="text-sm text-[#0E8DDB] font-semibold">
-                Volver al login
+              <button type="button" onClick={() => setSearchParams({})} className="text-sm font-semibold text-latus-ice hover:text-white">
+                Volver al inicio de sesión
               </button>
             </form>
           ) : (
             <>
               <form onSubmit={handleSubmit} className="space-y-5">
-                <div className="space-y-1.5">
-                  <label htmlFor="email" className="text-xs font-bold uppercase tracking-wider text-[#0B1B26]">
-                    Correo electrónico
-                  </label>
+                <div className="space-y-2">
+                  <label htmlFor="email" className={labelClass}>Correo electrónico</label>
                   <input
                     id="email"
                     type="email"
                     required
+                    autoComplete="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(event) => setEmail(event.target.value)}
                     data-testid={LOGIN.emailInput}
-                    placeholder="ejemplo@latus.test"
-                    className="w-full px-3.5 py-2.5 border border-[#D8D4C7] rounded-sm bg-white text-[#0B1B26] placeholder:text-[#888888] focus:outline-none focus:ring-2 focus:ring-[#0E8DDB] focus:border-transparent transition-all text-sm"
+                    placeholder="tu-email@empresa.com"
+                    className={inputClass}
                   />
                 </div>
 
-                <div className="space-y-1.5">
-                  <div className="flex justify-between items-center">
-                    <label htmlFor="password" className="text-xs font-bold uppercase tracking-wider text-[#0B1B26]">
-                      Contraseña
-                    </label>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-4">
+                    <label htmlFor="password" className={labelClass}>Contraseña</label>
                     <button
                       type="button"
                       data-testid={LOGIN.forgotPasswordLink}
-                      onClick={() => setShowForgot((prev) => !prev)}
-                      className="text-xs font-semibold text-[#0E8DDB]"
+                      onClick={() => setShowForgot((previous) => !previous)}
+                      className="text-xs font-semibold text-latus-ice transition-colors hover:text-white"
                     >
                       Olvidé mi contraseña
                     </button>
@@ -229,22 +208,20 @@ export default function Login() {
                       id="password"
                       type={showPassword ? "text" : "password"}
                       required
+                      autoComplete="current-password"
                       value={password}
-                      onChange={(e) => setPassword(e.target.value)}
+                      onChange={(event) => setPassword(event.target.value)}
                       data-testid={LOGIN.passwordInput}
                       placeholder="••••••••"
-                      className="w-full pl-3.5 pr-10 py-2.5 border border-[#D8D4C7] rounded-sm bg-white text-[#0B1B26] placeholder:text-[#888888] focus:outline-none focus:ring-2 focus:ring-[#0E8DDB] focus:border-transparent transition-all text-sm"
+                      className={`${inputClass} pr-12`}
                     />
                     <button
                       type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[#888888] hover:text-[#0B1B26] focus:outline-none cursor-pointer"
+                      onClick={() => setShowPassword((previous) => !previous)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-white/45 transition-colors hover:text-white"
+                      aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
                     >
-                      {showPassword ? (
-                        <EyeOff className="h-4.5 w-4.5" />
-                      ) : (
-                        <Eye className="h-4.5 w-4.5" />
-                      )}
+                      {showPassword ? <EyeOff className="h-[18px] w-[18px]" /> : <Eye className="h-[18px] w-[18px]" />}
                     </button>
                   </div>
                 </div>
@@ -253,36 +230,29 @@ export default function Login() {
                   type="submit"
                   disabled={isLoading}
                   data-testid={LOGIN.submitButton}
-                  className="group w-full flex items-center justify-center gap-3 bg-[#0B1B26] hover:bg-[#0E8DDB] disabled:bg-[#888888] text-white font-semibold py-3.5 rounded-sm transition-colors cursor-pointer"
+                  className="mt-3 flex w-full items-center justify-center rounded-lg bg-latus-blue py-3.5 font-semibold text-white shadow-[0_12px_24px_rgba(25,151,215,0.18)] transition-colors hover:bg-latus-blue-deep disabled:bg-white/25"
                 >
-                  {isLoading ? (
-                    <div className="h-5 w-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <>
-                      Iniciar sesión
-                      <ArrowRight className="h-4 w-4 opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
-                    </>
-                  )}
+                  {isLoading ? <span className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" /> : "Iniciar sesión"}
                 </button>
               </form>
 
               {showForgot && (
-                <form onSubmit={handleForgot} className="mt-5 border border-[#E9E6DC] rounded-sm bg-white p-4 space-y-3">
-                  <p className="text-sm font-semibold text-[#0B1B26]">Recuperar acceso</p>
-                  <p className="text-xs text-[#888888]">Te mandamos un enlace para crear una nueva contraseña.</p>
+                <form onSubmit={handleForgot} className="mt-6 space-y-3 rounded-xl border border-white/15 bg-white/[0.06] p-4">
+                  <p className="font-semibold text-white">Recuperar acceso</p>
+                  <p className="text-xs leading-relaxed text-white/55">Te mandamos un enlace para crear una nueva contraseña.</p>
                   <input
                     type="email"
                     value={forgotEmail}
-                    onChange={(e) => setForgotEmail(e.target.value)}
+                    onChange={(event) => setForgotEmail(event.target.value)}
                     data-testid={LOGIN.forgotPasswordEmailInput}
                     placeholder="tu-email@empresa.com"
-                    className="w-full px-3.5 py-2.5 border border-[#D8D4C7] rounded-sm bg-white text-[#0B1B26] placeholder:text-[#888888] focus:outline-none focus:ring-2 focus:ring-[#0E8DDB] focus:border-transparent transition-all text-sm"
+                    className={inputClass}
                   />
                   <button
                     type="submit"
                     data-testid={LOGIN.forgotPasswordSubmitButton}
                     disabled={isSubmittingForgot}
-                    className="w-full bg-[#0E8DDB] hover:bg-[#0a7ab8] disabled:bg-[#888888] text-white font-semibold py-2.5 rounded-sm transition-colors"
+                    className="w-full rounded-lg bg-latus-blue py-3 text-sm font-semibold text-white transition-colors hover:bg-latus-blue-deep disabled:bg-white/25"
                   >
                     {isSubmittingForgot ? "Enviando…" : "Enviar email de recuperación"}
                   </button>
@@ -291,11 +261,11 @@ export default function Login() {
             </>
           )}
 
-          <p className="text-xs text-[#888888] mt-6 leading-relaxed">
-            El primer usuario en ingresar se convierte en <span className="font-semibold text-[#0B1B26]">Administrador</span> del espacio. Los datos de demostración ya están cargados.
+          <p className="mt-7 text-xs leading-relaxed text-white/40">
+            El primer usuario en ingresar se convierte en administrador del espacio. Los datos de demostración ya están cargados.
           </p>
-        </div>
-      </div>
+        </section>
+      </main>
     </div>
   );
 }

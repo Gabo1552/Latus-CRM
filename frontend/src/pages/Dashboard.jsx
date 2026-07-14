@@ -13,7 +13,7 @@ import { LEAD_STATUSES, CONV_STATUSES, money, statusMeta } from "@/lib/constants
 import { StatusBadge, Avatar } from "@/components/Bits";
 import { useAuth } from "@/context/AuthContext";
 
-function Metric({ icon: Icon, label, value, sub, compareValue, testid }) {
+function Metric({ label, value, sub, compareValue, testid }) {
   let difference = null;
   if (compareValue !== undefined && compareValue !== null) {
     const valNum = typeof value === "number" ? value : parseFloat(String(value).replace(/[^0-9.-]+/g, ""));
@@ -28,16 +28,11 @@ function Metric({ icon: Icon, label, value, sub, compareValue, testid }) {
   }
 
   return (
-    <div className="bg-white border border-[#E9E6DC] rounded-sm p-5 hover:border-zinc-400 hover:shadow-sm hover:-translate-y-0.5 transition-all duration-300" data-testid={testid}>
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-xs tracking-[0.15em] uppercase font-bold text-[#888888]">{label}</span>
-        <div className="p-1.5 bg-latus-ice rounded-full">
-          <Icon className="h-4 w-4 text-[#0E8DDB]" />
-        </div>
-      </div>
-      <p className="text-3xl font-extrabold tracking-tighter text-[#0B1B26]">{value}</p>
-      <div className="flex items-center justify-between mt-1 text-xs">
-        {sub && <span className="text-[#888888]">{sub}</span>}
+    <div className="latus-card min-h-[132px] p-5 transition-all duration-300 hover:-translate-y-0.5 hover:border-latus-ink/25 hover:shadow-[0_16px_35px_rgba(13,31,42,0.07)]" data-testid={testid}>
+      <span className="text-xs font-bold uppercase tracking-[0.12em] text-latus-ink">{label}</span>
+      <p className="latus-editorial mt-1 text-[2.55rem] leading-none text-[#123c58]">{value}</p>
+      <div className="mt-2 flex items-center justify-between text-sm">
+        {sub && <span className="text-latus-muted">{sub}</span>}
         {difference && (
           <span className={`font-semibold ml-auto ${difference.isPositive ? "text-green-600" : "text-red-600"}`}>
             {difference.isPositive ? "+" : ""}{difference.pct}% vs anterior
@@ -50,16 +45,16 @@ function Metric({ icon: Icon, label, value, sub, compareValue, testid }) {
 
 function AttnColumn({ icon: Icon, title, count, children, testid }) {
   return (
-    <div className="p-4" data-testid={testid}>
-      <div className="flex items-center justify-between mb-2 px-2">
+    <div className="min-h-[132px] p-4" data-testid={testid}>
+      <div className="mb-2 flex items-center justify-between px-2">
         <div className="flex items-center gap-2">
-          <Icon className="h-3.5 w-3.5 text-[#888888]" />
-          <span className="text-xs tracking-[0.12em] uppercase font-bold text-[#888888]">{title}</span>
+          <Icon className="h-4 w-4 text-latus-ice/70" />
+          <span className="text-sm font-medium text-white/90">{title}</span>
         </div>
-        <span className="text-xs font-bold text-[#0B1B26] bg-latus-warm-gray rounded-full px-2">{count}</span>
+        <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs font-bold text-latus-ice">{count}</span>
       </div>
       <div className="space-y-0.5">
-        {count === 0 ? <p className="text-sm text-latus-muted px-2 py-3">Sin pendientes</p> : children}
+        {count === 0 ? <p className="px-2 py-3 text-sm text-white/45">Sin pendientes</p> : children}
       </div>
     </div>
   );
@@ -115,6 +110,7 @@ export default function Dashboard() {
 
   const role = user?.role ? user.role.toLowerCase() : "";
   const isAdminOrSupervisor = role === "admin" || role === "supervisor";
+  const firstName = (user?.name || "Usuario").trim().split(/\s+/)[0];
 
   const [activeTab, setActiveTab] = useState("presales");
 
@@ -140,7 +136,7 @@ export default function Dashboard() {
     <Popover>
       <PopoverTrigger asChild>
         <button 
-          className="flex items-center gap-2 px-3 py-1.5 bg-white border border-[#E9E6DC] hover:border-zinc-400 rounded-sm text-xs font-semibold text-[#0B1B26] transition-colors shadow-sm cursor-pointer"
+          className="flex items-center gap-2 rounded-md border border-latus-warm-border bg-latus-surface px-3 py-2 text-xs font-semibold text-latus-ink shadow-sm transition-colors hover:border-latus-ink/30"
           data-testid="date-picker-trigger"
         >
           <Calendar className="h-3.5 w-3.5 text-[#0E8DDB]" />
@@ -154,7 +150,7 @@ export default function Dashboard() {
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-5 bg-white border border-[#E9E6DC] rounded-sm shadow-md space-y-4">
+      <PopoverContent align="end" className="latus-card w-80 space-y-4 p-5 shadow-md">
         {/* Presets */}
         <div className="flex gap-1.5 border-b border-[#E9E6DC]/60 pb-3">
           <button
@@ -280,46 +276,46 @@ export default function Dashboard() {
 
   return (
     <AppLayout title="Panel principal" actions={dateFilterActions}>
-      <div className="p-6 md:p-8 space-y-6 animate-in fade-in duration-300">
+      <div className="mx-auto max-w-[1720px] space-y-5 p-4 animate-in fade-in duration-300 md:p-6 xl:p-7">
         
         {/* Welcome Section */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-[#E9E6DC] rounded-sm p-6 hover:shadow-sm transition-all duration-300">
+        <div className="latus-surface flex flex-col justify-between gap-4 p-6 transition-all duration-300 md:flex-row md:items-center">
           <div>
-            <h2 className="text-xl font-bold tracking-tight text-[#0B1B26] flex items-center gap-2">
-              ¡Hola, {user?.name || "Usuario"}! 👋
+            <h2 className="text-[2.1rem] font-light leading-tight tracking-[-0.035em] text-latus-ink md:text-[2.6rem]">
+              Hola, de nuevo <span className="latus-editorial text-[#123c58]">{firstName}</span>
             </h2>
-            <p className="text-sm text-[#888888] mt-1">
+            <p className="mt-1 text-sm text-latus-muted md:text-base">
               {isAdminOrSupervisor 
                 ? "Este es el resumen general del rendimiento y actividad de Latus CRM."
                 : "Este es el resumen de tus leads, conversaciones y tareas asignadas."}
             </p>
           </div>
           {isAdminOrSupervisor && (
-            <div className="flex items-center gap-2 bg-latus-ice text-[#0E8DDB] font-semibold text-xs px-3 py-1.5 rounded-full border border-latus-blue/20 w-fit">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#0E8DDB] animate-pulse" />
+            <div className="flex w-fit items-center gap-2 rounded-full border border-latus-blue/20 bg-latus-ice px-3 py-1.5 text-xs font-semibold text-latus-blue">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-latus-blue" />
               Vista Administrador
             </div>
           )}
         </div>
 
         {/* Tabs Switcher */}
-        <div className="flex border-b border-[#E9E6DC] gap-2">
+        <div className="flex gap-1 border-b-2 border-latus-ink">
           <button
             onClick={() => setActiveTab("presales")}
-            className={`px-5 py-3 text-xs tracking-[0.12em] uppercase font-bold border-b-2 transition-all duration-200 ${
+            className={`rounded-t-md px-5 py-3 text-xs font-bold uppercase tracking-[0.08em] transition-all duration-200 ${
               activeTab === "presales"
-                ? "border-[#0E8DDB] text-[#0E8DDB]"
-                : "border-transparent text-[#888888] hover:text-[#0B1B26]"
+                ? "bg-latus-ink text-white"
+                : "text-latus-muted hover:bg-latus-surface/70 hover:text-latus-ink"
             }`}
           >
             Embudo de Pre-venta
           </button>
           <button
             onClick={() => setActiveTab("sales")}
-            className={`px-5 py-3 text-xs tracking-[0.12em] uppercase font-bold border-b-2 transition-all duration-200 ${
+            className={`rounded-t-md px-5 py-3 text-xs font-bold uppercase tracking-[0.08em] transition-all duration-200 ${
               activeTab === "sales"
-                ? "border-[#0E8DDB] text-[#0E8DDB]"
-                : "border-transparent text-[#888888] hover:text-[#0B1B26]"
+                ? "bg-latus-ink text-white"
+                : "text-latus-muted hover:bg-latus-surface/70 hover:text-latus-ink"
             }`}
           >
             Ventas y Clientes
@@ -336,21 +332,21 @@ export default function Dashboard() {
             </div>
 
             {/* Requires attention */}
-            <div className="bg-white border border-[#E9E6DC] rounded-sm" data-testid="requires-attention">
-              <div className="flex items-center gap-2 px-5 py-4 border-b border-[#E9E6DC]">
-                <AlertTriangle className="h-4 w-4 text-[#0E8DDB]" />
-                <h3 className="text-lg font-bold tracking-tight text-[#0B1B26]">Requiere atención</h3>
-                <span className="text-xs font-bold text-white bg-[#0E8DDB] rounded-full px-2 py-0.5">{attnTotal}</span>
+            <div className="overflow-hidden rounded-lg border border-latus-ink/80 bg-latus-ink text-white shadow-[0_18px_38px_rgba(13,31,42,0.08)]" data-testid="requires-attention">
+              <div className="flex items-center gap-2 border-b border-white/10 px-5 py-4">
+                <AlertTriangle className="h-4 w-4 text-latus-blue" />
+                <h3 className="text-sm font-bold uppercase tracking-[0.1em] text-white">Requiere atención</h3>
+                <span className="rounded-full bg-latus-blue px-2 py-0.5 text-xs font-bold text-white">{attnTotal}</span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-zinc-100">
+              <div className="grid grid-cols-1 divide-y divide-white/10 sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">
                 {/* Handoffs */}
                 <AttnColumn icon={ArrowRightLeft} title="Atención humana" count={attn.open_handoffs.length} testid="attn-handoffs">
                   {attn.open_handoffs.slice(0, 4).map((c) => (
-                    <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-handoff-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-latus-cream text-left transition-colors">
+                    <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-handoff-${c.id}`} className="flex w-full items-center gap-2.5 rounded-md bg-white/[0.05] p-2 text-left transition-colors hover:bg-white/10">
                       <Avatar src={c.contact_avatar} name={c.contact_name} size={28} />
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-[#0B1B26] truncate">{c.contact_name}</p>
-                        <p className="text-xs text-[#888888] truncate">{c.last_message}</p>
+                        <p className="truncate text-sm font-semibold text-white">{c.contact_name}</p>
+                        <p className="truncate text-xs text-white/45">{c.last_message}</p>
                       </div>
                     </button>
                   ))}
@@ -358,24 +354,24 @@ export default function Dashboard() {
                 {/* Unread */}
                 <AttnColumn icon={Mail} title="Chats sin leer" count={attn.unread_conversations.length} testid="attn-unread">
                   {attn.unread_conversations.slice(0, 4).map((c) => (
-                    <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-unread-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-latus-cream text-left transition-colors">
+                    <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-unread-${c.id}`} className="flex w-full items-center gap-2.5 rounded-md bg-white/[0.05] p-2 text-left transition-colors hover:bg-white/10">
                       <Avatar src={c.contact_avatar} name={c.contact_name} size={28} />
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-[#0B1B26] truncate">{c.contact_name}</p>
-                        <p className="text-xs text-[#888888] truncate">{c.last_message}</p>
+                        <p className="truncate text-sm font-semibold text-white">{c.contact_name}</p>
+                        <p className="truncate text-xs text-white/45">{c.last_message}</p>
                       </div>
-                      <span className="bg-[#0E8DDB] text-white text-[10px] font-bold rounded-full h-4 min-w-4 px-1 flex items-center justify-center shrink-0">{c.unread}</span>
+                      <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-latus-blue px-1 text-[10px] font-bold text-white">{c.unread}</span>
                     </button>
                   ))}
                 </AttnColumn>
                 {/* Lead sin respuesta */}
                 <AttnColumn icon={UserX} title="Lead sin respuesta" count={attn.no_response?.length || 0} testid="attn-no-response">
                   {(attn.no_response || []).slice(0, 4).map((c) => (
-                    <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-no-response-${c.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-latus-cream text-left transition-colors">
+                    <button key={c.id} onClick={() => navigate("/inbox", { state: { convId: c.id } })} data-testid={`attn-no-response-${c.id}`} className="flex w-full items-center gap-2.5 rounded-md bg-white/[0.05] p-2 text-left transition-colors hover:bg-white/10">
                       <Avatar src={c.contact_avatar} name={c.contact_name} size={28} />
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-[#0B1B26] truncate">{c.contact_name}</p>
-                        <p className="text-xs text-[#7C3AED] truncate">{c.last_message}</p>
+                        <p className="truncate text-sm font-semibold text-white">{c.contact_name}</p>
+                        <p className="truncate text-xs text-latus-ice/60">{c.last_message}</p>
                       </div>
                     </button>
                   ))}
@@ -383,11 +379,11 @@ export default function Dashboard() {
                 {/* Overdue tasks */}
                 <AttnColumn icon={AlarmClock} title="Tareas vencidas" count={attn.overdue_tasks.length} testid="attn-overdue">
                   {attn.overdue_tasks.slice(0, 4).map((t) => (
-                    <button key={t.id} onClick={() => navigate("/tasks")} data-testid={`attn-overdue-${t.id}`} className="w-full flex items-center gap-2.5 p-2 rounded-sm hover:bg-latus-cream text-left transition-colors">
-                      <span className="h-2 w-2 rounded-full bg-[#DC2626] shrink-0" />
+                    <button key={t.id} onClick={() => navigate("/tasks")} data-testid={`attn-overdue-${t.id}`} className="flex w-full items-center gap-2.5 rounded-md bg-white/[0.05] p-2 text-left transition-colors hover:bg-white/10">
+                      <span className="h-2 w-2 shrink-0 rounded-full bg-latus-coral" />
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-[#0B1B26] truncate">{t.title}</p>
-                        <p className="text-xs text-[#DC2626] truncate">Vence {t.due_date}</p>
+                        <p className="truncate text-sm font-semibold text-white">{t.title}</p>
+                        <p className="truncate text-xs text-latus-coral">Vence {t.due_date}</p>
                       </div>
                     </button>
                   ))}
@@ -397,7 +393,7 @@ export default function Dashboard() {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Pipeline chart */}
-              <div className="lg:col-span-2 bg-white border border-[#E9E6DC] rounded-sm p-6">
+              <div className="latus-card p-6 lg:col-span-2">
                 <div className="flex items-center justify-between mb-6">
                   <div>
                     <h3 className="text-lg font-bold tracking-tight text-[#0B1B26]">Leads por etapa</h3>
@@ -421,13 +417,13 @@ export default function Dashboard() {
 
               {/* Quick stats */}
               <div className="space-y-4">
-                <div className="bg-[#0B1B26] rounded-sm p-6 text-white">
-                  <Bot className="h-5 w-5 text-[#0E8DDB] mb-3" />
-                  <p className="text-xs tracking-[0.15em] uppercase font-bold text-latus-muted">Atendido por humano</p>
-                  <p className="text-3xl font-extrabold tracking-tighter mt-1">{m?.human_handled ?? "—"}</p>
-                  <p className="text-xs text-zinc-500 mt-1">conversaciones fuera del bot</p>
+                <div className="latus-card p-6 text-latus-ink">
+                  <Bot className="mb-3 h-5 w-5 text-latus-blue" />
+                  <p className="text-xs font-bold uppercase tracking-[0.15em] text-latus-muted">Atendido por humano</p>
+                  <p className="latus-editorial mt-1 text-4xl text-[#123c58]">{m?.human_handled ?? "—"}</p>
+                  <p className="mt-1 text-xs text-latus-muted">conversaciones fuera del bot</p>
                 </div>
-                <div className="bg-white border border-[#E9E6DC] rounded-sm p-6">
+                <div className="latus-card p-6">
                   <CheckSquare className="h-5 w-5 text-[#0E8DDB] mb-3" />
                   <p className="text-xs tracking-[0.15em] uppercase font-bold text-[#888888]">Tareas abiertas</p>
                   <p className="text-3xl font-extrabold tracking-tighter mt-1 text-[#0B1B26]">{m?.open_tasks ?? "—"}</p>
@@ -438,7 +434,7 @@ export default function Dashboard() {
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Leads por día chart */}
-              <div className="bg-white border border-[#E9E6DC] rounded-sm p-6" data-testid="leads-per-day-chart">
+              <div className="latus-card p-6" data-testid="leads-per-day-chart">
                 <div>
                   <h3 className="text-lg font-bold tracking-tight text-[#0B1B26]">Leads por día</h3>
                   <p className="text-sm text-[#888888] mb-6">Cantidad de leads registrados por fecha</p>
@@ -466,7 +462,7 @@ export default function Dashboard() {
               </div>
 
               {/* Distribución por origen chart */}
-              <div className="bg-white border border-[#E9E6DC] rounded-sm p-6" data-testid="leads-by-source-chart">
+              <div className="latus-card p-6" data-testid="leads-by-source-chart">
                 <div>
                   <h3 className="text-lg font-bold tracking-tight text-[#0B1B26]">Distribución por origen</h3>
                   <p className="text-sm text-[#888888] mb-6">Cantidad de leads por canal de proveniencia</p>
@@ -494,7 +490,7 @@ export default function Dashboard() {
             </div>
 
             {/* Recent conversations */}
-            <div className="bg-white border border-[#E9E6DC] rounded-sm">
+            <div className="latus-card overflow-hidden">
               <div className="flex items-center justify-between p-5 border-b border-[#E9E6DC]">
                 <h3 className="text-lg font-bold tracking-tight text-[#0B1B26]">Conversaciones recientes</h3>
                 <button onClick={() => navigate("/inbox")} className="text-sm font-semibold text-[#0E8DDB] flex items-center gap-1" data-testid="view-inbox-link">
@@ -537,7 +533,7 @@ export default function Dashboard() {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Sales trend chart */}
-              <div className="lg:col-span-2 bg-white border border-[#E9E6DC] rounded-sm p-6">
+              <div className="latus-card p-6 lg:col-span-2">
                 <div>
                   <h3 className="text-lg font-bold tracking-tight text-[#0B1B26]">Facturación mensual</h3>
                   <p className="text-sm text-[#888888] mb-6">Histórico de ingresos por mes</p>
@@ -565,7 +561,7 @@ export default function Dashboard() {
               </div>
 
               {/* Top Products */}
-              <div className="bg-white border border-[#E9E6DC] rounded-sm p-6 flex flex-col justify-between">
+              <div className="latus-card flex flex-col justify-between p-6">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <ShoppingBag className="h-4 w-4 text-[#0E8DDB]" />
@@ -596,7 +592,7 @@ export default function Dashboard() {
             </div>
 
             {/* Top Customers list */}
-            <div className="bg-white border border-[#E9E6DC] rounded-sm">
+            <div className="latus-card overflow-hidden">
               <div className="p-5 border-b border-[#E9E6DC]">
                 <h3 className="text-lg font-bold tracking-tight text-[#0B1B26]">Top Clientes</h3>
                 <p className="text-sm text-[#888888]">Clientes con mayor volumen de compra acumulado</p>

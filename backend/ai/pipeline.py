@@ -299,9 +299,12 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             now_dt = datetime.now()
             end_dt = now_dt + timedelta(days=7)
             # Find appointments in next 7 days
-            appts = await db.appointments.find({
+            appointment_query = {
                 "start_time": {"$gte": now_dt.isoformat(), "$lte": end_dt.isoformat()}
-            }, {"_id": 0}).to_list(100)
+            }
+            if conv.get("assigned_to"):
+                appointment_query["assigned_to"] = conv.get("assigned_to")
+            appts = await db.appointments.find(appointment_query, {"_id": 0}).to_list(100)
             
             avail_days = settings.get("appointment_available_days") or [1, 2, 3, 4, 5]
             biz_hours = settings.get("appointment_business_hours") or "09:00-18:00"
@@ -470,6 +473,7 @@ Reglas para agendar:
                         "contact_id": conv.get("contact_id"),
                         "lead_id": conv.get("lead_id"),
                         "title": f"Cita con {client_info.splitlines()[0] if client_info else 'Cliente'}",
+                        "event_type": "appointment",
                         "start_time": start_dt.isoformat(),
                         "end_time": end_dt.isoformat(),
                         "status": "scheduled",

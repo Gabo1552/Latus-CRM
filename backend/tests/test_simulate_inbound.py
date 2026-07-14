@@ -202,7 +202,7 @@ class _FakeDB:
         for name in ("users", "user_sessions", "contacts", "leads",
                      "conversations", "messages", "notifications", "settings",
                      "wa_status", "whatsapp_events", "app_secrets", "tasks",
-                     "notes", "bot_events", "bot_settings", "ai_usage_logs",
+                     "appointments", "notes", "bot_events", "bot_settings", "ai_usage_logs",
                      "pricing_config", "products", "work_areas"):
             setattr(self, name, _Coll(name))
 

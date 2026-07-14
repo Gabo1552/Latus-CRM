@@ -380,11 +380,18 @@ class Appointment(BaseModel):
     contact_id: Optional[str] = None
     lead_id: Optional[str] = None
     title: str
+    description: Optional[str] = None
+    location: Optional[str] = None
+    event_type: str = "appointment"  # appointment, event
     start_time: str
     end_time: str
     status: str = "scheduled"  # scheduled, completed, cancelled
     assigned_to: Optional[str] = None
     created_by_bot: bool = False
+    created_by: Optional[str] = None
+    created_by_name: Optional[str] = None
+    updated_by: Optional[str] = None
+    updated_at: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -392,18 +399,25 @@ class AppointmentCreate(BaseModel):
     contact_id: Optional[str] = None
     lead_id: Optional[str] = None
     title: str
+    description: Optional[str] = None
+    location: Optional[str] = None
+    event_type: Literal["appointment", "event"] = "appointment"
     start_time: str
     end_time: str
-    status: str = "scheduled"
+    status: Literal["scheduled", "completed", "cancelled"] = "scheduled"
     assigned_to: Optional[str] = None
-    created_by_bot: bool = False
 
 
 class AppointmentUpdate(BaseModel):
     title: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    event_type: Optional[Literal["appointment", "event"]] = None
+    contact_id: Optional[str] = None
+    lead_id: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
-    status: Optional[str] = None
+    status: Optional[Literal["scheduled", "completed", "cancelled"]] = None
     assigned_to: Optional[str] = None
 
 
@@ -3477,6 +3491,48 @@ async def delete_task(task_id: str, user: User = Depends(get_current_user)):
 # Appointments
 # ---------------------------------------------------------------------------
 
+def _is_calendar_manager(user: User) -> bool:
+    return _normalize_role(user.role) in ("admin", "supervisor")
+
+
+def _parse_appointment_time(value: str, field_name: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{field_name} debe ser una fecha ISO-8601 válida")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _validate_appointment_times(start_time: str, end_time: str) -> None:
+    start_dt = _parse_appointment_time(start_time, "start_time")
+    end_dt = _parse_appointment_time(end_time, "end_time")
+    if end_dt <= start_dt:
+        raise HTTPException(status_code=400, detail="La hora de fin debe ser posterior a la hora de inicio")
+
+
+async def _validate_appointment_assignee(user_id: str | None) -> str:
+    target = (user_id or "").strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="La cita o evento debe estar asignado a un usuario")
+    member = await db.users.find_one(
+        {"user_id": target, "active": {"$ne": False}},
+        {"_id": 0, "user_id": 1},
+    )
+    if not member:
+        raise HTTPException(status_code=400, detail="El usuario asignado no existe o está inactivo")
+    return target
+
+
+async def _get_editable_appointment(appt_id: str, user: User) -> dict:
+    doc = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Cita o evento no encontrado")
+    if not _is_calendar_manager(user) and doc.get("assigned_to") != user.user_id:
+        raise HTTPException(status_code=403, detail="No podés modificar el calendario de otro usuario")
+    return doc
+
 @api_router.get("/appointments")
 async def list_appointments(
     user: User = Depends(get_current_user),
@@ -3493,9 +3549,7 @@ async def list_appointments(
             date_q["$lte"] = end
         q["start_time"] = date_q
 
-    role = _normalize_role(user.role)
-    is_admin_or_supervisor = role in ("admin", "supervisor")
-    if not is_admin_or_supervisor:
+    if not _is_calendar_manager(user):
         q["assigned_to"] = user.user_id
     elif assigned_to:
         q["assigned_to"] = assigned_to
@@ -3505,7 +3559,19 @@ async def list_appointments(
     # Expand lead/contact
     leads = {l["id"]: l for l in await db.leads.find({}, {"_id": 0}).to_list(1000)}
     contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(1000)}
+    members = {
+        member["user_id"]: {
+            "user_id": member["user_id"],
+            "name": member.get("name") or member.get("email") or "Usuario",
+            "picture": member.get("picture"),
+            "role": _normalize_role(member.get("role")),
+        }
+        for member in await db.users.find({}, {"_id": 0}).to_list(500)
+        if member.get("user_id")
+    }
     for d in docs:
+        d["assigned_user"] = members.get(d.get("assigned_to"))
+        d["created_by_user"] = members.get(d.get("created_by"))
         if d.get("lead_id"):
             lead = leads.get(d.get("lead_id"))
             if lead:
@@ -3519,29 +3585,49 @@ async def list_appointments(
 @api_router.post("/appointments", response_model=Appointment)
 async def create_appointment(payload: AppointmentCreate, user: User = Depends(get_current_user)):
     data = payload.model_dump()
-    if not data.get("assigned_to"):
-        data["assigned_to"] = user.user_id
+    data["title"] = data["title"].strip()
+    if not data["title"]:
+        raise HTTPException(status_code=400, detail="El título es obligatorio")
+    requested_assignee = data.get("assigned_to")
+    if not _is_calendar_manager(user) and requested_assignee not in (None, "", user.user_id):
+        raise HTTPException(status_code=403, detail="No podés crear eventos para otro usuario")
+    data["assigned_to"] = await _validate_appointment_assignee(
+        requested_assignee if _is_calendar_manager(user) else user.user_id
+    )
+    _validate_appointment_times(data["start_time"], data["end_time"])
+    data["created_by_bot"] = False
+    data["created_by"] = user.user_id
+    data["created_by_name"] = user.name
     appt = Appointment(**data)
     await db.appointments.insert_one(appt.model_dump())
     return appt
 
 @api_router.patch("/appointments/{appt_id}", response_model=Appointment)
 async def update_appointment(appt_id: str, payload: AppointmentUpdate, user: User = Depends(get_current_user)):
-    update = {k: v for k, v in payload.model_dump().items() if v is not None}
+    existing = await _get_editable_appointment(appt_id, user)
+    update = payload.model_dump(exclude_unset=True)
     if not update:
-        doc = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
-        if not doc:
-            raise HTTPException(status_code=404, detail="Appointment not found")
-        return Appointment(**doc)
-        
+        return Appointment(**existing)
+    if "title" in update:
+        update["title"] = (update["title"] or "").strip()
+        if not update["title"]:
+            raise HTTPException(status_code=400, detail="El título es obligatorio")
+    if "assigned_to" in update:
+        if not _is_calendar_manager(user) and update["assigned_to"] != user.user_id:
+            raise HTTPException(status_code=403, detail="No podés reasignar eventos a otro usuario")
+        update["assigned_to"] = await _validate_appointment_assignee(update["assigned_to"])
+    start_time = update.get("start_time", existing.get("start_time"))
+    end_time = update.get("end_time", existing.get("end_time"))
+    _validate_appointment_times(start_time, end_time)
+    update["updated_by"] = user.user_id
+    update["updated_at"] = now_iso()
     await db.appointments.update_one({"id": appt_id}, {"$set": update})
     doc = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Appointment not found")
     return Appointment(**doc)
 
 @api_router.delete("/appointments/{appt_id}")
 async def delete_appointment(appt_id: str, user: User = Depends(get_current_user)):
+    await _get_editable_appointment(appt_id, user)
     await db.appointments.delete_one({"id": appt_id})
     return {"ok": True}
 
@@ -4228,6 +4314,11 @@ async def _ensure_indexes() -> None:
         await db.products.create_index("tags", name="ix_products_tags")
         await db.password_reset_tokens.create_index("token_hash", unique=True, name="ux_password_reset_token_hash")
         await db.password_reset_tokens.create_index("expires_at", name="ix_password_reset_expires")
+        await db.appointments.create_index(
+            [("assigned_to", 1), ("start_time", 1)],
+            name="ix_appointments_assignee_start",
+        )
+        await db.appointments.create_index("start_time", name="ix_appointments_start")
     except Exception as e:  # pragma: no cover - best-effort
         logger.warning("ensure_indexes failed: %s", e)
 

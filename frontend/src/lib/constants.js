@@ -1,18 +1,18 @@
-// Shared CRM constants & style helpers (Swiss high-contrast + electric orange)
+// Shared CRM constants & visual metadata for the Latus editorial palette.
 
 export const LEAD_STATUSES = [
-  { key: "new", label: "Nuevo", color: "#52525B", bg: "#F4F4F5" },
-  { key: "contacted", label: "Contactado", color: "#1D4ED8", bg: "#EFF6FF" },
-  { key: "qualified", label: "Calificado", color: "#7C3AED", bg: "#F5F3FF" },
-  { key: "proposal", label: "Propuesta", color: "#FF4500", bg: "#FFF7ED" },
-  { key: "won", label: "Ganado", color: "#064E3B", bg: "#ECFDF5" },
-  { key: "lost", label: "Perdido", color: "#DC2626", bg: "#FEF2F2" },
+  { key: "new", label: "Nuevo", color: "#13283A", bg: "#E8EDF0" },
+  { key: "contacted", label: "Contactado", color: "#0D607A", bg: "#E2F0F3" },
+  { key: "qualified", label: "Calificado", color: "#5C9FB8", bg: "#E8F3F6" },
+  { key: "proposal", label: "Propuesta", color: "#5EA9CE", bg: "#E7F3F8" },
+  { key: "won", label: "Ganado", color: "#1997D7", bg: "#E5F3FA" },
+  { key: "lost", label: "Perdido", color: "#F44D2F", bg: "#FDEAE5" },
 ];
 
 export const CONV_STATUSES = [
-  { key: "open", label: "Abierta", color: "#064E3B", bg: "#ECFDF5" },
-  { key: "pending", label: "Pendiente", color: "#EAB308", bg: "#FEFCE8" },
-  { key: "resolved", label: "Resuelta", color: "#52525B", bg: "#F4F4F5" },
+  { key: "open", label: "Abierta", color: "#0D607A", bg: "#E2F0F3" },
+  { key: "pending", label: "Pendiente", color: "#C56A37", bg: "#F8EADF" },
+  { key: "resolved", label: "Resuelta", color: "#52616B", bg: "#E8EDF0" },
 ];
 
 export const PRIORITIES = [
