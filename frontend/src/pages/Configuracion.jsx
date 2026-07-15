@@ -8,6 +8,7 @@ import {
   Bot, Sparkles, Lightbulb, Shield, Check, CheckSquare, Package, Building2,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
+import AppointmentSettingsPanel from "@/components/AppointmentSettingsPanel";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -983,6 +984,9 @@ function BotIATab({ setTab }) {
       appointment_available_days: draft.appointment_available_days || [1, 2, 3, 4, 5],
       appointment_business_hours: draft.appointment_business_hours || "09:00-18:00",
       appointment_duration_minutes: Number(draft.appointment_duration_minutes) || 30,
+      appointment_mode: draft.appointment_mode || "people",
+      appointment_timezone: draft.appointment_timezone || "America/Argentina/Buenos_Aires",
+      appointment_services: Array.isArray(draft.appointment_services) ? draft.appointment_services : [],
     };
     
     // Construct api_keys dictionary to patch
@@ -1272,74 +1276,7 @@ function BotIATab({ setTab }) {
             />
           </div>
 
-          {/* Agendamiento de Citas */}
-          <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2 space-y-4">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <Label className="text-sm font-bold text-[#0B1B26]">Agendamiento Automático de Citas</Label>
-                <p className="text-xs text-[#888888] mt-0.5">
-                  Permite al bot agendar reuniones y citas directamente en el calendario del CRM, verificando disponibilidad y evitando superposiciones.
-                </p>
-              </div>
-              <Switch
-                data-testid="bot-setting-appointment-enabled"
-                checked={!!draft.appointment_scheduling_enabled}
-                onCheckedChange={(v) => set({ appointment_scheduling_enabled: v })}
-              />
-            </div>
-            
-            {!!draft.appointment_scheduling_enabled && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-[#E9E6DC]">
-                <div>
-                  <Label className="text-xs font-bold text-[#0B1B26] mb-2 block">Días Disponibles</Label>
-                  <div className="flex flex-wrap gap-2">
-                    {[
-                      { val: 1, label: "Lun" }, { val: 2, label: "Mar" }, { val: 3, label: "Mié" },
-                      { val: 4, label: "Jue" }, { val: 5, label: "Vie" }, { val: 6, label: "Sáb" }, { val: 0, label: "Dom" }
-                    ].map(day => {
-                      const selected = (draft.appointment_available_days || [1,2,3,4,5]).includes(day.val);
-                      return (
-                        <button
-                          key={day.val}
-                          type="button"
-                          onClick={() => {
-                            let curr = draft.appointment_available_days || [1,2,3,4,5];
-                            if (selected) curr = curr.filter(d => d !== day.val);
-                            else curr = [...curr, day.val];
-                            set({ appointment_available_days: curr });
-                          }}
-                          className={`px-2.5 py-1 text-xs font-bold rounded-sm border ${
-                            selected ? 'bg-[#0E8DDB] text-white border-[#0E8DDB]' : 'bg-white text-[#71717A] border-[#DCD9CE]'
-                          }`}
-                        >
-                          {day.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  <div>
-                    <Label className="text-xs font-bold text-[#0B1B26]">Horario Comercial (ej: 09:00-18:00)</Label>
-                    <Input
-                      value={draft.appointment_business_hours || "09:00-18:00"}
-                      onChange={(e) => set({ appointment_business_hours: e.target.value })}
-                      className="rounded-sm h-8 text-xs mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs font-bold text-[#0B1B26]">Duración de la Cita (minutos)</Label>
-                    <Input
-                      type="number"
-                      value={draft.appointment_duration_minutes || 30}
-                      onChange={(e) => set({ appointment_duration_minutes: parseInt(e.target.value, 10) || 30 })}
-                      className="rounded-sm h-8 text-xs mt-1"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          <AppointmentSettingsPanel draft={draft} onChange={set} users={usersQ.data || []} />
 
 
           {/* Handoff rules */}

@@ -89,7 +89,7 @@ class _DB:
         for n in ("users", "contacts", "leads", "conversations", "messages",
                   "notifications", "bot_events", "bot_settings", "settings",
                   "user_sessions", "wa_status", "whatsapp_events", "app_secrets",
-                  "work_areas"):
+                  "work_areas", "appointments"):
             setattr(self, n, _Coll())
 
 
@@ -469,3 +469,56 @@ class TestBotInactivityAndTransitions:
         notifs = [n for n in db.notifications.docs if n["type"] == "handoff_required"]
         assert len(notifs) == 1
         assert notifs[0]["assigned_user_id"] == "agent_finanzas"
+
+    def test_bot_uses_person_availability_and_rejects_duplicate_slot(self, pipeline_mod, monkeypatch):
+        db = _DB()
+        cv = _seed_conv(db, last_text="Quiero una reunión el lunes a las 10")
+        weekly = {str(day): ([{"start": "09:00", "end": "18:00"}] if day < 5 else []) for day in range(7)}
+        _run(db.users.insert_one({
+            "user_id": "agent_agenda",
+            "email": "agenda@latus.test",
+            "name": "Agente Agenda",
+            "role": "agent",
+            "active": True,
+            "calendar_settings": {
+                "enabled": True,
+                "timezone": "America/Argentina/Buenos_Aires",
+                "default_duration_minutes": 30,
+                "buffer_minutes": 0,
+                "weekly_schedule": weekly,
+            },
+        }))
+        _run(db.bot_settings.insert_one({
+            "_id": "default",
+            "appointment_scheduling_enabled": True,
+            "appointment_mode": "people",
+            "appointment_timezone": "America/Argentina/Buenos_Aires",
+        }))
+
+        async def fake_llm(**kwargs):
+            assert "agent_agenda" in kwargs.get("system_prompt", "")
+            return ({
+                "intent": "agendar", "confidence": 0.98,
+                "decision": "schedule_appointment",
+                "reply": "Listo, tu reunión quedó agendada.",
+                "summary": "Cliente agendó una reunión.",
+                "human_required_reason": None,
+                "next_best_action": None,
+                "lead_status_suggested": None,
+                "bot_status_suggested": None,
+                "evidence_for_status_change": "Horario confirmado por el cliente",
+                "appointment_start_time": "2026-07-20T10:00:00-03:00",
+                "appointment_assigned_to": "agent_agenda",
+                "appointment_service_id": None,
+            }, "{}")
+
+        monkeypatch.setattr(pipeline_mod, "call_llm_json", fake_llm)
+        first = _run(pipeline_mod.process_inbound(db, cv, "wamid.APPT1", wa_send=AsyncMock(return_value={})))
+        assert first["appointment_created"]
+        assert len(db.appointments.docs) == 1
+        assert db.appointments.docs[0]["assigned_to"] == "agent_agenda"
+        assert db.appointments.docs[0]["end_time"] == "2026-07-20T13:30:00+00:00"
+
+        second = _run(pipeline_mod.process_inbound(db, cv, "wamid.APPT2", wa_send=AsyncMock(return_value={})))
+        assert len(db.appointments.docs) == 1
+        assert "schedule failed" in second.get("error_message", "")

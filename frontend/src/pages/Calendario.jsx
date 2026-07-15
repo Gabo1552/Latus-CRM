@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { endOfMonth, format, isSameDay, parseISO, startOfMonth } from "date-fns";
 import { es } from "date-fns/locale";
 import {
-  Bot, Calendar as CalendarIcon, CheckCircle, Clock, MapPin, Pencil,
-  Phone, Plus, Trash2, User, Users, XCircle,
+  Bot, BriefcaseBusiness, Calendar as CalendarIcon, CalendarClock, CheckCircle, Clock, MapPin, Pencil,
+  Phone, Plus, Settings2, Trash2, User, Users, XCircle,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import { Calendar } from "@/components/ui/calendar";
@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import WeeklyScheduleEditor, { cloneWeeklySchedule } from "@/components/WeeklyScheduleEditor";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import api from "@/lib/api";
@@ -34,6 +36,7 @@ const newEventForm = (date, assignedTo) => ({
   end_time: "09:30",
   status: "scheduled",
   assigned_to: assignedTo || "",
+  service_id: "",
 });
 
 const mutationError = (error, fallback) =>
@@ -48,6 +51,8 @@ export default function Calendario() {
   const [visibleMonth, setVisibleMonth] = useState(new Date());
   const [teamFilter, setTeamFilter] = useState(canViewTeam ? "all" : user?.user_id || "");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [availabilityOpen, setAvailabilityOpen] = useState(false);
+  const [availabilityDraft, setAvailabilityDraft] = useState(null);
   const [editingAppointment, setEditingAppointment] = useState(null);
   const [form, setForm] = useState(() => newEventForm(new Date(), user?.user_id));
 
@@ -65,6 +70,20 @@ export default function Calendario() {
     }).then((response) => response.data),
   });
 
+  const { data: schedulingConfig } = useQuery({
+    queryKey: ["calendar-scheduling-config"],
+    queryFn: () => api.get("/calendar/scheduling-config").then((response) => response.data),
+  });
+
+  useEffect(() => {
+    if (schedulingConfig?.availability && availabilityDraft === null) {
+      setAvailabilityDraft({
+        ...schedulingConfig.availability,
+        weekly_schedule: cloneWeeklySchedule(schedulingConfig.availability.weekly_schedule),
+      });
+    }
+  }, [schedulingConfig, availabilityDraft]);
+
   const { data: users = [] } = useQuery({
     queryKey: ["calendar-users"],
     queryFn: () => api.get("/users").then((response) => response.data),
@@ -74,6 +93,10 @@ export default function Calendario() {
   const activeUsers = useMemo(
     () => users.filter((member) => member.active !== false),
     [users],
+  );
+  const activeServices = useMemo(
+    () => (schedulingConfig?.services || []).filter((service) => service.active !== false),
+    [schedulingConfig],
   );
 
   const refreshAppointments = () => queryClient.invalidateQueries({ queryKey: ["appointments"] });
@@ -112,6 +135,20 @@ export default function Calendario() {
     onError: (error) => mutationError(error, "No se pudo eliminar el evento"),
   });
 
+  const saveAvailability = useMutation({
+    mutationFn: (payload) => api.patch("/calendar/availability", payload),
+    onSuccess: (response) => {
+      setAvailabilityDraft({
+        ...response.data,
+        weekly_schedule: cloneWeeklySchedule(response.data.weekly_schedule),
+      });
+      queryClient.invalidateQueries({ queryKey: ["calendar-scheduling-config"] });
+      setAvailabilityOpen(false);
+      toast.success("Disponibilidad guardada");
+    },
+    onError: (error) => mutationError(error, "No se pudo guardar la disponibilidad"),
+  });
+
   const dayAppointments = useMemo(
     () => appointments
       .filter((appointment) => isSameDay(parseISO(appointment.start_time), selectedDate))
@@ -131,7 +168,10 @@ export default function Calendario() {
   const openCreateDialog = () => {
     const defaultOwner = canViewTeam && teamFilter !== "all" ? teamFilter : user?.user_id;
     setEditingAppointment(null);
-    setForm(newEventForm(selectedDate, defaultOwner));
+    setForm({
+      ...newEventForm(selectedDate, defaultOwner),
+      service_id: activeServices[0]?.id || "",
+    });
     setDialogOpen(true);
   };
 
@@ -149,6 +189,7 @@ export default function Calendario() {
       end_time: format(end, "HH:mm"),
       status: appointment.status || "scheduled",
       assigned_to: appointment.assigned_to || user?.user_id || "",
+      service_id: appointment.service_id || activeServices[0]?.id || "",
     });
     setDialogOpen(true);
   };
@@ -175,6 +216,9 @@ export default function Calendario() {
         end_time: endTime.toISOString(),
         status: form.status,
         assigned_to: form.assigned_to || user?.user_id,
+        service_id: form.event_type === "appointment" && schedulingConfig?.mode === "business"
+          ? form.service_id || null
+          : null,
       },
     });
   };
@@ -185,8 +229,26 @@ export default function Calendario() {
     }
   };
 
+  const openAvailability = () => {
+    if (schedulingConfig?.availability) {
+      setAvailabilityDraft({
+        ...schedulingConfig.availability,
+        weekly_schedule: cloneWeeklySchedule(schedulingConfig.availability.weekly_schedule),
+      });
+    }
+    setAvailabilityOpen(true);
+  };
+
   const headerActions = (
     <div className="flex items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        onClick={openAvailability}
+        className="border-latus-warm-border bg-white text-latus-ink"
+      >
+        <CalendarClock className="h-4 w-4 text-latus-blue" /> Mi disponibilidad
+      </Button>
       {canViewTeam && (
         <div className="flex items-center gap-2 rounded-md border border-latus-warm-border bg-latus-surface px-2.5 py-1.5">
           <Users className="h-4 w-4 text-latus-blue" />
@@ -327,6 +389,7 @@ export default function Calendario() {
                           {contact?.name && <span className="flex items-center gap-1.5"><User className="h-3.5 w-3.5" />{contact.name}</span>}
                           {contact?.phone && <span className="flex items-center gap-1.5"><Phone className="h-3.5 w-3.5" />{contact.phone}</span>}
                           <span className="flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" />{duration} min</span>
+                          {appointment.service_name && <span className="flex items-center gap-1.5 font-semibold text-latus-ink"><BriefcaseBusiness className="h-3.5 w-3.5 text-latus-blue" />{appointment.service_name}</span>}
                           {appointment.assigned_user?.name && <span className="flex items-center gap-1.5 font-semibold text-latus-ink"><Users className="h-3.5 w-3.5 text-latus-blue" />{appointment.assigned_user.name}</span>}
                         </div>
                       </div>
@@ -394,6 +457,25 @@ export default function Calendario() {
               <Input id="calendar-title" data-testid="calendar-event-title" value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} placeholder={form.event_type === "appointment" ? "Ej.: Reunión de seguimiento" : "Ej.: Revisión semanal"} className="mt-1" />
             </div>
 
+            {form.event_type === "appointment" && schedulingConfig?.mode === "business" && (
+              <div>
+                <Label className="text-xs font-semibold">Servicio del local</Label>
+                <Select value={form.service_id} onValueChange={(value) => setForm((current) => ({ ...current, service_id: value }))}>
+                  <SelectTrigger data-testid="calendar-event-service" className="mt-1"><SelectValue placeholder="Seleccionar servicio" /></SelectTrigger>
+                  <SelectContent>
+                    {activeServices.map((service) => (
+                      <SelectItem key={service.id} value={service.id}>
+                        {service.name} · {service.duration_minutes} min · cupo {service.max_concurrent}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {activeServices.length === 0 && (
+                  <p className="mt-1 text-xs text-amber-700">Configurá al menos un servicio activo en Configuración → Bot IA.</p>
+                )}
+              </div>
+            )}
+
             <div>
               <Label htmlFor="calendar-description" className="text-xs font-semibold">Descripción</Label>
               <Textarea id="calendar-description" data-testid="calendar-event-description" value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} placeholder="Notas, objetivo o información útil" className="mt-1 min-h-20" />
@@ -434,8 +516,64 @@ export default function Calendario() {
 
           <DialogFooter className="gap-2 sm:gap-0">
             <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>
-            <Button type="button" data-testid="save-calendar-event" onClick={submitForm} disabled={saveAppointment.isPending || !form.title.trim() || !form.assigned_to} className="bg-latus-blue text-white hover:bg-latus-blue-deep">
+            <Button type="button" data-testid="save-calendar-event" onClick={submitForm} disabled={saveAppointment.isPending || !form.title.trim() || !form.assigned_to || (form.event_type === "appointment" && schedulingConfig?.mode === "business" && !form.service_id)} className="bg-latus-blue text-white hover:bg-latus-blue-deep">
               {saveAppointment.isPending ? "Guardando..." : editingAppointment ? "Guardar cambios" : "Crear evento"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={availabilityOpen} onOpenChange={setAvailabilityOpen}>
+        <DialogContent className="max-h-[92vh] max-w-3xl overflow-y-auto rounded-xl border-latus-warm-border bg-latus-surface">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl text-latus-ink">
+              <Settings2 className="h-5 w-5 text-latus-blue" /> Mi disponibilidad
+            </DialogTitle>
+          </DialogHeader>
+
+          {availabilityDraft && (
+            <div className="space-y-5 py-2">
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-latus-warm-border bg-latus-cream/40 p-4">
+                <div>
+                  <p className="text-sm font-bold text-latus-ink">Aceptar citas en mi agenda</p>
+                  <p className="mt-1 text-xs leading-relaxed text-latus-muted">El bot y las citas manuales usarán estos horarios para evitar superposiciones.</p>
+                </div>
+                <Switch checked={!!availabilityDraft.enabled} onCheckedChange={(enabled) => setAvailabilityDraft((current) => ({ ...current, enabled }))} />
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div>
+                  <Label className="text-xs font-semibold">Zona horaria</Label>
+                  <Input value={availabilityDraft.timezone || "America/Argentina/Buenos_Aires"} onChange={(event) => setAvailabilityDraft((current) => ({ ...current, timezone: event.target.value }))} className="mt-1" />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold">Duración habitual</Label>
+                  <Input type="number" min="5" max="480" value={availabilityDraft.default_duration_minutes || 30} onChange={(event) => setAvailabilityDraft((current) => ({ ...current, default_duration_minutes: Number(event.target.value) }))} className="mt-1" />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold">Separación entre citas</Label>
+                  <Input type="number" min="0" max="120" value={availabilityDraft.buffer_minutes || 0} onChange={(event) => setAvailabilityDraft((current) => ({ ...current, buffer_minutes: Number(event.target.value) }))} className="mt-1" />
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2">
+                  <p className="text-sm font-bold text-latus-ink">Horario semanal</p>
+                  <p className="text-xs text-latus-muted">Podés crear varias franjas por día, por ejemplo mañana y tarde.</p>
+                </div>
+                <WeeklyScheduleEditor
+                  value={availabilityDraft.weekly_schedule}
+                  onChange={(weekly_schedule) => setAvailabilityDraft((current) => ({ ...current, weekly_schedule }))}
+                  disabled={!availabilityDraft.enabled}
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setAvailabilityOpen(false)}>Cancelar</Button>
+            <Button type="button" onClick={() => saveAvailability.mutate(availabilityDraft)} disabled={!availabilityDraft || saveAvailability.isPending} className="bg-latus-blue text-white hover:bg-latus-blue-deep">
+              {saveAvailability.isPending ? "Guardando..." : "Guardar disponibilidad"}
             </Button>
           </DialogFooter>
         </DialogContent>

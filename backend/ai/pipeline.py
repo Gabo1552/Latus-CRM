@@ -60,6 +60,9 @@ DEFAULT_BOT_SETTINGS = {
     "appointment_available_days": [1, 2, 3, 4, 5],  # 1=Monday, 5=Friday
     "appointment_business_hours": "09:00-18:00",
     "appointment_duration_minutes": 30,
+    "appointment_mode": "people",
+    "appointment_timezone": "America/Argentina/Buenos_Aires",
+    "appointment_services": [],
 }
 
 # Sensitive data patterns (Argentinian DNI, CBU, credit card-like)
@@ -295,42 +298,8 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         client_info = await _compile_client_info(db, conv, settings)
         appointment_context = ""
         if settings.get("appointment_scheduling_enabled"):
-            from datetime import datetime, timedelta
-            now_dt = datetime.now()
-            end_dt = now_dt + timedelta(days=7)
-            # Find appointments in next 7 days
-            appointment_query = {
-                "start_time": {"$gte": now_dt.isoformat(), "$lte": end_dt.isoformat()}
-            }
-            if conv.get("assigned_to"):
-                appointment_query["assigned_to"] = conv.get("assigned_to")
-            appts = await db.appointments.find(appointment_query, {"_id": 0}).to_list(100)
-            
-            avail_days = settings.get("appointment_available_days") or [1, 2, 3, 4, 5]
-            biz_hours = settings.get("appointment_business_hours") or "09:00-18:00"
-            duration = settings.get("appointment_duration_minutes") or 30
-            
-            days_map = {0: "Lunes", 1: "Martes", 2: "Miércoles", 3: "Jueves", 4: "Viernes", 5: "Sábado", 6: "Domingo"}
-            avail_days_str = ", ".join(days_map.get(d, str(d)) for d in avail_days)
-            
-            appt_lines = [f"- {a.get('start_time')} a {a.get('end_time')} ({a.get('title')})" for a in appts]
-            booked_str = "\n".join(appt_lines) if appt_lines else "Ninguna cita agendada en los próximos 7 días."
-            
-            appointment_context = f"""[Módulo de Agendamiento Activo]
-El bot puede agendar reuniones/citas.
-- Días hábiles configurados: {avail_days_str}
-- Horario comercial: {biz_hours}
-- Duración por cita: {duration} minutos
-- Fecha y hora actual del sistema: {now_dt.isoformat()}
-
-Citas ya ocupadas (próximos 7 días):
-{booked_str}
-
-Reglas para agendar:
-1. Solo agendar en los días hábiles y horarios comerciales especificados.
-2. Evitar superposición con citas ya ocupadas.
-3. Si el cliente acepta un horario, devuelve "decision": "schedule_appointment" y "appointment_start_time" con la hora ISO-8601 en la que empieza la cita.
-"""
+            from utils.scheduling import build_appointment_context
+            appointment_context = await build_appointment_context(db, conv, settings)
 
         sp = build_system_prompt(tone=settings["tone"],
                                  company_context=merged_cc,
@@ -461,28 +430,68 @@ Reglas para agendar:
             appt_start = parsed.get("appointment_start_time")
             if appt_start and settings.get("appointment_scheduling_enabled"):
                 try:
-                    from datetime import datetime, timedelta
-                    # Parse ISO to naive datetime
-                    start_dt = datetime.fromisoformat(appt_start.replace("Z", ""))
-                    duration = settings.get("appointment_duration_minutes") or 30
+                    from datetime import timedelta
+                    from zoneinfo import ZoneInfo
+                    from utils.scheduling import (
+                        appointment_duration_minutes,
+                        get_business_service,
+                        get_person_availability,
+                        parse_datetime,
+                        validate_appointment_slot,
+                    )
+                    mode = settings.get("appointment_mode") or "people"
+                    assigned_to = parsed.get("appointment_assigned_to") or conv.get("assigned_to")
+                    service_id = parsed.get("appointment_service_id") if mode == "business" else None
+                    if mode == "business":
+                        resource = get_business_service(settings, service_id)
+                        timezone_name = resource["timezone"]
+                    else:
+                        _, resource = await get_person_availability(db, assigned_to, settings)
+                        timezone_name = resource["timezone"]
+                    duration = await appointment_duration_minutes(
+                        db,
+                        settings,
+                        mode=mode,
+                        assigned_to=assigned_to,
+                        service_id=service_id,
+                    )
+                    start_dt = parse_datetime(appt_start, timezone_name)
                     end_dt = start_dt + timedelta(minutes=duration)
-                    
-                    # Insert in DB
+                    slot = await validate_appointment_slot(
+                        db,
+                        settings,
+                        start_time=start_dt,
+                        end_time=end_dt,
+                        mode=mode,
+                        assigned_to=assigned_to,
+                        service_id=service_id,
+                    )
+
                     appt_doc = {
                         "id": "appt_" + uuid.uuid4().hex[:12],
                         "contact_id": conv.get("contact_id"),
                         "lead_id": conv.get("lead_id"),
-                        "title": f"Cita con {client_info.splitlines()[0] if client_info else 'Cliente'}",
+                        "title": (
+                            f"{slot['resource_name']} · {client_info.splitlines()[0]}"
+                            if mode == "business" and client_info
+                            else f"Cita con {client_info.splitlines()[0] if client_info else 'Cliente'}"
+                        ),
                         "event_type": "appointment",
-                        "start_time": start_dt.isoformat(),
-                        "end_time": end_dt.isoformat(),
+                        "start_time": slot["start_time"],
+                        "end_time": slot["end_time"],
                         "status": "scheduled",
-                        "assigned_to": conv.get("assigned_to"),
+                        "assigned_to": assigned_to,
+                        "scheduling_mode": mode,
+                        "service_id": service_id,
+                        "service_name": slot["resource_name"] if mode == "business" else None,
                         "created_by_bot": True,
                         "created_at": _now_iso(),
                     }
                     await db.appointments.insert_one(appt_doc)
                     event["appointment_created"] = appt_doc["id"]
+                    event["appointment_resource_id"] = slot["resource_id"]
+                    if mode == "people" and assigned_to and not conv.get("assigned_to"):
+                        conv_set["assigned_to"] = assigned_to
                     
                     # Send notification to assigned agent or generic
                     target_uid = conv.get("assigned_to")
@@ -490,7 +499,7 @@ Reglas para agendar:
                     notif_payload = (
                         "appointment_created",
                         f"Nueva cita agendada: {cname}",
-                        f"El bot agendó una cita para el {start_dt.strftime('%d/%m %H:%M')}"
+                        f"El bot agendó una cita para el {start_dt.astimezone(ZoneInfo(slot['timezone'])).strftime('%d/%m %H:%M')}"
                     )
                     
                     # If we need to send a confirmation reply

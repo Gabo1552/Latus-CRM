@@ -387,6 +387,9 @@ class Appointment(BaseModel):
     end_time: str
     status: str = "scheduled"  # scheduled, completed, cancelled
     assigned_to: Optional[str] = None
+    scheduling_mode: str = "people"  # people, business
+    service_id: Optional[str] = None
+    service_name: Optional[str] = None
     created_by_bot: bool = False
     created_by: Optional[str] = None
     created_by_name: Optional[str] = None
@@ -406,6 +409,7 @@ class AppointmentCreate(BaseModel):
     end_time: str
     status: Literal["scheduled", "completed", "cancelled"] = "scheduled"
     assigned_to: Optional[str] = None
+    service_id: Optional[str] = None
 
 
 class AppointmentUpdate(BaseModel):
@@ -419,6 +423,15 @@ class AppointmentUpdate(BaseModel):
     end_time: Optional[str] = None
     status: Optional[Literal["scheduled", "completed", "cancelled"]] = None
     assigned_to: Optional[str] = None
+    service_id: Optional[str] = None
+
+
+class CalendarAvailabilityUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    timezone: Optional[str] = None
+    default_duration_minutes: Optional[int] = None
+    buffer_minutes: Optional[int] = None
+    weekly_schedule: Optional[dict] = None
 
 
 class Note(BaseModel):
@@ -2767,6 +2780,9 @@ class BotSettingsUpdate(BaseModel):
     appointment_available_days: Optional[List[int]] = None
     appointment_business_hours: Optional[str] = None
     appointment_duration_minutes: Optional[int] = None
+    appointment_mode: Optional[Literal["people", "business"]] = None
+    appointment_timezone: Optional[str] = None
+    appointment_services: Optional[List[dict]] = None
 
 
 _ALLOWED_BOT_MODELS = {
@@ -2881,6 +2897,42 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
                 update["bot_inactive_close_hours"] = val
             except Exception:
                 raise HTTPException(400, "El cierre automático debe ser entre 1 y 168 horas")
+    if "appointment_timezone" in update or "appointment_services" in update:
+        from utils.scheduling import SchedulingError, normalize_services, validate_timezone
+        current = await db.bot_settings.find_one({"_id": "default"}, {"_id": 0}) or {}
+        try:
+            timezone_name = validate_timezone(
+                update.get("appointment_timezone") or current.get("appointment_timezone")
+            )
+            update["appointment_timezone"] = timezone_name
+            if "appointment_services" in update:
+                update["appointment_services"] = normalize_services(
+                    update["appointment_services"], timezone_name
+                )
+        except SchedulingError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if "appointment_duration_minutes" in update:
+        duration = int(update["appointment_duration_minutes"])
+        if not (5 <= duration <= 480):
+            raise HTTPException(400, "La duración debe ser de 5 a 480 minutos")
+        update["appointment_duration_minutes"] = duration
+    if {"appointment_scheduling_enabled", "appointment_mode", "appointment_services"}.intersection(update):
+        from utils.scheduling import SchedulingError, normalize_services
+        current = await db.bot_settings.find_one({"_id": "default"}, {"_id": 0}) or {}
+        effective = {**current, **update}
+        if effective.get("appointment_scheduling_enabled") and effective.get("appointment_mode") == "business":
+            try:
+                services = normalize_services(
+                    effective.get("appointment_services") or [],
+                    effective.get("appointment_timezone"),
+                )
+            except SchedulingError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not any(service["active"] for service in services):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Agregá al menos un servicio activo antes de habilitar las citas en el local",
+                )
     if "api_keys" in update:
         api_keys = update.pop("api_keys")
         if isinstance(api_keys, dict):
@@ -3491,6 +3543,12 @@ async def delete_task(task_id: str, user: User = Depends(get_current_user)):
 # Appointments
 # ---------------------------------------------------------------------------
 
+async def _effective_bot_settings() -> dict:
+    from ai.pipeline import DEFAULT_BOT_SETTINGS
+    doc = await db.bot_settings.find_one({"_id": "default"}, {"_id": 0}) or {}
+    return {**DEFAULT_BOT_SETTINGS, **doc}
+
+
 def _is_calendar_manager(user: User) -> bool:
     return _normalize_role(user.role) in ("admin", "supervisor")
 
@@ -3532,6 +3590,150 @@ async def _get_editable_appointment(appt_id: str, user: User) -> dict:
     if not _is_calendar_manager(user) and doc.get("assigned_to") != user.user_id:
         raise HTTPException(status_code=403, detail="No podés modificar el calendario de otro usuario")
     return doc
+
+
+async def _calendar_availability_for(user_id: str, settings: dict) -> tuple[dict, dict]:
+    from utils.scheduling import SchedulingError, normalize_person_availability
+    user_doc = await db.users.find_one(
+        {"user_id": user_id, "active": {"$ne": False}}, {"_id": 0}
+    )
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado o inactivo")
+    try:
+        availability = normalize_person_availability(user_doc.get("calendar_settings"), settings)
+    except SchedulingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return user_doc, availability
+
+
+async def _save_calendar_availability(user_id: str, payload: CalendarAvailabilityUpdate) -> dict:
+    from utils.scheduling import SchedulingError, normalize_person_availability
+    settings = await _effective_bot_settings()
+    user_doc, current = await _calendar_availability_for(user_id, settings)
+    merged = {**current, **payload.model_dump(exclude_unset=True)}
+    try:
+        availability = normalize_person_availability(merged, settings)
+    except (SchedulingError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.users.update_one({"user_id": user_id}, {"$set": {"calendar_settings": availability}})
+    return {
+        "user_id": user_id,
+        "name": user_doc.get("name") or user_doc.get("email") or "Usuario",
+        **availability,
+    }
+
+
+@api_router.get("/calendar/scheduling-config")
+async def get_calendar_scheduling_config(user: User = Depends(get_current_user)):
+    from utils.scheduling import normalize_services
+    settings = await _effective_bot_settings()
+    _, availability = await _calendar_availability_for(user.user_id, settings)
+    return {
+        "enabled": bool(settings.get("appointment_scheduling_enabled")),
+        "mode": settings.get("appointment_mode") or "people",
+        "timezone": settings.get("appointment_timezone"),
+        "services": normalize_services(
+            settings.get("appointment_services") or [], settings.get("appointment_timezone")
+        ),
+        "availability": availability,
+    }
+
+
+@api_router.get("/calendar/availability")
+async def get_calendar_availability(user: User = Depends(get_current_user)):
+    settings = await _effective_bot_settings()
+    user_doc, availability = await _calendar_availability_for(user.user_id, settings)
+    return {"user_id": user.user_id, "name": user_doc.get("name"), **availability}
+
+
+@api_router.patch("/calendar/availability")
+async def patch_calendar_availability(
+    payload: CalendarAvailabilityUpdate,
+    user: User = Depends(get_current_user),
+):
+    return await _save_calendar_availability(user.user_id, payload)
+
+
+@api_router.get("/calendar/team-availability")
+async def get_team_calendar_availability(user: User = Depends(get_current_user)):
+    if not _is_calendar_manager(user):
+        raise HTTPException(status_code=403, detail="Solo administradores y supervisores pueden ver la disponibilidad del equipo")
+    settings = await _effective_bot_settings()
+    members = await db.users.find({"active": {"$ne": False}}, {"_id": 0}).sort("name", 1).to_list(500)
+    result = []
+    for member in members:
+        from utils.scheduling import normalize_person_availability
+        availability = normalize_person_availability(member.get("calendar_settings"), settings)
+        result.append({
+            "user_id": member.get("user_id"),
+            "name": member.get("name") or member.get("email") or "Usuario",
+            "role": _normalize_role(member.get("role")),
+            **availability,
+        })
+    return result
+
+
+@api_router.patch("/calendar/team-availability/{user_id}")
+async def patch_team_calendar_availability(
+    user_id: str,
+    payload: CalendarAvailabilityUpdate,
+    user: User = Depends(get_current_user),
+):
+    if not _is_calendar_manager(user):
+        raise HTTPException(status_code=403, detail="Solo administradores y supervisores pueden configurar al equipo")
+    return await _save_calendar_availability(user_id, payload)
+
+
+async def _apply_scheduling_rules(
+    data: dict,
+    *,
+    exclude_appointment_id: str | None = None,
+) -> dict:
+    settings = await _effective_bot_settings()
+    mode = settings.get("appointment_mode") or "people"
+    if data.get("event_type") != "appointment":
+        data["scheduling_mode"] = mode
+        data["service_id"] = None
+        data["service_name"] = None
+        return data
+    if data.get("status") != "scheduled":
+        return data
+    data["scheduling_mode"] = mode
+    if not settings.get("appointment_scheduling_enabled"):
+        if mode == "people":
+            data["service_id"] = None
+            data["service_name"] = None
+        return data
+    from utils.scheduling import (
+        SchedulingError,
+        get_business_service,
+        parse_datetime,
+        validate_appointment_slot,
+    )
+    try:
+        if mode == "business":
+            service = get_business_service(settings, data.get("service_id"))
+            normalized_start = parse_datetime(data["start_time"], service["timezone"])
+            data["end_time"] = (
+                normalized_start + timedelta(minutes=int(service["duration_minutes"]))
+            ).isoformat()
+        slot = await validate_appointment_slot(
+            db,
+            settings,
+            start_time=data["start_time"],
+            end_time=data["end_time"],
+            mode=mode,
+            assigned_to=data.get("assigned_to"),
+            service_id=data.get("service_id"),
+            exclude_appointment_id=exclude_appointment_id,
+        )
+    except SchedulingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    data["start_time"] = slot["start_time"]
+    data["end_time"] = slot["end_time"]
+    data["service_id"] = slot["resource_id"] if mode == "business" else None
+    data["service_name"] = slot["resource_name"] if mode == "business" else None
+    return data
 
 @api_router.get("/appointments")
 async def list_appointments(
@@ -3595,6 +3797,7 @@ async def create_appointment(payload: AppointmentCreate, user: User = Depends(ge
         requested_assignee if _is_calendar_manager(user) else user.user_id
     )
     _validate_appointment_times(data["start_time"], data["end_time"])
+    data = await _apply_scheduling_rules(data)
     data["created_by_bot"] = False
     data["created_by"] = user.user_id
     data["created_by_name"] = user.name
@@ -3619,6 +3822,13 @@ async def update_appointment(appt_id: str, payload: AppointmentUpdate, user: Use
     start_time = update.get("start_time", existing.get("start_time"))
     end_time = update.get("end_time", existing.get("end_time"))
     _validate_appointment_times(start_time, end_time)
+    scheduling_fields = {"start_time", "end_time", "assigned_to", "service_id", "event_type"}
+    should_revalidate = bool(scheduling_fields.intersection(update)) or update.get("status") == "scheduled"
+    if should_revalidate:
+        candidate = {**existing, **update, "start_time": start_time, "end_time": end_time}
+        candidate = await _apply_scheduling_rules(candidate, exclude_appointment_id=appt_id)
+        for key in ("start_time", "end_time", "scheduling_mode", "service_id", "service_name"):
+            update[key] = candidate.get(key)
     update["updated_by"] = user.user_id
     update["updated_at"] = now_iso()
     await db.appointments.update_one({"id": appt_id}, {"$set": update})

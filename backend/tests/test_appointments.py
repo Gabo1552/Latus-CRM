@@ -187,3 +187,167 @@ def test_rejects_invalid_time_range(calendar_api):
     })
     assert response.status_code == 400
     assert "hora de fin" in response.json()["detail"]
+
+
+def _weekly(start="09:00", end="18:00"):
+    return {
+        "0": [{"start": start, "end": end}],
+        "1": [{"start": start, "end": end}],
+        "2": [{"start": start, "end": end}],
+        "3": [{"start": start, "end": end}],
+        "4": [{"start": start, "end": end}],
+        "5": [],
+        "6": [],
+    }
+
+
+def test_each_user_can_configure_own_availability(calendar_api):
+    _, fake, client = calendar_api
+    payload = {
+        "enabled": True,
+        "timezone": "America/Argentina/Buenos_Aires",
+        "default_duration_minutes": 45,
+        "buffer_minutes": 15,
+        "weekly_schedule": _weekly("10:00", "17:00"),
+    }
+    response = client.patch(
+        "/api/calendar/availability", headers=_headers("T-A1"), json=payload
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["default_duration_minutes"] == 45
+    assert response.json()["weekly_schedule"]["0"] == [{"start": "10:00", "end": "17:00"}]
+
+    stored = _run(fake.users.find_one({"user_id": "u_agent_1"}))
+    assert stored["calendar_settings"]["buffer_minutes"] == 15
+
+    forbidden = client.get("/api/calendar/team-availability", headers=_headers("T-A1"))
+    assert forbidden.status_code == 403
+    team = client.get("/api/calendar/team-availability", headers=_headers("T-SUP"))
+    assert team.status_code == 200
+    assert any(item["user_id"] == "u_agent_1" for item in team.json())
+
+
+def test_people_mode_enforces_person_hours_and_conflicts(calendar_api):
+    _, fake, client = calendar_api
+    _run(fake.bot_settings.insert_one({
+        "_id": "default",
+        "appointment_scheduling_enabled": True,
+        "appointment_mode": "people",
+        "appointment_timezone": "America/Argentina/Buenos_Aires",
+    }))
+    _run(fake.users.update_one({"user_id": "u_agent_1"}, {"$set": {"calendar_settings": {
+        "enabled": True,
+        "timezone": "America/Argentina/Buenos_Aires",
+        "default_duration_minutes": 30,
+        "buffer_minutes": 0,
+        "weekly_schedule": _weekly(),
+    }}}))
+
+    first = client.post("/api/appointments", headers=_headers("T-A1"), json={
+        "title": "Primera cita",
+        "start_time": "2026-07-20T13:00:00+00:00",
+        "end_time": "2026-07-20T13:30:00+00:00",
+    })
+    assert first.status_code == 200, first.text
+
+    overlap = client.post("/api/appointments", headers=_headers("T-A1"), json={
+        "title": "Cita superpuesta",
+        "start_time": "2026-07-20T13:15:00+00:00",
+        "end_time": "2026-07-20T13:45:00+00:00",
+    })
+    assert overlap.status_code == 409
+    assert "otra cita" in overlap.json()["detail"]
+
+    outside = client.post("/api/appointments", headers=_headers("T-A1"), json={
+        "title": "Fuera de horario",
+        "start_time": "2026-07-20T23:00:00+00:00",
+        "end_time": "2026-07-20T23:30:00+00:00",
+    })
+    assert outside.status_code == 409
+    assert "fuera de la disponibilidad" in outside.json()["detail"]
+
+    changed_settings = _run(fake.users.find_one({"user_id": "u_agent_1"}))["calendar_settings"]
+    changed_settings["enabled"] = False
+    _run(fake.users.update_one({"user_id": "u_agent_1"}, {"$set": {"calendar_settings": changed_settings}}))
+    # Non-scheduling edits remain possible even if availability changes later.
+    renamed = client.patch(
+        f"/api/appointments/{first.json()['id']}",
+        headers=_headers("T-A1"),
+        json={"title": "Cita renombrada"},
+    )
+    assert renamed.status_code == 200, renamed.text
+
+
+def test_business_mode_enforces_service_duration_and_simultaneous_capacity(calendar_api):
+    _, fake, client = calendar_api
+    _run(fake.bot_settings.insert_one({
+        "_id": "default",
+        "appointment_scheduling_enabled": True,
+        "appointment_mode": "business",
+        "appointment_timezone": "America/Argentina/Buenos_Aires",
+        "appointment_services": [{
+            "id": "asesoria",
+            "name": "Asesoría",
+            "description": "Atención en el local",
+            "active": True,
+            "duration_minutes": 60,
+            "max_concurrent": 2,
+            "timezone": "America/Argentina/Buenos_Aires",
+            "weekly_schedule": _weekly(),
+        }],
+    }))
+
+    bodies = []
+    for owner in ("u_agent_1", "u_agent_2"):
+        response = client.post("/api/appointments", headers=_headers("T-ADMIN"), json={
+            "title": f"Asesoría {owner}",
+            "service_id": "asesoria",
+            "assigned_to": owner,
+            "start_time": "2026-07-20T13:00:00+00:00",
+            "end_time": "2026-07-20T13:15:00+00:00",
+        })
+        assert response.status_code == 200, response.text
+        bodies.append(response.json())
+
+    assert bodies[0]["service_name"] == "Asesoría"
+    assert bodies[0]["scheduling_mode"] == "business"
+    assert bodies[0]["end_time"] == "2026-07-20T14:00:00+00:00"
+
+    full = client.post("/api/appointments", headers=_headers("T-ADMIN"), json={
+        "title": "Sin cupo",
+        "service_id": "asesoria",
+        "assigned_to": "u_admin",
+        "start_time": "2026-07-20T13:30:00+00:00",
+        "end_time": "2026-07-20T14:00:00+00:00",
+    })
+    assert full.status_code == 409
+    assert "máximo de 2" in full.json()["detail"]
+
+
+def test_business_mode_configuration_requires_an_active_service(calendar_api):
+    _, _, client = calendar_api
+    invalid = client.patch("/api/admin/bot-settings", headers=_headers("T-ADMIN"), json={
+        "appointment_scheduling_enabled": True,
+        "appointment_mode": "business",
+        "appointment_services": [],
+    })
+    assert invalid.status_code == 400
+    assert "servicio activo" in invalid.json()["detail"]
+
+    valid = client.patch("/api/admin/bot-settings", headers=_headers("T-ADMIN"), json={
+        "appointment_scheduling_enabled": True,
+        "appointment_mode": "business",
+        "appointment_timezone": "America/Argentina/Buenos_Aires",
+        "appointment_services": [{
+            "id": "evaluacion",
+            "name": "Evaluación",
+            "active": True,
+            "duration_minutes": 45,
+            "max_concurrent": 3,
+            "weekly_schedule": _weekly("08:00", "16:00"),
+        }],
+    })
+    assert valid.status_code == 200, valid.text
+    service = valid.json()["appointment_services"][0]
+    assert service["id"] == "evaluacion"
+    assert service["max_concurrent"] == 3

@@ -22,7 +22,9 @@ JSON_SCHEMA_HINT = """Respond ONLY with a valid JSON object with this exact shap
   "bot_status_suggested": "bot_activo|esperando_cliente|requiere_humano|cerrada|null",
   "evidence_for_status_change": "razon concreta o null",
   "target_work_area": "ID de área de trabajo o null",
-  "appointment_start_time": "ISO-8601 (YYYY-MM-DDTHH:MM:00) o null"
+  "appointment_start_time": "ISO-8601 con zona horaria o null",
+  "appointment_assigned_to": "ID exacto de la persona o null",
+  "appointment_service_id": "ID exacto del servicio o null"
 }"""
 
 
