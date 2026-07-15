@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import {
   Users as UsersIcon, MessageSquareText, Plus, MoreHorizontal, Search,
   Copy, RefreshCw, CheckCircle2, AlertTriangle, KeyRound, Trash2, Eye, EyeOff,
-  Bot, Sparkles, Lightbulb, Shield, Check, CheckSquare, Package, Building2,
+  Bot, CalendarClock, Sparkles, Lightbulb, Shield, Check, CheckSquare, Package, Building2,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import AppointmentSettingsPanel from "@/components/AppointmentSettingsPanel";
@@ -900,6 +900,81 @@ function WhatsAppTab() {
 // =============================================================================
 // BOT IA TAB
 // =============================================================================
+function AgendaTab() {
+  const qc = useQueryClient();
+  const settingsQ = useQuery({
+    queryKey: ["admin-bot-settings"],
+    queryFn: () => api.get("/admin/bot-settings").then((response) => response.data),
+  });
+  const usersQ = useQuery({
+    queryKey: ["users"],
+    queryFn: () => api.get("/users").then((response) => response.data),
+  });
+  const [draft, setDraft] = useState(null);
+
+  useEffect(() => {
+    if (settingsQ.data && draft === null) setDraft({ ...settingsQ.data });
+  }, [settingsQ.data, draft]);
+
+  const save = useMutation({
+    mutationFn: () => api.patch("/admin/bot-settings", {
+      appointment_scheduling_enabled: !!draft.appointment_scheduling_enabled,
+      appointment_mode: draft.appointment_mode || "people",
+      appointment_timezone: draft.appointment_timezone || "America/Argentina/Buenos_Aires",
+      appointment_services: Array.isArray(draft.appointment_services) ? draft.appointment_services : [],
+      appointment_available_days: draft.appointment_available_days || [1, 2, 3, 4, 5],
+      appointment_business_hours: draft.appointment_business_hours || "09:00-18:00",
+      appointment_duration_minutes: Number(draft.appointment_duration_minutes) || 30,
+    }),
+    onSuccess: (response) => {
+      setDraft({ ...response.data });
+      qc.invalidateQueries({ queryKey: ["admin-bot-settings"] });
+      qc.invalidateQueries({ queryKey: ["calendar-scheduling-config"] });
+      toast.success("Configuración de agenda guardada");
+    },
+    onError: (error) => toast.error(error.response?.data?.detail || "No se pudo guardar la configuración de agenda"),
+  });
+
+  if (settingsQ.isPending || usersQ.isPending || !draft) {
+    return <div className="text-[#888888]">Cargando configuración de agenda…</div>;
+  }
+
+  const dirty = [
+    "appointment_scheduling_enabled", "appointment_mode", "appointment_timezone",
+    "appointment_services", "appointment_available_days", "appointment_business_hours",
+    "appointment_duration_minutes",
+  ].some((key) => JSON.stringify(draft[key]) !== JSON.stringify(settingsQ.data?.[key]));
+
+  return (
+    <div className="space-y-5" data-testid="agenda-settings-tab">
+      <div className="rounded-lg border border-latus-warm-border bg-white p-5">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-latus-ice">
+            <CalendarClock className="h-5 w-5 text-latus-blue" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold tracking-tight text-latus-ink">Configuración de agenda</h2>
+            <p className="mt-1 text-sm text-latus-muted">Elegí si las citas son con integrantes del equipo o con servicios del local. Estas reglas son las que consulta el bot.</p>
+          </div>
+        </div>
+      </div>
+
+      <AppointmentSettingsPanel
+        draft={draft}
+        onChange={(patch) => setDraft((current) => ({ ...current, ...patch }))}
+        users={usersQ.data || []}
+      />
+
+      <div className="sticky bottom-4 flex justify-end rounded-lg border border-latus-warm-border bg-white/95 p-3 shadow-lg backdrop-blur">
+        <Button type="button" onClick={() => save.mutate()} disabled={!dirty || save.isPending} className="bg-latus-blue text-white hover:bg-latus-blue-deep">
+          {save.isPending ? "Guardando…" : "Guardar configuración de agenda"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+
 function BotIATab({ setTab }) {
   const qc = useQueryClient();
   const q = useQuery({
@@ -1276,7 +1351,18 @@ function BotIATab({ setTab }) {
             />
           </div>
 
-          <AppointmentSettingsPanel draft={draft} onChange={set} users={usersQ.data || []} />
+          <div className="flex flex-col justify-between gap-3 rounded-sm border border-[#E9E6DC] bg-latus-cream/45 p-4 md:col-span-2 sm:flex-row sm:items-center">
+            <div className="flex items-start gap-3">
+              <CalendarClock className="mt-0.5 h-5 w-5 text-latus-blue" />
+              <div>
+                <Label className="text-sm font-bold text-[#0B1B26]">Agenda y disponibilidad</Label>
+                <p className="mt-0.5 text-xs text-[#888888]">Los horarios de personas, servicios y cupos se administran en la sección Agenda.</p>
+              </div>
+            </div>
+            <Button type="button" variant="outline" onClick={() => setTab("agenda")} className="border-latus-warm-border bg-white">
+              Abrir configuración de agenda
+            </Button>
+          </div>
 
 
           {/* Handoff rules */}
@@ -2922,7 +3008,7 @@ function EmailSettingsTab() {
 // =============================================================================
 export default function Configuracion() {
   const { user, loading } = useAuth();
-  const [tab, setTab] = useState("users");
+  const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get("tab") || "users");
 
   if (loading) return null;
   if (!user) return <Navigate to="/" replace />;
@@ -2969,6 +3055,7 @@ export default function Configuracion() {
   const tabs = [];
   if (hasPerm("manage_users"))      tabs.push({ key: "users",    label: "Usuarios",            icon: UsersIcon,        testid: "tab-users" });
   if (hasPerm("configure_whatsapp")) tabs.push({ key: "whatsapp", label: "WhatsApp",            icon: MessageSquareText, testid: "tab-whatsapp" });
+  if (hasPerm("configure_ai"))      tabs.push({ key: "agenda",   label: "Agenda",              icon: CalendarClock,    testid: "tab-agenda" });
   if (hasPerm("configure_ai"))      tabs.push({ key: "bot",      label: "Bot IA",              icon: Bot,              testid: "tab-bot-ia" });
   if (hasPerm("configure_ai"))      tabs.push({ key: "ai",       label: "IA y automatización", icon: Sparkles,         testid: "tab-ai-auto" });
   if (hasPerm("manage_users"))      tabs.push({ key: "roles",    label: "Roles y Accesos",     icon: Shield,           testid: "tab-roles" });
@@ -2982,13 +3069,13 @@ export default function Configuracion() {
   return (
     <AppLayout title="Configuración">
       <div className="px-6 py-6 max-w-6xl">
-        <div className="flex items-center gap-2 mb-6 border-b border-[#E9E6DC]">
+        <div className="mb-6 flex items-center gap-2 overflow-x-auto border-b border-[#E9E6DC]">
           {tabs.map((t) => (
             <button
               key={t.key}
               data-testid={t.testid}
               onClick={() => setTab(t.key)}
-              className={`px-4 py-2.5 -mb-px text-sm font-bold border-b-2 transition-colors ${
+              className={`-mb-px shrink-0 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-bold transition-colors ${
                 activeTab === t.key
                   ? "border-[#0E8DDB] text-[#0B1B26]"
                   : "border-transparent text-[#888888] hover:text-[#0B1B26]"
@@ -3000,6 +3087,7 @@ export default function Configuracion() {
         </div>
         {activeTab === "users" && <UsersTab me={user} />}
         {activeTab === "whatsapp" && <WhatsAppTab />}
+        {activeTab === "agenda" && <AgendaTab />}
         {activeTab === "bot" && <BotIATab setTab={setTab} />}
         {activeTab === "ai" && <AIAutoTab />}
         {activeTab === "roles" && <RolesTab />}

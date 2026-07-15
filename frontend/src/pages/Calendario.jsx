@@ -47,6 +47,7 @@ export default function Calendario() {
   const queryClient = useQueryClient();
   const role = user?.role === "sales_agent" ? "agent" : user?.role;
   const canViewTeam = role === "admin" || role === "supervisor";
+  const canConfigureAgenda = (user?.permissions || []).includes("configure_ai");
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [visibleMonth, setVisibleMonth] = useState(new Date());
   const [teamFilter, setTeamFilter] = useState(canViewTeam ? "all" : user?.user_id || "");
@@ -300,6 +301,34 @@ export default function Calendario() {
                 day_selected: "bg-latus-blue text-white hover:bg-latus-blue hover:text-white focus:bg-latus-blue focus:text-white",
               }}
             />
+          </div>
+
+          <div className="latus-card border-latus-blue/20 bg-latus-ice/25 p-5" data-testid="calendar-settings-card">
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white shadow-sm">
+                <Settings2 className="h-4 w-4 text-latus-blue" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-latus-ink">Configuración de agenda</h3>
+                <p className="mt-1 text-xs leading-relaxed text-latus-muted">
+                  {schedulingConfig?.enabled
+                    ? `Agenda activa · ${schedulingConfig.mode === "business" ? "servicios del local" : "citas con personas"}`
+                    : "Definí tus días y horarios disponibles para recibir citas."}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-2">
+              <Button type="button" onClick={openAvailability} className="w-full bg-latus-blue text-white hover:bg-latus-blue-deep">
+                <CalendarClock className="h-4 w-4" /> Configurar mi horario
+              </Button>
+              {canConfigureAgenda && (
+                <Button type="button" variant="outline" asChild className="w-full border-latus-warm-border bg-white text-latus-ink">
+                  <a href="/configuracion?tab=agenda">
+                    <BriefcaseBusiness className="h-4 w-4" /> Personas, servicios y cupos
+                  </a>
+                </Button>
+              )}
+            </div>
           </div>
 
           <div className="latus-card p-5">
