@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import WeeklyScheduleEditor, { cloneWeeklySchedule, DEFAULT_WEEKLY_SCHEDULE } from "@/components/WeeklyScheduleEditor";
 
 const makeService = () => ({
@@ -66,11 +67,19 @@ export default function AppointmentSettingsPanel({ draft, onChange, users = [] }
   );
 
   return (
-    <div className="space-y-4 rounded-sm border border-[#E9E6DC] p-4 md:col-span-2">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <Label className="text-sm font-bold text-[#0B1B26]">Agendamiento automático</Label>
-          <p className="mt-0.5 text-xs text-[#888888]">El bot verifica horarios, reservas existentes y cupos antes de crear una cita.</p>
+    <div className="space-y-4 md:col-span-2">
+      <div className="flex items-start justify-between gap-4 rounded-xl border border-latus-warm-border bg-white p-5">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-latus-ice">
+            <CalendarClock className="h-5 w-5 text-latus-blue" />
+          </div>
+          <div>
+            <Label className="text-sm font-bold text-latus-ink">Agenda para citas</Label>
+            <p className="mt-1 text-xs leading-relaxed text-latus-muted">Al activarla, el bot verifica horarios, reservas y cupos antes de confirmar.</p>
+            <span className={`mt-2 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${draft.appointment_scheduling_enabled ? "bg-emerald-50 text-emerald-700" : "bg-latus-cream text-latus-muted"}`}>
+              {draft.appointment_scheduling_enabled ? "Activa" : "Desactivada"}
+            </span>
+          </div>
         </div>
         <Switch
           data-testid="bot-setting-appointment-enabled"
@@ -79,142 +88,176 @@ export default function AppointmentSettingsPanel({ draft, onChange, users = [] }
         />
       </div>
 
-      {!!draft.appointment_scheduling_enabled && (
-        <div className="space-y-5 border-t border-[#E9E6DC] pt-4">
-          <div className="grid gap-4 md:grid-cols-[1fr_1fr]">
-            <div>
-              <Label className="text-xs font-bold text-[#0B1B26]">¿Qué tipo de citas vas a recibir?</Label>
-              <Select value={mode} onValueChange={(appointment_mode) => onChange({ appointment_mode })}>
-                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="people">Citas con personas</SelectItem>
-                  <SelectItem value="business">Citas en el local</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs font-bold text-[#0B1B26]">Zona horaria general</Label>
-              <Input
-                value={draft.appointment_timezone || "America/Argentina/Buenos_Aires"}
-                onChange={(event) => onChange({ appointment_timezone: event.target.value })}
-                className="mt-1"
-              />
-            </div>
-          </div>
-
-          {mode === "people" ? (
-            <div className="space-y-4 rounded-lg bg-latus-cream/50 p-4">
-              <div className="flex items-start gap-3">
-                <UserRound className="mt-0.5 h-5 w-5 text-latus-blue" />
+      {!draft.appointment_scheduling_enabled ? (
+        <div className="rounded-xl border border-dashed border-latus-warm-border bg-latus-cream/35 p-7 text-center">
+          <p className="text-sm font-semibold text-latus-ink">Activá la agenda para configurar sus reglas</p>
+          <p className="mt-1 text-xs text-latus-muted">Los eventos manuales internos seguirán disponibles aunque esta opción esté desactivada.</p>
+        </div>
+      ) : (
+        <Accordion type="single" collapsible defaultValue="general" className="space-y-3">
+          <AccordionItem value="general" className="overflow-hidden rounded-xl border border-latus-warm-border bg-white px-4">
+            <AccordionTrigger className="gap-3 py-4 hover:no-underline">
+              <div className="flex min-w-0 items-start gap-3 text-left">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-latus-ice">
+                  <CalendarClock className="h-4 w-4 text-latus-blue" />
+                </div>
                 <div>
-                  <p className="text-sm font-bold text-latus-ink">Disponibilidad por persona</p>
-                  <p className="text-xs text-latus-muted">Cada integrante también puede editar su propio horario desde el Calendario.</p>
+                  <p className="font-bold text-latus-ink">Modalidad y zona horaria</p>
+                  <p className="mt-0.5 text-xs font-normal text-latus-muted">
+                    {mode === "people" ? "Citas con personas" : "Citas en el local"} · {draft.appointment_timezone || "America/Argentina/Buenos_Aires"}
+                  </p>
                 </div>
               </div>
-
-              <div>
-                <Label className="text-xs font-semibold">Integrante</Label>
-                <Select value={selectedUserId} onValueChange={setSelectedUserId}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="Seleccionar persona" /></SelectTrigger>
-                  <SelectContent>
-                    {activeUsers.map((person) => (
-                      <SelectItem key={person.user_id} value={person.user_id}>{person.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+            </AccordionTrigger>
+            <AccordionContent className="px-1 pb-5">
+              <div className="grid gap-4 rounded-lg bg-latus-cream/45 p-4 md:grid-cols-2">
+                <div>
+                  <Label className="text-xs font-bold text-latus-ink">¿Qué tipo de citas vas a recibir?</Label>
+                  <Select value={mode} onValueChange={(appointment_mode) => onChange({ appointment_mode })}>
+                    <SelectTrigger className="mt-1 bg-white"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="people">Citas con personas</SelectItem>
+                      <SelectItem value="business">Citas en el local</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs font-bold text-latus-ink">Zona horaria general</Label>
+                  <Input value={draft.appointment_timezone || "America/Argentina/Buenos_Aires"} onChange={(event) => onChange({ appointment_timezone: event.target.value })} className="mt-1 bg-white" />
+                </div>
               </div>
+            </AccordionContent>
+          </AccordionItem>
 
-              {personDraft && (
-                <div className="space-y-4">
-                  <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr]">
-                    <div className="flex items-center justify-between rounded-md border border-latus-warm-border bg-white px-3 py-2">
-                      <span className="text-xs font-semibold">Agenda habilitada</span>
-                      <Switch checked={!!personDraft.enabled} onCheckedChange={(enabled) => setPersonDraft((current) => ({ ...current, enabled }))} />
-                    </div>
-                    <div>
-                      <Label className="text-xs font-semibold">Duración habitual</Label>
-                      <Input type="number" min="5" max="480" value={personDraft.default_duration_minutes || 30} onChange={(event) => setPersonDraft((current) => ({ ...current, default_duration_minutes: Number(event.target.value) }))} className="mt-1 h-9" />
-                    </div>
-                    <div>
-                      <Label className="text-xs font-semibold">Separación</Label>
-                      <Input type="number" min="0" max="120" value={personDraft.buffer_minutes || 0} onChange={(event) => setPersonDraft((current) => ({ ...current, buffer_minutes: Number(event.target.value) }))} className="mt-1 h-9" />
-                    </div>
+          <AccordionItem value="resources" className="overflow-hidden rounded-xl border border-latus-warm-border bg-white px-4">
+            <AccordionTrigger className="gap-3 py-4 hover:no-underline">
+              <div className="flex min-w-0 items-start gap-3 text-left">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-latus-ice">
+                  {mode === "people" ? <UserRound className="h-4 w-4 text-latus-blue" /> : <BriefcaseBusiness className="h-4 w-4 text-latus-blue" />}
+                </div>
+                <div>
+                  <p className="font-bold text-latus-ink">{mode === "people" ? "Horarios del equipo" : "Servicios del local"}</p>
+                  <p className="mt-0.5 text-xs font-normal text-latus-muted">
+                    {mode === "people" ? `${activeUsers.length} personas disponibles para configurar` : `${services.length} servicios configurados`}
+                  </p>
+                </div>
+              </div>
+            </AccordionTrigger>
+            <AccordionContent className="px-1 pb-5">
+              {mode === "people" ? (
+                <div className="space-y-4 rounded-lg bg-latus-cream/45 p-4">
+                  <div>
+                    <Label className="text-xs font-semibold">Persona</Label>
+                    <Select value={selectedUserId} onValueChange={setSelectedUserId}>
+                      <SelectTrigger className="mt-1 bg-white"><SelectValue placeholder="Seleccionar persona" /></SelectTrigger>
+                      <SelectContent>
+                        {activeUsers.map((person) => <SelectItem key={person.user_id} value={person.user_id}>{person.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
                   </div>
-                  <WeeklyScheduleEditor value={personDraft.weekly_schedule} onChange={(weekly_schedule) => setPersonDraft((current) => ({ ...current, weekly_schedule }))} disabled={!personDraft.enabled} />
-                  <div className="flex justify-end">
-                    <Button type="button" onClick={() => savePerson.mutate({ userId: selectedUserId, payload: personDraft })} disabled={savePerson.isPending} className="bg-latus-blue text-white hover:bg-latus-blue-deep">
-                      {savePerson.isPending ? "Guardando..." : "Guardar horario de la persona"}
+
+                  {personDraft && (
+                    <div className="space-y-4">
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="flex items-center justify-between rounded-md border border-latus-warm-border bg-white px-3 py-2">
+                          <span className="text-xs font-semibold">Agenda habilitada</span>
+                          <Switch checked={!!personDraft.enabled} onCheckedChange={(enabled) => setPersonDraft((current) => ({ ...current, enabled }))} />
+                        </div>
+                        <div>
+                          <Label className="text-xs font-semibold">Duración habitual (min)</Label>
+                          <Input type="number" min="5" max="480" value={personDraft.default_duration_minutes || 30} onChange={(event) => setPersonDraft((current) => ({ ...current, default_duration_minutes: Number(event.target.value) }))} className="mt-1 bg-white" />
+                        </div>
+                        <div>
+                          <Label className="text-xs font-semibold">Separación (min)</Label>
+                          <Input type="number" min="0" max="120" value={personDraft.buffer_minutes || 0} onChange={(event) => setPersonDraft((current) => ({ ...current, buffer_minutes: Number(event.target.value) }))} className="mt-1 bg-white" />
+                        </div>
+                      </div>
+                      <WeeklyScheduleEditor value={personDraft.weekly_schedule} onChange={(weekly_schedule) => setPersonDraft((current) => ({ ...current, weekly_schedule }))} disabled={!personDraft.enabled} />
+                      <div className="flex justify-end">
+                        <Button type="button" onClick={() => savePerson.mutate({ userId: selectedUserId, payload: personDraft })} disabled={savePerson.isPending} className="bg-latus-blue text-white hover:bg-latus-blue-deep">
+                          {savePerson.isPending ? "Guardando..." : "Guardar horario de la persona"}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+                    <p className="text-xs text-latus-muted">Abrí un servicio para editar su duración, cupo y horarios.</p>
+                    <Button type="button" variant="outline" onClick={() => setServices([...services, makeService()])} className="border-latus-warm-border bg-white">
+                      <Plus className="h-4 w-4" /> Agregar servicio
                     </Button>
                   </div>
+
+                  {services.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-latus-warm-border p-8 text-center">
+                      <BriefcaseBusiness className="mx-auto h-7 w-7 text-latus-blue" />
+                      <p className="mt-2 text-sm font-semibold text-latus-ink">Todavía no hay servicios configurados</p>
+                      <p className="mt-1 text-xs text-latus-muted">Creá el primero para que el bot pueda ofrecer turnos en el local.</p>
+                    </div>
+                  ) : (
+                    <Accordion type="multiple" className="space-y-2">
+                      {services.map((service, index) => (
+                        <AccordionItem key={`${service.id || "service"}-${index}`} value={`${service.id || "service"}-${index}`} className="overflow-hidden rounded-lg border border-latus-warm-border bg-latus-cream/30 px-4">
+                          <AccordionTrigger className="gap-3 py-3 hover:no-underline">
+                            <div className="flex min-w-0 items-center gap-3 text-left">
+                              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${service.active !== false ? "bg-emerald-500" : "bg-neutral-300"}`} />
+                              <div className="min-w-0">
+                                <p className="truncate font-bold text-latus-ink">{service.name || "Servicio sin nombre"}</p>
+                                <p className="mt-0.5 text-xs font-normal text-latus-muted">{service.duration_minutes || 30} min · cupo {service.max_concurrent || 1} · {service.active !== false ? "activo" : "pausado"}</p>
+                              </div>
+                            </div>
+                          </AccordionTrigger>
+                          <AccordionContent className="space-y-4 px-1 pb-5">
+                            <div className="flex items-center justify-between gap-3 rounded-md border border-latus-warm-border bg-white px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <Switch checked={service.active !== false} onCheckedChange={(active) => updateService(index, { active })} />
+                                <span className="text-xs font-bold text-latus-ink">{service.active !== false ? "Servicio activo" : "Servicio pausado"}</span>
+                              </div>
+                              <Button type="button" variant="ghost" size="sm" onClick={() => setServices(services.filter((_, currentIndex) => currentIndex !== index))} className="text-red-700 hover:bg-red-50">
+                                <Trash2 className="h-4 w-4" /> Eliminar
+                              </Button>
+                            </div>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div>
+                                <Label className="text-xs font-semibold">Nombre del servicio</Label>
+                                <Input value={service.name || ""} onChange={(event) => updateService(index, { name: event.target.value })} className="mt-1 bg-white" placeholder="Ej.: Corte de cabello" />
+                              </div>
+                              <div>
+                                <Label className="text-xs font-semibold">Identificador para el bot</Label>
+                                <Input value={service.id || ""} onChange={(event) => updateService(index, { id: event.target.value })} className="mt-1 bg-white font-mono text-xs" />
+                              </div>
+                            </div>
+                            <Textarea value={service.description || ""} onChange={(event) => updateService(index, { description: event.target.value })} className="min-h-16 bg-white" placeholder="Descripción breve para que el bot sepa cuándo ofrecerlo" />
+                            <div className="grid gap-3 sm:grid-cols-3">
+                              <div>
+                                <Label className="text-xs font-semibold">Duración (min)</Label>
+                                <Input type="number" min="5" max="480" value={service.duration_minutes || 30} onChange={(event) => updateService(index, { duration_minutes: Number(event.target.value) })} className="mt-1 bg-white" />
+                              </div>
+                              <div>
+                                <Label className="text-xs font-semibold">Turnos simultáneos</Label>
+                                <Input type="number" min="1" max="100" value={service.max_concurrent || 1} onChange={(event) => updateService(index, { max_concurrent: Number(event.target.value) })} className="mt-1 bg-white" />
+                              </div>
+                              <div>
+                                <Label className="text-xs font-semibold">Zona horaria</Label>
+                                <Input value={service.timezone || draft.appointment_timezone || "America/Argentina/Buenos_Aires"} onChange={(event) => updateService(index, { timezone: event.target.value })} className="mt-1 bg-white" />
+                              </div>
+                            </div>
+                            <div>
+                              <p className="mb-2 text-xs font-bold text-latus-ink">Horarios del servicio</p>
+                              <WeeklyScheduleEditor value={service.weekly_schedule} onChange={(weekly_schedule) => updateService(index, { weekly_schedule })} disabled={service.active === false} />
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      ))}
+                    </Accordion>
+                  )}
                 </div>
               )}
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-                <div className="flex items-start gap-3">
-                  <BriefcaseBusiness className="mt-0.5 h-5 w-5 text-latus-blue" />
-                  <div>
-                    <p className="text-sm font-bold text-latus-ink">Servicios del local</p>
-                    <p className="text-xs text-latus-muted">Definí duración, cantidad simultánea y horarios para cada rubro o tarea.</p>
-                  </div>
-                </div>
-                <Button type="button" variant="outline" onClick={() => setServices([...services, makeService()])} className="border-latus-warm-border bg-white">
-                  <Plus className="h-4 w-4" /> Agregar servicio
-                </Button>
-              </div>
-
-              {services.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-latus-warm-border p-8 text-center">
-                  <CalendarClock className="mx-auto h-7 w-7 text-latus-blue" />
-                  <p className="mt-2 text-sm font-semibold text-latus-ink">Todavía no hay servicios configurados</p>
-                  <p className="mt-1 text-xs text-latus-muted">Creá el primero para que el bot pueda ofrecer turnos en el local.</p>
-                </div>
-              ) : services.map((service, index) => (
-                <div key={service.id || index} className="space-y-4 rounded-lg border border-latus-warm-border bg-latus-cream/35 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <Switch checked={service.active !== false} onCheckedChange={(active) => updateService(index, { active })} />
-                      <span className="text-xs font-bold text-latus-ink">{service.active !== false ? "Servicio activo" : "Servicio pausado"}</span>
-                    </div>
-                    <Button type="button" variant="ghost" size="icon" onClick={() => setServices(services.filter((_, currentIndex) => currentIndex !== index))} className="text-latus-muted hover:bg-red-50 hover:text-red-700" aria-label={`Eliminar ${service.name}`}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div>
-                      <Label className="text-xs font-semibold">Nombre del servicio</Label>
-                      <Input value={service.name || ""} onChange={(event) => updateService(index, { name: event.target.value })} className="mt-1" placeholder="Ej.: Corte de cabello" />
-                    </div>
-                    <div>
-                      <Label className="text-xs font-semibold">Identificador para el bot</Label>
-                      <Input value={service.id || ""} onChange={(event) => updateService(index, { id: event.target.value })} className="mt-1 font-mono text-xs" />
-                    </div>
-                  </div>
-                  <Textarea value={service.description || ""} onChange={(event) => updateService(index, { description: event.target.value })} className="min-h-16" placeholder="Descripción breve para que el bot sepa cuándo ofrecerlo" />
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <div>
-                      <Label className="text-xs font-semibold">Duración (min)</Label>
-                      <Input type="number" min="5" max="480" value={service.duration_minutes || 30} onChange={(event) => updateService(index, { duration_minutes: Number(event.target.value) })} className="mt-1" />
-                    </div>
-                    <div>
-                      <Label className="text-xs font-semibold">Turnos simultáneos</Label>
-                      <Input type="number" min="1" max="100" value={service.max_concurrent || 1} onChange={(event) => updateService(index, { max_concurrent: Number(event.target.value) })} className="mt-1" />
-                    </div>
-                    <div>
-                      <Label className="text-xs font-semibold">Zona horaria</Label>
-                      <Input value={service.timezone || draft.appointment_timezone || "America/Argentina/Buenos_Aires"} onChange={(event) => updateService(index, { timezone: event.target.value })} className="mt-1" />
-                    </div>
-                  </div>
-                  <div>
-                    <p className="mb-2 text-xs font-bold text-latus-ink">Horarios del servicio</p>
-                    <WeeklyScheduleEditor value={service.weekly_schedule} onChange={(weekly_schedule) => updateService(index, { weekly_schedule })} disabled={service.active === false} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
       )}
     </div>
   );

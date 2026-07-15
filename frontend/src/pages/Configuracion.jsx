@@ -3053,37 +3053,51 @@ export default function Configuracion() {
 
   // Build visible tabs based on permissions
   const tabs = [];
-  if (hasPerm("manage_users"))      tabs.push({ key: "users",    label: "Usuarios",            icon: UsersIcon,        testid: "tab-users" });
-  if (hasPerm("configure_whatsapp")) tabs.push({ key: "whatsapp", label: "WhatsApp",            icon: MessageSquareText, testid: "tab-whatsapp" });
-  if (hasPerm("configure_ai"))      tabs.push({ key: "agenda",   label: "Agenda",              icon: CalendarClock,    testid: "tab-agenda" });
-  if (hasPerm("configure_ai"))      tabs.push({ key: "bot",      label: "Bot IA",              icon: Bot,              testid: "tab-bot-ia" });
-  if (hasPerm("configure_ai"))      tabs.push({ key: "ai",       label: "IA y automatización", icon: Sparkles,         testid: "tab-ai-auto" });
-  if (hasPerm("manage_users"))      tabs.push({ key: "roles",    label: "Roles y Accesos",     icon: Shield,           testid: "tab-roles" });
-  if (hasPerm("manage_users"))      tabs.push({ key: "work-areas", label: "Áreas de Trabajo",   icon: Building2,        testid: "tab-work-areas" });
-  if (hasPerm("manage_settings"))   tabs.push({ key: "crm",      label: "Tareas y catálogo",   icon: Package,          testid: "tab-crm-config" });
-  if (hasPerm("manage_settings"))   tabs.push({ key: "email",    label: "Email",               icon: MessageSquareText, testid: "tab-email-config" });
+  if (hasPerm("manage_users")) tabs.push({ key: "users", label: "Usuarios", description: "Equipo, accesos y estado de usuarios", icon: UsersIcon, testid: "tab-users" });
+  if (hasPerm("configure_whatsapp")) tabs.push({ key: "whatsapp", label: "WhatsApp", description: "Conexión, credenciales y webhook", icon: MessageSquareText, testid: "tab-whatsapp" });
+  if (hasPerm("configure_ai")) tabs.push({ key: "agenda", label: "Agenda", description: "Horarios, personas, servicios y cupos", icon: CalendarClock, testid: "tab-agenda" });
+  if (hasPerm("configure_ai")) tabs.push({ key: "bot", label: "Bot IA", description: "Comportamiento y respuestas del asistente", icon: Bot, testid: "tab-bot-ia" });
+  if (hasPerm("configure_ai")) tabs.push({ key: "ai", label: "IA y automatización", description: "Proveedores, modelos y automatizaciones", icon: Sparkles, testid: "tab-ai-auto" });
+  if (hasPerm("manage_users")) tabs.push({ key: "roles", label: "Roles y accesos", description: "Permisos disponibles para cada rol", icon: Shield, testid: "tab-roles" });
+  if (hasPerm("manage_users")) tabs.push({ key: "work-areas", label: "Áreas de trabajo", description: "Organización y distribución del equipo", icon: Building2, testid: "tab-work-areas" });
+  if (hasPerm("manage_settings")) tabs.push({ key: "crm", label: "Tareas y catálogo", description: "Estados, categorías y opciones del CRM", icon: Package, testid: "tab-crm-config" });
+  if (hasPerm("manage_settings")) tabs.push({ key: "email", label: "Email", description: "Servidor de correo y notificaciones", icon: MessageSquareText, testid: "tab-email-config" });
 
   // If current tab is not visible, switch to first available
   const activeTab = tabs.find((t) => t.key === tab) ? tab : (tabs[0]?.key || "users");
+  const activeSection = tabs.find((item) => item.key === activeTab);
+  const ActiveSectionIcon = activeSection?.icon;
 
   return (
     <AppLayout title="Configuración">
-      <div className="px-6 py-6 max-w-6xl">
-        <div className="mb-6 flex items-center gap-2 overflow-x-auto border-b border-[#E9E6DC]">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              data-testid={t.testid}
-              onClick={() => setTab(t.key)}
-              className={`-mb-px shrink-0 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-bold transition-colors ${
-                activeTab === t.key
-                  ? "border-[#0E8DDB] text-[#0B1B26]"
-                  : "border-transparent text-[#888888] hover:text-[#0B1B26]"
-              }`}
-            >
-              <t.icon className="h-4 w-4 inline mr-1.5" /> {t.label}
-            </button>
-          ))}
+      <div className="mx-auto max-w-6xl px-4 py-5 md:px-6 md:py-6">
+        <div className="mb-6 rounded-xl border border-latus-warm-border bg-white p-4 shadow-[0_10px_30px_rgba(13,31,42,0.04)]">
+          <div className="grid gap-4 md:grid-cols-[240px_1fr] md:items-end">
+            <div>
+              <Label className="text-xs font-bold uppercase tracking-[0.1em] text-latus-muted">Elegir configuración</Label>
+              <Select value={activeTab} onValueChange={setTab}>
+                <SelectTrigger data-testid="settings-section-select" className="mt-2 h-11 border-latus-warm-border bg-latus-cream/35 font-semibold text-latus-ink">
+                  <SelectValue placeholder="Elegir una sección" />
+                </SelectTrigger>
+                <SelectContent>
+                  {tabs.map((item) => (
+                    <SelectItem key={item.key} value={item.key} data-testid={item.testid}>{item.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {activeSection && (
+              <div className="flex items-start gap-3 rounded-lg bg-latus-cream/55 px-4 py-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white shadow-sm">
+                  <ActiveSectionIcon className="h-4 w-4 text-latus-blue" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-latus-ink">{activeSection.label}</p>
+                  <p className="mt-0.5 text-xs text-latus-muted">{activeSection.description}</p>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         {activeTab === "users" && <UsersTab me={user} />}
         {activeTab === "whatsapp" && <WhatsAppTab />}
