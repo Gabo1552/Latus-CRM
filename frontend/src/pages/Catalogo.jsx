@@ -2,8 +2,8 @@ import { useMemo, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
-  Package, Plus, Upload, Download, Search, RefreshCw, Edit3, Trash2,
-  FileSpreadsheet, X,
+  AlertTriangle, CheckCircle2, Layers3, Package, Plus, Upload, Download, Search, RefreshCw, Edit3, Trash2,
+  FileSpreadsheet, SlidersHorizontal, X,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import { Badge } from "@/components/Bits";
@@ -135,106 +135,113 @@ export default function Catalogo() {
 
   return (
     <AppLayout title="Catálogo">
-      <div className="space-y-5" data-testid="catalogo-page">
+      <div className="mx-auto w-full max-w-[1500px] space-y-6 p-4 sm:p-6 lg:p-8" data-testid="catalogo-page">
         {/* Header / stats */}
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <p className="text-sm text-[#888888]">
-              {statsQ.data
-                ? `${statsQ.data.active} productos activos · ${statsQ.data.out_of_stock} sin stock`
-                : "Cargando…"}
-            </p>
+        <section className="overflow-hidden rounded-2xl border border-latus-warm-border bg-gradient-to-br from-white via-latus-surface to-latus-ice/35 shadow-[0_18px_45px_rgba(13,31,42,0.06)]">
+          <div className="flex flex-col justify-between gap-5 p-5 sm:p-6 xl:flex-row xl:items-center">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-latus-ink text-white shadow-[0_10px_24px_rgba(13,31,42,0.18)]">
+                <Package className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-lg font-bold tracking-tight text-latus-ink">Gestión de productos</p>
+                <p className="mt-1 max-w-xl text-sm leading-relaxed text-latus-muted">Administrá precios, promociones, disponibilidad y la información comercial que consulta el equipo y utiliza el bot.</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+              <Button data-testid="catalog-reload" variant="outline" onClick={reload} className="h-10 rounded-lg border-latus-warm-border bg-white px-3.5">
+                <RefreshCw className={`mr-1.5 h-4 w-4 ${listQ.isFetching ? "animate-spin" : ""}`} /> Actualizar
+              </Button>
+              {canWrite && (
+                <>
+                  <Button data-testid="catalog-import" variant="outline" onClick={() => setImporting(true)} className="h-10 rounded-lg border-latus-warm-border bg-white px-3.5"><Upload className="mr-1.5 h-4 w-4" /> Importar CSV</Button>
+                  <Button data-testid="catalog-export" variant="outline" onClick={onExport} className="h-10 rounded-lg border-latus-warm-border bg-white px-3.5"><Download className="mr-1.5 h-4 w-4" /> Exportar</Button>
+                  <Button data-testid="catalog-new" onClick={() => setCreating(true)} className="h-10 rounded-lg bg-latus-blue px-4 font-semibold text-white shadow-sm hover:bg-latus-blue-deep"><Plus className="mr-1.5 h-4 w-4" /> Nuevo producto</Button>
+                </>
+              )}
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button data-testid="catalog-reload" variant="outline"
-                    onClick={reload} className="rounded-sm">
-              <RefreshCw className={`h-4 w-4 mr-1.5 ${listQ.isFetching ? "animate-spin" : ""}`} />
-              Actualizar
-            </Button>
-            {canWrite && (
-              <>
-                <Button data-testid="catalog-import" variant="outline" onClick={() => setImporting(true)} className="rounded-sm">
-                  <Upload className="h-4 w-4 mr-1.5" /> Importar CSV
-                </Button>
-                <Button data-testid="catalog-export" variant="outline" onClick={onExport} className="rounded-sm">
-                  <Download className="h-4 w-4 mr-1.5" /> Exportar CSV
-                </Button>
-                <Button data-testid="catalog-new" onClick={() => setCreating(true)}
-                        className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm">
-                  <Plus className="h-4 w-4 mr-1.5" /> Nuevo producto
-                </Button>
-              </>
-            )}
+          <div className="grid border-t border-latus-warm-border bg-white/45 sm:grid-cols-3">
+            {[
+              { label: "Productos totales", value: statsQ.data?.total, icon: Layers3, color: "text-latus-blue", bg: "bg-latus-ice" },
+              { label: "Productos activos", value: statsQ.data?.active, icon: CheckCircle2, color: "text-emerald-700", bg: "bg-emerald-50" },
+              { label: "Sin stock", value: statsQ.data?.out_of_stock, icon: AlertTriangle, color: "text-amber-700", bg: "bg-amber-50" },
+            ].map((stat, index) => (
+              <div key={stat.label} className={`flex items-center gap-3 px-5 py-4 sm:px-6 ${index > 0 ? "border-t border-latus-warm-border sm:border-l" : ""} ${index > 0 ? "sm:border-t-0" : ""}`}>
+                <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.bg}`}><stat.icon className={`h-4 w-4 ${stat.color}`} /></div>
+                <div><p className="text-xl font-extrabold tracking-tight text-latus-ink">{stat.value ?? "—"}</p><p className="text-[11px] font-semibold uppercase tracking-wider text-latus-muted">{stat.label}</p></div>
+              </div>
+            ))}
           </div>
-        </div>
+        </section>
 
         {/* Filters */}
-        <div className="bg-white border border-[#E9E6DC] rounded-sm p-3 grid grid-cols-1 sm:grid-cols-5 gap-2">
-          <div className="sm:col-span-2 relative">
-            <Search className="h-4 w-4 absolute left-2.5 top-2.5 text-[#888888]" />
-            <Input data-testid="catalog-search"
-                   placeholder="Buscar por nombre, SKU o tag…"
-                   value={filters.q}
-                   onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value, offset: 0 }))}
-                   className="rounded-sm h-9 pl-8" />
+        <section className="rounded-xl border border-latus-warm-border bg-white p-4 shadow-[0_10px_28px_rgba(13,31,42,0.035)] sm:p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <p className="flex items-center gap-2 text-sm font-bold text-latus-ink"><SlidersHorizontal className="h-4 w-4 text-latus-blue" /> Buscar y filtrar</p>
+              <p className="mt-1 text-xs text-latus-muted">Encontrá productos por nombre, código, categoría o disponibilidad.</p>
+            </div>
+            {filters.q || filters.category !== "all" || filters.stock_status !== "all" || filters.include_inactive ? (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setFilters({ q: "", category: "all", stock_status: "all", include_inactive: false, sort: "name", offset: 0 })} className="text-latus-blue">Limpiar filtros</Button>
+            ) : null}
           </div>
-          <Select value={filters.category}
-                  onValueChange={(v) => setFilters((f) => ({ ...f, category: v, offset: 0 }))}>
-            <SelectTrigger data-testid="catalog-filter-category" className="rounded-sm h-9 text-sm">
-              <SelectValue placeholder="Categoría" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todas las categorías</SelectItem>
-              {(catsQ.data?.categories || []).map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Select value={filters.stock_status}
-                  onValueChange={(v) => setFilters((f) => ({ ...f, stock_status: v, offset: 0 }))}>
-            <SelectTrigger data-testid="catalog-filter-stock" className="rounded-sm h-9 text-sm">
-              <SelectValue placeholder="Stock" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todos los stocks</SelectItem>
-              {STOCK_OPTS.map(o => <SelectItem key={o.v} value={o.v}>{o.l}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Select value={filters.sort}
-                  onValueChange={(v) => setFilters((f) => ({ ...f, sort: v }))}>
-            <SelectTrigger data-testid="catalog-sort" className="rounded-sm h-9 text-sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="name">Nombre (A-Z)</SelectItem>
-              <SelectItem value="-name">Nombre (Z-A)</SelectItem>
-              <SelectItem value="price">Precio (menor)</SelectItem>
-              <SelectItem value="-price">Precio (mayor)</SelectItem>
-              <SelectItem value="-created_at">Más recientes</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[minmax(320px,2fr)_minmax(180px,1fr)_minmax(160px,0.9fr)_minmax(180px,1fr)_auto] xl:items-center">
+            <div className="relative">
+              <Search className="absolute left-3.5 top-3 h-4 w-4 text-latus-muted" />
+              <Input data-testid="catalog-search" placeholder="Buscar por nombre, SKU o tag…" value={filters.q} onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value, offset: 0 }))} className="h-10 rounded-lg border-latus-warm-border bg-latus-cream/25 pl-10" />
+            </div>
+            <Select value={filters.category} onValueChange={(v) => setFilters((f) => ({ ...f, category: v, offset: 0 }))}>
+              <SelectTrigger data-testid="catalog-filter-category" className="h-10 rounded-lg border-latus-warm-border bg-white text-sm"><SelectValue placeholder="Categoría" /></SelectTrigger>
+              <SelectContent><SelectItem value="all">Todas las categorías</SelectItem>{(catsQ.data?.categories || []).map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+            </Select>
+            <Select value={filters.stock_status} onValueChange={(v) => setFilters((f) => ({ ...f, stock_status: v, offset: 0 }))}>
+              <SelectTrigger data-testid="catalog-filter-stock" className="h-10 rounded-lg border-latus-warm-border bg-white text-sm"><SelectValue placeholder="Stock" /></SelectTrigger>
+              <SelectContent><SelectItem value="all">Todos los stocks</SelectItem>{STOCK_OPTS.map(o => <SelectItem key={o.v} value={o.v}>{o.l}</SelectItem>)}</SelectContent>
+            </Select>
+            <Select value={filters.sort} onValueChange={(v) => setFilters((f) => ({ ...f, sort: v }))}>
+              <SelectTrigger data-testid="catalog-sort" className="h-10 rounded-lg border-latus-warm-border bg-white text-sm"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="name">Nombre (A-Z)</SelectItem><SelectItem value="-name">Nombre (Z-A)</SelectItem><SelectItem value="price">Precio (menor)</SelectItem><SelectItem value="-price">Precio (mayor)</SelectItem><SelectItem value="-created_at">Más recientes</SelectItem></SelectContent>
+            </Select>
+            <label className="flex h-10 cursor-pointer items-center justify-between gap-3 rounded-lg border border-latus-warm-border bg-latus-cream/30 px-3 xl:justify-start">
+              <Switch checked={filters.include_inactive} onCheckedChange={(include_inactive) => setFilters((f) => ({ ...f, include_inactive, offset: 0 }))} />
+              <span className="whitespace-nowrap text-xs font-semibold text-latus-ink">Incluir inactivos</span>
+            </label>
+          </div>
+        </section>
 
         {/* Empty / table */}
-        {items.length === 0 && !listQ.isPending ? (
-          <div className="bg-latus-cream border border-dashed border-zinc-300 rounded-sm p-10 text-center">
-            <Package className="h-7 w-7 text-[#0E8DDB] mx-auto mb-2" />
-            <p className="text-sm font-bold text-[#0B1B26]">Aún no hay productos</p>
-            <p className="text-xs text-[#888888] mt-1">
+        {listQ.isPending ? (
+          <div className="flex min-h-64 items-center justify-center rounded-xl border border-latus-warm-border bg-white">
+            <div className="text-center"><RefreshCw className="mx-auto h-6 w-6 animate-spin text-latus-blue" /><p className="mt-3 text-sm font-semibold text-latus-muted">Cargando catálogo…</p></div>
+          </div>
+        ) : items.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-latus-warm-border bg-white p-12 text-center shadow-[0_10px_28px_rgba(13,31,42,0.025)]">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-latus-ice"><Package className="h-5 w-5 text-latus-blue" /></div>
+            <p className="text-base font-bold text-latus-ink">No encontramos productos</p>
+            <p className="mx-auto mt-1 max-w-md text-sm text-latus-muted">
               {canWrite
-                ? "Agregá el primero o importá un CSV para empezar."
+                ? "Agregá el primero, importá un CSV o ajustá los filtros de búsqueda."
                 : "Pediles a un administrador que cargue el catálogo."}
             </p>
           </div>
         ) : (
-          <div className="bg-white border border-[#E9E6DC] rounded-sm overflow-hidden" data-testid="catalog-table">
-            <table className="w-full text-sm">
-              <thead className="bg-latus-cream text-[10px] uppercase tracking-wider text-[#888888]">
+          <section className="overflow-hidden rounded-xl border border-latus-warm-border bg-white shadow-[0_14px_36px_rgba(13,31,42,0.045)]" data-testid="catalog-table">
+            <div className="flex items-center justify-between border-b border-latus-warm-border px-5 py-4 sm:px-6">
+              <div><p className="text-sm font-bold text-latus-ink">Productos</p><p className="mt-0.5 text-xs text-latus-muted">{total} {total === 1 ? "producto encontrado" : "productos encontrados"}</p></div>
+              <p className="hidden text-xs text-latus-muted sm:block">Hacé clic en una fila para editarla</p>
+            </div>
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px] table-fixed text-sm">
+              <colgroup><col className="w-[34%]" /><col className="w-[14%]" /><col className="w-[17%]" /><col className="w-[18%]" /><col className="w-[12%]" /><col className="w-[5%]" /></colgroup>
+              <thead className="bg-latus-cream/75 text-[10px] uppercase tracking-[0.13em] text-latus-muted">
                 <tr>
-                  <th className="text-left px-3 py-2">Producto</th>
-                  <th className="text-left px-3 py-2">SKU</th>
-                  <th className="text-left px-3 py-2">Categoría</th>
-                  <th className="text-right px-3 py-2">Precio</th>
-                  <th className="text-left px-3 py-2">Stock</th>
-                  <th className="text-right px-3 py-2"></th>
+                  <th className="px-6 py-3 text-left font-bold">Producto</th>
+                  <th className="px-4 py-3 text-left font-bold">SKU</th>
+                  <th className="px-4 py-3 text-left font-bold">Categoría</th>
+                  <th className="px-4 py-3 text-right font-bold">Precio</th>
+                  <th className="px-4 py-3 text-left font-bold">Stock</th>
+                  <th className="px-4 py-3 text-right"></th>
                 </tr>
               </thead>
               <tbody>
@@ -243,27 +250,27 @@ export default function Catalogo() {
                   return (
                     <tr key={p.product_id}
                         data-testid={`catalog-row-${p.product_id}`}
-                        className="border-t border-[#E9E6DC] hover:bg-latus-cream cursor-pointer"
+                        className="cursor-pointer border-t border-latus-warm-border/80 transition-colors hover:bg-latus-ice/20"
                         onClick={() => canWrite && setEditing(p)}>
-                      <td className="px-3 py-2">
-                        <div className="flex items-center gap-2">
+                      <td className="px-6 py-4">
+                        <div className="flex min-w-0 items-center gap-3">
                           {p.image_url ? (
-                            <img src={p.image_url} alt="" className="h-8 w-8 object-cover rounded-sm" />
+                            <img src={p.image_url} alt="" className="h-11 w-11 shrink-0 rounded-lg border border-latus-warm-border object-cover" />
                           ) : (
-                            <div className="h-8 w-8 bg-latus-warm-gray rounded-sm flex items-center justify-center">
-                              <Package className="h-3.5 w-3.5 text-[#888888]" />
+                            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-latus-warm-gray">
+                              <Package className="h-4 w-4 text-latus-muted" />
                             </div>
                           )}
-                          <div>
-                            <p className="font-bold text-[#0B1B26]">{p.name}</p>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2"><p className="truncate font-bold text-latus-ink">{p.name}</p>{p.active === false && <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[9px] font-bold uppercase text-neutral-500">Inactivo</span>}</div>
                             {Array.isArray(p.tags) && p.tags.length > 0 && (
-                              <p className="text-[10px] text-[#888888]">{p.tags.join(" · ")}</p>
+                              <p className="mt-1 truncate text-[10px] text-latus-muted">{p.tags.join(" · ")}</p>
                             )}
                           </div>
                         </div>
                       </td>
-                      <td className="px-3 py-2 font-mono text-xs">{p.sku || "—"}</td>
-                      <td className="px-3 py-2">
+                      <td className="px-4 py-4 font-mono text-xs text-latus-muted">{p.sku || "—"}</td>
+                      <td className="px-4 py-4">
                         {p.category ? (
                           categoryColors[p.category] ? (
                             <Badge
@@ -278,25 +285,25 @@ export default function Catalogo() {
                           "—"
                         )}
                       </td>
-                      <td className="px-3 py-2 text-right">
-                        <span className={p.promo_active ? "line-through text-[#888888]" : "font-bold text-[#0B1B26]"}>
+                      <td className="px-4 py-4 text-right">
+                        <span className={p.promo_active ? "text-xs text-latus-muted line-through" : "font-bold text-latus-ink"}>
                           {fmtPrice(p.price, p.currency)}
                         </span>
                         {p.promo_active && (
-                          <p className="text-xs font-bold text-[#0E8DDB]">{fmtPrice(p.effective_price, p.currency)}</p>
+                          <p className="mt-0.5 font-bold text-latus-blue">{fmtPrice(p.effective_price, p.currency)}</p>
                         )}
                         {p.promo_price && <p className={`text-[10px] ${p.promo_active ? "text-emerald-700" : "text-[#888888]"}`}>{promoDescription(p)}</p>}
                       </td>
-                      <td className="px-3 py-2">
-                        <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-sm"
+                      <td className="px-4 py-4">
+                        <span className="inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide"
                               style={{ background: s.bg, color: s.color }}>
                           {STOCK_OPTS.find(o => o.v === p.stock_status)?.l || p.stock_status}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-right">
+                      <td className="px-4 py-4 text-right">
                         {canWrite && (
                           <Button data-testid={`catalog-edit-${p.product_id}`}
-                                  variant="outline" size="sm" className="rounded-sm h-7"
+                                  variant="outline" size="sm" className="h-8 w-8 rounded-lg border-latus-warm-border p-0"
                                   onClick={(e) => { e.stopPropagation(); setEditing(p); }}>
                             <Edit3 className="h-3 w-3" />
                           </Button>
@@ -307,22 +314,23 @@ export default function Catalogo() {
                 })}
               </tbody>
             </table>
-            <div className="px-3 py-2 border-t border-[#E9E6DC] flex items-center justify-between text-xs">
-              <p className="text-[#888888]">Mostrando {Math.min(filters.offset + 1, total)}–{Math.min(filters.offset + items.length, total)} de {total}</p>
+            </div>
+            <div className="flex flex-col items-center justify-between gap-3 border-t border-latus-warm-border bg-latus-cream/25 px-5 py-4 text-xs sm:flex-row sm:px-6">
+              <p className="text-latus-muted">Mostrando {Math.min(filters.offset + 1, total)}–{Math.min(filters.offset + items.length, total)} de {total}</p>
               <div className="flex gap-2">
-                <Button size="sm" variant="outline" className="rounded-sm h-7"
+                <Button size="sm" variant="outline" className="h-8 rounded-lg border-latus-warm-border bg-white"
                         disabled={filters.offset === 0}
                         onClick={() => setFilters((f) => ({ ...f, offset: Math.max(0, f.offset - 50) }))}>
                   Anterior
                 </Button>
-                <Button size="sm" variant="outline" className="rounded-sm h-7"
+                <Button size="sm" variant="outline" className="h-8 rounded-lg border-latus-warm-border bg-white"
                         disabled={filters.offset + 50 >= total}
                         onClick={() => setFilters((f) => ({ ...f, offset: f.offset + 50 }))}>
                   Siguiente
                 </Button>
               </div>
             </div>
-          </div>
+          </section>
         )}
 
         {/* Modals */}
@@ -420,20 +428,21 @@ function ProductModal({ product, categories, onClose, onSaved }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-latus-ink/55 p-3 backdrop-blur-[2px] sm:p-6" onClick={onClose}>
       <div data-testid="catalog-product-modal"
-           className="bg-white rounded-sm max-w-3xl w-full max-h-[90vh] overflow-auto"
+           className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-white/20 bg-white shadow-[0_30px_90px_rgba(13,31,42,0.28)]"
            onClick={(e) => e.stopPropagation()}>
-        <div className="px-5 py-3 border-b border-[#E9E6DC] flex items-center justify-between">
-          <p className="text-base font-bold text-[#0B1B26]">
-            {isEdit ? "Editar producto" : "Nuevo producto"}
-          </p>
-          <button onClick={onClose} className="text-[#888888] hover:text-[#0B1B26]">
+        <div className="flex items-center justify-between border-b border-latus-warm-border bg-latus-cream/35 px-5 py-4 sm:px-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-latus-ice"><Package className="h-4 w-4 text-latus-blue" /></div>
+            <div><p className="text-base font-bold text-latus-ink">{isEdit ? "Editar producto" : "Nuevo producto"}</p><p className="mt-0.5 text-xs text-latus-muted">Completá la información comercial y de disponibilidad.</p></div>
+          </div>
+          <button onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-lg text-latus-muted transition hover:bg-white hover:text-latus-ink" aria-label="Cerrar">
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-4 overflow-y-auto p-5 sm:grid-cols-2 sm:p-6">
           <div className="sm:col-span-2">
             <Label className="text-xs font-bold text-[#888888]">Nombre *</Label>
             <Input data-testid="modal-name" value={d.name || ""} onChange={(e) => setD({ ...d, name: e.target.value })}
@@ -586,17 +595,17 @@ function ProductModal({ product, categories, onClose, onSaved }) {
           </div>
         </div>
 
-        <div className="px-5 py-3 border-t border-[#E9E6DC] flex items-center justify-between">
+        <div className="flex items-center justify-between border-t border-latus-warm-border bg-white px-5 py-4 sm:px-6">
           {isEdit ? (
-            <Button data-testid="modal-delete" variant="outline" className="rounded-sm text-[#DC2626]"
+            <Button data-testid="modal-delete" variant="outline" className="rounded-lg border-red-200 text-red-700 hover:bg-red-50"
                     onClick={() => { if (confirm("¿Eliminar este producto?")) del.mutate(); }}>
               <Trash2 className="h-3.5 w-3.5 mr-1" /> Eliminar
             </Button>
           ) : <div />}
           <div className="flex gap-2">
-            <Button variant="outline" onClick={onClose} className="rounded-sm">Cancelar</Button>
+            <Button variant="outline" onClick={onClose} className="rounded-lg border-latus-warm-border">Cancelar</Button>
             <Button data-testid="modal-save" onClick={onSave} disabled={save.isPending}
-                    className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm">
+                    className="rounded-lg bg-latus-blue px-5 text-white hover:bg-latus-blue-deep">
               {save.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
               Guardar
             </Button>
@@ -641,18 +650,18 @@ function ImportModal({ onClose, onDone }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-latus-ink/55 p-3 backdrop-blur-[2px] sm:p-6" onClick={onClose}>
       <div data-testid="catalog-import-modal"
-           className="bg-white rounded-sm max-w-lg w-full"
+           className="w-full max-w-xl overflow-hidden rounded-2xl border border-white/20 bg-white shadow-[0_30px_90px_rgba(13,31,42,0.28)]"
            onClick={(e) => e.stopPropagation()}>
-        <div className="px-5 py-3 border-b border-[#E9E6DC] flex items-center justify-between">
-          <p className="text-base font-bold text-[#0B1B26]">Importar catálogo desde CSV</p>
-          <button onClick={onClose} className="text-[#888888] hover:text-[#0B1B26]">
+        <div className="flex items-center justify-between border-b border-latus-warm-border bg-latus-cream/35 px-5 py-4 sm:px-6">
+          <div><p className="text-base font-bold text-latus-ink">Importar catálogo desde CSV</p><p className="mt-0.5 text-xs text-latus-muted">Carga o actualiza productos en bloque.</p></div>
+          <button onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-lg text-latus-muted hover:bg-white hover:text-latus-ink" aria-label="Cerrar">
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="p-5 space-y-3">
-          <div className="border-2 border-dashed border-zinc-300 rounded-sm p-6 text-center cursor-pointer"
+        <div className="space-y-4 p-5 sm:p-6">
+          <div className="cursor-pointer rounded-xl border-2 border-dashed border-latus-warm-border bg-latus-cream/25 p-8 text-center transition hover:border-latus-blue/50 hover:bg-latus-ice/20"
                onClick={() => fileInput.current?.click()}>
             <FileSpreadsheet className="h-7 w-7 text-[#0E8DDB] mx-auto mb-2" />
             {file ? (

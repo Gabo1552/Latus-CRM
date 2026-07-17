@@ -22,7 +22,7 @@ import hmac
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -531,7 +531,7 @@ class TestStatusUpdates:
 # send-whatsapp endpoint
 # ====================================================================
 class TestSendWhatsApp:
-    def _seed_conv(self, fake, *, whatsapp_id="5491155551234"):
+    def _seed_conv(self, fake, *, whatsapp_id="5491155551234", inbound_at=None):
         _run(fake.contacts.insert_one({
             "id": "ct_S", "name": "Ana", "phone": f"+{whatsapp_id}",
             "whatsapp_id": whatsapp_id,
@@ -545,6 +545,12 @@ class TestSendWhatsApp:
             "created_at": "2025-01-01T00:00:00+00:00",
             "channel": "whatsapp",
             "channel_external_id": "1234567890:5491155551234",
+        }))
+        _run(fake.messages.insert_one({
+            "id": "msg_in_window", "conversation_id": "cv_S",
+            "sender_type": "contact", "sender_name": "Ana",
+            "body": "Hola", "direction": "inbound", "message_type": "text",
+            "created_at": inbound_at or datetime.now(timezone.utc).isoformat(),
         }))
 
     def test_success(self, server_and_client):
@@ -615,6 +621,27 @@ class TestSendWhatsApp:
         )
         assert r.status_code == 503
         assert r.json()["detail"] == "WhatsApp no configurado"
+
+    def test_expired_customer_window_blocks_free_text_and_requires_template(self, server_and_client):
+        _, fake, client = server_and_client
+        expired_at = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+        self._seed_conv(fake, inbound_at=expired_at)
+
+        detail = client.get(
+            "/api/conversations/cv_S", headers={"Authorization": "Bearer T-ADMIN"}
+        )
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["whatsapp_free_text_allowed"] is False
+        assert detail.json()["whatsapp_window_status"] == "expired"
+
+        response = client.post(
+            "/api/conversations/cv_S/send-whatsapp",
+            json={"text": "Este texto no debe llegar a Meta"},
+            headers={"Authorization": "Bearer T-ADMIN"},
+        )
+        assert response.status_code == 409, response.text
+        assert "#131047" in response.json()["detail"]
+        assert all(message.get("body") != "Este texto no debe llegar a Meta" for message in fake.messages.docs)
 
     def test_recontact_template_uses_approved_meta_payload_and_inbound_number(self, server_and_client):
         _, fake, client = server_and_client

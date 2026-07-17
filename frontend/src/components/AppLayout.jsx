@@ -151,8 +151,8 @@ export default function AppLayout({ children, title, actions }) {
             <span className={`whitespace-nowrap ${navCollapsed ? "lg:hidden" : ""}`}>Cerrar sesión</span>
           </button>
           <div className={`mt-4 flex items-baseline justify-center gap-1 text-latus-ice ${navCollapsed ? "lg:hidden" : ""}`}>
-            <span className="text-lg font-extrabold tracking-[-0.04em]">Tu</span>
-            <span className="text-lg font-light">logo</span>
+            <span className="text-lg font-extrabold tracking-[-0.04em]">Latus</span>
+            <span className="text-lg font-light">CRM</span>
           </div>
         </div>
       </aside>

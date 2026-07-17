@@ -2529,6 +2529,53 @@ class WhatsAppTemplateSend(BaseModel):
     appointment_id: Optional[str] = None
 
 
+WHATSAPP_CUSTOMER_SERVICE_WINDOW_HOURS = 24
+
+
+def _whatsapp_window_state_from_messages(messages: list[dict]) -> dict:
+    """Determine whether Meta still allows a free-form reply to the customer."""
+    inbound = [
+        message for message in messages
+        if message.get("sender_type") == "contact" or message.get("direction") == "inbound"
+    ]
+    inbound.sort(key=lambda message: str(message.get("created_at") or ""), reverse=True)
+    last_message_at = inbound[0].get("created_at") if inbound else None
+    if not last_message_at:
+        return {
+            "whatsapp_free_text_allowed": False,
+            "whatsapp_window_status": "no_customer_message",
+            "whatsapp_window_expires_at": None,
+            "last_customer_message_at": None,
+        }
+    try:
+        last_message = datetime.fromisoformat(str(last_message_at).replace("Z", "+00:00"))
+        if last_message.tzinfo is None:
+            last_message = last_message.replace(tzinfo=timezone.utc)
+        last_message = last_message.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return {
+            "whatsapp_free_text_allowed": False,
+            "whatsapp_window_status": "unknown",
+            "whatsapp_window_expires_at": None,
+            "last_customer_message_at": last_message_at,
+        }
+    expires_at = last_message + timedelta(hours=WHATSAPP_CUSTOMER_SERVICE_WINDOW_HOURS)
+    allowed = datetime.now(timezone.utc) < expires_at
+    return {
+        "whatsapp_free_text_allowed": allowed,
+        "whatsapp_window_status": "open" if allowed else "expired",
+        "whatsapp_window_expires_at": expires_at.isoformat(),
+        "last_customer_message_at": last_message.isoformat(),
+    }
+
+
+async def _whatsapp_window_state(conv_id: str) -> dict:
+    messages = await db.messages.find(
+        {"conversation_id": conv_id, "sender_type": "contact"}, {"_id": 0}
+    ).sort("created_at", -1).to_list(1000)
+    return _whatsapp_window_state_from_messages(messages)
+
+
 def _wa_config_for_conversation(cfg, conv: dict):
     """Reply from the phone number that actually received this conversation."""
     external = str(conv.get("channel_external_id") or "")
@@ -2694,6 +2741,12 @@ async def send_whatsapp(conv_id: str, payload: WhatsAppSend, user: User = Depend
     perms = await get_role_permissions(user.role)
     if "message_any" not in perms and conv.get("assigned_to") != user.user_id:
         raise HTTPException(status_code=403, detail="Solo el operador asignado o un usuario con permisos pueden enviar mensajes a esta conversación")
+    window = await _whatsapp_window_state(conv_id)
+    if not window["whatsapp_free_text_allowed"]:
+        raise HTTPException(
+            status_code=409,
+            detail="La ventana de respuesta de WhatsApp venció. Para evitar el Error #131047, enviá una plantilla de recontacto.",
+        )
     contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0})
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
@@ -2802,6 +2855,8 @@ async def get_conversation(conv_id: str, user: User = Depends(get_current_user))
     if doc.get("lead_id"):
         doc["lead"] = await db.leads.find_one({"id": doc["lead_id"]}, {"_id": 0})
     doc["messages"] = await db.messages.find({"conversation_id": conv_id}, {"_id": 0}).sort("created_at", 1).to_list(1000)
+    if doc.get("channel") == "whatsapp":
+        doc.update(_whatsapp_window_state_from_messages(doc["messages"]))
     await db.conversations.update_one({"id": conv_id}, {"$set": {"unread": 0}})
     return doc
 
@@ -5126,14 +5181,16 @@ async def check_and_send_scheduled_reports():
 
 
 async def close_inactive_conversations(db):
-    """Scan and close conversations with no activity for more than X hours."""
+    """Close inactive chats and re-arm disabled bots after the configured delay."""
     bot_cfg_doc = await db.bot_settings.find_one({"_id": "default"}, {"_id": 0}) or {}
-    inactive_hours = bot_cfg_doc.get("bot_inactive_close_hours", 48)
-    
+    try:
+        inactive_hours = min(168, max(1, int(bot_cfg_doc.get("bot_inactive_close_hours") or 48)))
+    except (TypeError, ValueError):
+        inactive_hours = 48
     now_utc = datetime.now(timezone.utc)
     cutoff = now_utc - timedelta(hours=inactive_hours)
-    
-    convs = await db.conversations.find({"status": {"$ne": "resolved"}}, {"_id": 0}).to_list(1000)
+    convs = await db.conversations.find({}, {"_id": 0}).to_list(1000)
+    closed = reactivated = 0
     for c in convs:
         last_at_str = c.get("last_message_at") or c.get("updated_at")
         if not last_at_str:
@@ -5144,21 +5201,35 @@ async def close_inactive_conversations(db):
             continue
         if last_at.tzinfo is None:
             last_at = last_at.replace(tzinfo=timezone.utc)
-            
-        if last_at < cutoff:
-            conv_id = c["id"]
-            await db.conversations.update_one(
-                {"id": conv_id},
-                {"$set": {
-                    "status": "resolved",
-                    "bot_status": "cerrada",
-                    "bot_enabled": True,
-                    "human_required_reason": None,
-                }}
-            )
+        if last_at.astimezone(timezone.utc) >= cutoff:
+            continue
+        should_close = c.get("status") != "resolved"
+        should_reactivate = not c.get("bot_enabled", True)
+        if not should_close and not should_reactivate:
+            continue
+        conv_id = c["id"]
+        update = {"inactivity_processed_at": now_utc.isoformat()}
+        if should_close:
+            update.update({"status": "resolved", "bot_status": "cerrada"})
+            closed += 1
+        if should_reactivate:
+            update.update({
+                "bot_enabled": True,
+                "human_required_reason": None,
+                "bot_reactivated_at": now_utc.isoformat(),
+                "bot_reactivated_reason": "inactivity_timeout",
+            })
+            reactivated += 1
+        await db.conversations.update_one({"id": conv_id}, {"$set": update})
+        if should_close:
             await _log_system_message(db, conv_id, f"Conversación cerrada automáticamente por inactividad de {inactive_hours} hs")
+        if should_reactivate:
             await _log_system_message(db, conv_id, "Bot reactivado - Control de bot encendido")
-            logger.info("Automatically closed inactive conversation %s after %s hours", conv_id, inactive_hours)
+        logger.info(
+            "Processed inactive conversation %s after %s hours close=%s reactivate=%s",
+            conv_id, inactive_hours, should_close, should_reactivate,
+        )
+    return {"closed": closed, "reactivated": reactivated}
 
 
 async def send_due_appointment_reminders() -> dict:

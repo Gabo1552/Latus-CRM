@@ -109,6 +109,10 @@ export default function Inbox() {
   });
   const recontactTemplates = useMemo(() => templateData?.templates || [], [templateData]);
   const selectedTemplate = recontactTemplates.find((template) => template.id === selectedTemplateId);
+  const freeTextBlocked = active?.channel === "whatsapp" && active?.whatsapp_free_text_allowed === false;
+  const whatsappWindowExpiry = active?.whatsapp_window_expires_at
+    ? formatMessageFullDate(active.whatsapp_window_expires_at)
+    : "";
 
   useEffect(() => {
     if (!selectedTemplateId && recontactTemplates.length) setSelectedTemplateId(recontactTemplates[0].id);
@@ -470,30 +474,42 @@ export default function Inbox() {
                     WhatsApp no configurado — el envío real está deshabilitado.
                   </p>
                 )}
-                <div className="flex items-end gap-2">
-                  {active.channel === "whatsapp" && recontactTemplates.length > 0 && (
-                    <Button type="button" variant="outline" onClick={() => setTemplateOpen(true)} disabled={readOnly || !waStatus?.configured} className="h-11 shrink-0 border-latus-warm-border bg-white text-latus-ink" title="Enviar plantilla aprobada para recontactar">
-                      <FileText className="h-4 w-4" /><span className="hidden xl:inline">Plantilla</span>
+                {freeTextBlocked ? (
+                  <div data-testid="whatsapp-template-only-composer" className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                    <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+                      <div>
+                        <p className="flex items-center gap-1.5 text-xs font-bold text-amber-900"><AlertOctagon className="h-4 w-4" /> Solo se puede enviar una plantilla</p>
+                        <p className="mt-1 text-[11px] leading-relaxed text-amber-800">
+                          La ventana de respuesta libre venció{whatsappWindowExpiry ? ` el ${whatsappWindowExpiry}` : ""}. Se bloqueó el mensaje manual para evitar el Error #131047.
+                        </p>
+                      </div>
+                      <Button type="button" onClick={() => setTemplateOpen(true)} disabled={readOnly || !waStatus?.configured || recontactTemplates.length === 0} className="shrink-0 bg-amber-700 text-white hover:bg-amber-800">
+                        <FileText className="h-4 w-4" /> Seleccionar plantilla
+                      </Button>
+                    </div>
+                    {recontactTemplates.length === 0 && <p className="mt-2 text-[11px] font-semibold text-red-700">No hay plantillas de recontacto activas. Configuralas en Configuración → Agenda.</p>}
+                  </div>
+                ) : (
+                  <div className="flex items-end gap-2">
+                    {active.channel === "whatsapp" && recontactTemplates.length > 0 && (
+                      <Button type="button" variant="outline" onClick={() => setTemplateOpen(true)} disabled={readOnly || !waStatus?.configured} className="h-11 shrink-0 border-latus-warm-border bg-white text-latus-ink" title="Enviar plantilla aprobada para recontactar">
+                        <FileText className="h-4 w-4" /><span className="hidden xl:inline">Plantilla</span>
+                      </Button>
+                    )}
+                    <Textarea
+                      data-testid="message-input"
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      disabled={readOnly}
+                      onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!readOnly && draft.trim() && !(active.channel === "whatsapp" && waStatus && !waStatus.configured)) sendMsg.mutate(); } }}
+                      placeholder={readOnly ? "Modo solo lectura" : (active.channel === "whatsapp" && waStatus?.configured ? "Escribí una respuesta de WhatsApp…" : "Escribí una respuesta…")}
+                      className="rounded-sm resize-none min-h-[44px] max-h-32"
+                    />
+                    <Button data-testid="send-message-button" disabled={readOnly || !draft.trim() || sendMsg.isPending || (active.channel === "whatsapp" && waStatus && !waStatus.configured)} onClick={() => sendMsg.mutate()} className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm h-11 px-4">
+                      <Send className="h-4 w-4" />
                     </Button>
-                  )}
-                  <Textarea
-                    data-testid="message-input"
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    disabled={readOnly}
-                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!readOnly && draft.trim() && !(active.channel === "whatsapp" && waStatus && !waStatus.configured)) sendMsg.mutate(); } }}
-                    placeholder={readOnly ? "Modo solo lectura" : (active.channel === "whatsapp" && waStatus?.configured ? "Escribí una respuesta de WhatsApp…" : "Escribí una respuesta…")}
-                    className="rounded-sm resize-none min-h-[44px] max-h-32"
-                  />
-                  <Button
-                    data-testid="send-message-button"
-                    disabled={readOnly || !draft.trim() || sendMsg.isPending || (active.channel === "whatsapp" && waStatus && !waStatus.configured)}
-                    onClick={() => sendMsg.mutate()}
-                    className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm h-11 px-4"
-                  >
-                    <Send className="h-4 w-4" />
-                  </Button>
-                </div>
+                  </div>
+                )}
               </div>
             </>
           )}

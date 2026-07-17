@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch, AsyncMock
 
@@ -155,6 +156,10 @@ def test_permissions_sending_messages(srv):
     # Seed data
     _run(fake.contacts.insert_one({"id": "contact_123", "name": "Ana", "whatsapp_id": "5491155551234"}))
     _run(fake.conversations.insert_one({"id": "conv_123", "contact_id": "contact_123", "assigned_to": "u_agent1"}))
+    _run(fake.messages.insert_one({
+        "id": "msg_window", "conversation_id": "conv_123", "sender_type": "contact",
+        "direction": "inbound", "body": "Hola", "created_at": datetime.now(timezone.utc).isoformat(),
+    }))
     
     # Mock effective WA config
     async def mock_wa_config(db):
@@ -251,4 +256,3 @@ def test_task_list_enrichment(srv):
     assert task_doc["lead"]["title"] == "CRM Interest"
     assert task_doc["lead"]["contact"] is not None
     assert task_doc["lead"]["contact"]["name"] == "Carlos Gomez"
-

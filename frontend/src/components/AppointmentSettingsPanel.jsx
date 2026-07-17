@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellRing, BriefcaseBusiness, CalendarClock, MessageSquareText, Plus, Trash2, UserRound } from "lucide-react";
+import { BellRing, BriefcaseBusiness, CalendarClock, ClipboardCopy, ExternalLink, HelpCircle, MessageSquareText, Plus, Settings2, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import WeeklyScheduleEditor, { cloneWeeklySchedule, DEFAULT_WEEKLY_SCHEDULE } from "@/components/WeeklyScheduleEditor";
 
 const makeService = () => ({
@@ -38,6 +39,48 @@ const makeTemplate = (purpose, index = 0) => ({
   active: true,
   sort_order: index,
 });
+
+const TEMPLATE_GUIDES = [
+  {
+    key: "recontact",
+    title: "Recontacto de una consulta",
+    category: "Marketing",
+    purpose: "recontact",
+    metaName: "retomar_conversacion",
+    metaBody: "Hola {{1}}, queríamos retomar tu consulta. ¿Te gustaría que continuemos ayudándote?",
+    crmPreview: "Hola {{client_name}}, queríamos retomar tu consulta. ¿Te gustaría que continuemos ayudándote?",
+    parameterKeys: ["client_name"],
+  },
+  {
+    key: "appointment_reminder",
+    title: "Recordatorio de turno",
+    category: "Utility",
+    purpose: "appointment_reminder",
+    metaName: "recordatorio_turno",
+    metaBody: "Hola {{1}}, te recordamos tu turno para el {{2}} a las {{3}}. Respondé a este mensaje para confirmar o reprogramar.",
+    crmPreview: "Hola {{client_name}}, te recordamos tu turno para el {{appointment_date}} a las {{appointment_time}}. Respondé a este mensaje para confirmar o reprogramar.",
+    parameterKeys: ["client_name", "appointment_date", "appointment_time"],
+  },
+  {
+    key: "product_follow_up",
+    title: "Consulta sobre compra de producto",
+    category: "Marketing",
+    purpose: "recontact",
+    metaName: "seguimiento_compra_producto",
+    metaBody: "Hola {{1}}, queríamos saber si decidiste avanzar con la compra del producto que consultaste. Si necesitás ayuda, respondé este mensaje.",
+    crmPreview: "Hola {{client_name}}, queríamos saber si decidiste avanzar con la compra del producto que consultaste. Si necesitás ayuda, respondé este mensaje.",
+    parameterKeys: ["client_name"],
+  },
+];
+
+const copyGuideText = async (value, label) => {
+  try {
+    await navigator.clipboard.writeText(value);
+    toast.success(`${label} copiado`);
+  } catch {
+    toast.error("No se pudo copiar automáticamente");
+  }
+};
 
 function TemplateListEditor({ purpose, templates, onChange }) {
   const updateTemplate = (index, patch) => onChange(
@@ -103,8 +146,129 @@ function TemplateListEditor({ purpose, templates, onChange }) {
   );
 }
 
+function TemplateGuideDialog({ mode, onClose, onAdd }) {
+  const isMeta = mode === "meta";
+  return (
+    <Dialog open={!!mode} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto rounded-xl border-latus-warm-border bg-latus-surface">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-xl text-latus-ink">
+            {isMeta ? <ExternalLink className="h-5 w-5 text-latus-blue" /> : <Settings2 className="h-5 w-5 text-latus-blue" />}
+            {isMeta ? "Cómo configurar las plantillas en Meta" : "Cómo configurar las plantillas en el CRM"}
+          </DialogTitle>
+          <DialogDescription>
+            {isMeta
+              ? "Creá estas plantillas en la misma cuenta de WhatsApp Business conectada al CRM y esperá su aprobación."
+              : "Una vez aprobadas por Meta, registralas acá usando exactamente el mismo nombre, idioma y orden de variables."}
+          </DialogDescription>
+        </DialogHeader>
+
+        {isMeta ? (
+          <div className="space-y-5">
+            <ol className="grid gap-3 text-sm text-latus-ink md:grid-cols-2">
+              {[
+                "Entrá a Meta Business Manager y abrí WhatsApp Manager.",
+                "Seleccioná Plantillas de mensajes y luego Crear plantilla.",
+                "Elegí la categoría indicada, el idioma Español (Argentina) y copiá el nombre y texto.",
+                "Cargá ejemplos para las variables, enviá a revisión y esperá el estado Aprobada.",
+              ].map((step, index) => (
+                <li key={step} className="flex gap-3 rounded-lg border border-latus-warm-border bg-latus-cream/35 p-3">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-latus-blue text-xs font-bold text-white">{index + 1}</span>
+                  <span>{step}</span>
+                </li>
+              ))}
+            </ol>
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+              En Meta las variables son numeradas: <code>{"{{1}}"}</code>, <code>{"{{2}}"}</code> y <code>{"{{3}}"}</code>. Meta puede ajustar la categoría durante la revisión.
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <ol className="space-y-2 text-sm text-latus-ink">
+              <li><b>1.</b> Verificá que la plantilla figure como aprobada en Meta.</li>
+              <li><b>2.</b> Copiá en el CRM el nombre exacto de Meta y el idioma <code>es_AR</code>.</li>
+              <li><b>3.</b> En la vista previa reemplazá las variables numeradas por las variables con nombre del CRM.</li>
+              <li><b>4.</b> Cargá las variables en el mismo orden que tienen en Meta y guardá la configuración de agenda.</li>
+            </ol>
+            <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-xs text-blue-900">
+              Podés usar “Agregar al CRM” para precargar cualquiera de las guías. Después revisala y presioná “Guardar configuración de agenda”.
+            </div>
+          </div>
+        )}
+
+        <div className="grid gap-4 pt-1 lg:grid-cols-3">
+          {TEMPLATE_GUIDES.map((guide) => (
+            <article key={guide.key} className="flex flex-col rounded-xl border border-latus-warm-border bg-white p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-2">
+                <h3 className="text-sm font-bold text-latus-ink">{guide.title}</h3>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${guide.category === "Utility" ? "bg-emerald-50 text-emerald-700" : "bg-violet-50 text-violet-700"}`}>{guide.category}</span>
+              </div>
+              <div className="mt-4 space-y-3 text-xs">
+                <div>
+                  <p className="font-bold uppercase tracking-wider text-latus-muted">Nombre</p>
+                  <code className="mt-1 block rounded-md bg-latus-cream p-2 text-latus-ink">{guide.metaName}</code>
+                </div>
+                <div>
+                  <p className="font-bold uppercase tracking-wider text-latus-muted">{isMeta ? "Texto para Meta" : "Vista previa en el CRM"}</p>
+                  <p className="mt-1 min-h-28 whitespace-pre-wrap rounded-md bg-latus-cream p-3 leading-relaxed text-latus-ink">{isMeta ? guide.metaBody : guide.crmPreview}</p>
+                </div>
+                {!isMeta && (
+                  <div>
+                    <p className="font-bold uppercase tracking-wider text-latus-muted">Orden de variables</p>
+                    <code className="mt-1 block rounded-md bg-latus-cream p-2 text-latus-ink">{guide.parameterKeys.join(", ")}</code>
+                    <p className="mt-1 text-latus-muted">Lista: {guide.purpose === "appointment_reminder" ? "Recordatorios" : "Recontacto"}</p>
+                  </div>
+                )}
+              </div>
+              <div className="mt-auto grid gap-2 pt-4">
+                <Button type="button" variant="outline" size="sm" onClick={() => copyGuideText(guide.metaName, "Nombre")} className="border-latus-warm-border"><ClipboardCopy className="h-3.5 w-3.5" /> Copiar nombre</Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => copyGuideText(isMeta ? guide.metaBody : guide.crmPreview, "Texto")} className="border-latus-warm-border"><ClipboardCopy className="h-3.5 w-3.5" /> Copiar texto</Button>
+                {!isMeta && <Button type="button" size="sm" onClick={() => onAdd(guide)} className="bg-latus-blue text-white hover:bg-latus-blue-deep"><Plus className="h-3.5 w-3.5" /> Agregar al CRM</Button>}
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <DialogFooter className="gap-2 sm:gap-0">
+          {isMeta && (
+            <Button asChild type="button" variant="outline" className="border-latus-warm-border">
+              <a href="https://business.facebook.com/wa/manage/message-templates/" target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" /> Abrir WhatsApp Manager</a>
+            </Button>
+          )}
+          <Button type="button" onClick={onClose} className="bg-latus-ink text-white hover:bg-latus-ink-soft">Entendido</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CommunicationsSettings({ draft, onChange }) {
   const reminderTemplates = Array.isArray(draft.appointment_reminder_templates) ? draft.appointment_reminder_templates : [];
+  const [guideMode, setGuideMode] = useState(null);
+  const addGuide = (guide) => {
+    const field = guide.purpose === "appointment_reminder"
+      ? "appointment_reminder_templates"
+      : "whatsapp_recontact_templates";
+    const templates = Array.isArray(draft[field]) ? draft[field] : [];
+    if (templates.some((template) => template.name === guide.metaName)) {
+      toast.info("Esta plantilla ya está agregada en el CRM");
+      return;
+    }
+    onChange({
+      [field]: [...templates, {
+        id: `${guide.purpose}_${guide.metaName}`,
+        purpose: guide.purpose,
+        label: guide.title,
+        name: guide.metaName,
+        language: "es_AR",
+        body_preview: guide.crmPreview,
+        parameter_keys: guide.parameterKeys,
+        active: true,
+        sort_order: templates.length,
+      }],
+    });
+    toast.success("Plantilla agregada. Guardá la configuración para aplicarla.");
+  };
   return (
     <Accordion type="single" collapsible defaultValue="communications" className="space-y-3">
       <AccordionItem value="communications" className="overflow-hidden rounded-xl border border-latus-warm-border bg-white px-4">
@@ -116,6 +280,10 @@ function CommunicationsSettings({ draft, onChange }) {
         </AccordionTrigger>
         <AccordionContent className="space-y-4 px-1 pb-5">
           <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-xs leading-relaxed text-blue-900">Para escribir fuera de la ventana de atención necesitás una plantilla aprobada en Meta. El nombre, idioma y orden de variables deben coincidir exactamente.</div>
+          <div className="flex flex-col gap-2 rounded-lg border border-latus-warm-border bg-latus-cream/35 p-3 sm:flex-row">
+            <Button type="button" variant="outline" onClick={() => setGuideMode("meta")} className="flex-1 border-latus-warm-border bg-white text-latus-ink"><ExternalLink className="h-4 w-4 text-latus-blue" /> Cómo configurarlo en Meta</Button>
+            <Button type="button" variant="outline" onClick={() => setGuideMode("crm")} className="flex-1 border-latus-warm-border bg-white text-latus-ink"><HelpCircle className="h-4 w-4 text-latus-blue" /> Cómo configurarlo en el CRM</Button>
+          </div>
           <TemplateListEditor purpose="recontact" templates={Array.isArray(draft.whatsapp_recontact_templates) ? draft.whatsapp_recontact_templates : []} onChange={(whatsapp_recontact_templates) => onChange({ whatsapp_recontact_templates })} />
           <div className="space-y-4 rounded-lg border border-latus-warm-border bg-white p-4">
             <div className="flex items-start justify-between gap-4">
@@ -144,6 +312,7 @@ function CommunicationsSettings({ draft, onChange }) {
           <TemplateListEditor purpose="appointment_reminder" templates={reminderTemplates} onChange={(appointment_reminder_templates) => onChange({ appointment_reminder_templates })} />
         </AccordionContent>
       </AccordionItem>
+      <TemplateGuideDialog mode={guideMode} onClose={() => setGuideMode(null)} onAdd={addGuide} />
     </Accordion>
   );
 }

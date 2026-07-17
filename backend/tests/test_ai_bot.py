@@ -354,6 +354,15 @@ class TestBotInactivityAndTransitions:
             "bot_enabled": False,
             "last_message_at": new_time,
         }))
+
+        # Already closed chats must still re-arm if the bot was left disabled.
+        _run(db.conversations.insert_one({
+            "id": "conv_resolved_disabled",
+            "status": "resolved",
+            "bot_status": "cerrada",
+            "bot_enabled": False,
+            "last_message_at": old_time,
+        }))
         
         # 5. Run scanner
         _run(close_inactive_conversations(db))
@@ -368,6 +377,11 @@ class TestBotInactivityAndTransitions:
         c_new = _run(db.conversations.find_one({"id": "conv_new"}))
         assert c_new["status"] == "open"
         assert c_new["bot_enabled"] is False
+
+        c_resolved = _run(db.conversations.find_one({"id": "conv_resolved_disabled"}))
+        assert c_resolved["status"] == "resolved"
+        assert c_resolved["bot_enabled"] is True
+        assert c_resolved["bot_reactivated_reason"] == "inactivity_timeout"
         
         # 8. Verify system transition messages logged
         msgs = _run(db.messages.find({"conversation_id": "conv_old"}).to_list(10))
@@ -376,6 +390,10 @@ class TestBotInactivityAndTransitions:
         assert "cerrada automáticamente" in msgs[0]["body"]
         assert msgs[1]["sender_type"] == "system"
         assert "Bot reactivado" in msgs[1]["body"]
+
+        resolved_msgs = _run(db.messages.find({"conversation_id": "conv_resolved_disabled"}).to_list(10))
+        assert len(resolved_msgs) == 1
+        assert "Bot reactivado" in resolved_msgs[0]["body"]
 
     def test_reopen_re_enables_bot(self, monkeypatch):
         from server import _handle_inbound_message
