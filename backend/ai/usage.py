@@ -115,6 +115,8 @@ async def log_usage(db, *, status: str, provider: str, model: str,
                     message_id: str | None = None,
                     user_id: str | None = None,
                     error_message: str | None = None,
+                    provider_cost_usd: float | None = None,
+                    provider_request_id: str | None = None,
                     pricing: dict | None = None) -> None:
     """Persist a single usage log entry. Best-effort — never raises."""
     try:
@@ -130,6 +132,10 @@ async def log_usage(db, *, status: str, provider: str, model: str,
             "completion_tokens": int(completion_tokens or 0),
             "total_tokens": int(total),
             "estimated_cost_usd": float(cost),
+            "provider_cost_usd": float(provider_cost_usd) if provider_cost_usd is not None else None,
+            "cost_source": "provider_response" if provider_cost_usd is not None else "estimated",
+            "token_source": "provider_response" if status == "success" and total > 0 else "unavailable",
+            "provider_request_id": provider_request_id,
             "latency_ms": int(latency_ms or 0),
             "status": status,
             "error_message": (error_message or None) if status == "error" else None,
@@ -173,5 +179,8 @@ async def call_with_logging(db, provider, *,
                     completion_tokens=res.completion_tokens,
                     latency_ms=res.latency_ms, purpose=purpose,
                     conversation_id=conversation_id, message_id=message_id,
-                    user_id=user_id, pricing=pricing)
+                    user_id=user_id,
+                    provider_cost_usd=getattr(res, "provider_cost_usd", None),
+                    provider_request_id=getattr(res, "provider_request_id", None),
+                    pricing=pricing)
     return res

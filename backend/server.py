@@ -3337,11 +3337,13 @@ def _date_bounds(from_str: str | None, to_str: str | None) -> tuple[str, str]:
 
 
 def _build_usage_filter(from_iso: str, to_iso: str, model: str | None,
-                       status: str | None, conversation_id: str | None = None) -> dict:
+                       status: str | None, conversation_id: str | None = None,
+                       provider: str | None = None) -> dict:
     q: dict = {"created_at": {"$gte": from_iso, "$lte": to_iso}}
     if model:           q["model"] = model
     if status:          q["status"] = status
     if conversation_id: q["conversation_id"] = conversation_id
+    if provider:        q["provider"] = provider
     return q
 
 
@@ -3351,32 +3353,38 @@ async def admin_ai_usage_summary(
     to: str | None = Query(None),
     model: str | None = None,
     status: str | None = None,
+    provider: str | None = None,
     admin: User = Depends(require_perm("configure_ai")),
 ):
     f, t = _date_bounds(from_, to)
-    q = _build_usage_filter(f, t, model, status)
+    q = _build_usage_filter(f, t, model, status, provider=provider)
     logs = await db.ai_usage_logs.find(q, {"_id": 0}).to_list(50_000)
     total_calls = len(logs)
     success_calls = sum(1 for l in logs if l.get("status") == "success")
     error_calls = total_calls - success_calls
     total_tokens = sum(int(l.get("total_tokens") or 0) for l in logs)
     total_cost = round(sum(float(l.get("estimated_cost_usd") or 0.0) for l in logs), 6)
+    provider_cost = round(sum(float(l.get("provider_cost_usd") or 0.0) for l in logs), 6)
+    provider_cost_calls = sum(1 for l in logs if l.get("provider_cost_usd") is not None)
+    token_measured_calls = sum(1 for l in logs if l.get("status") == "success" and int(l.get("total_tokens") or 0) > 0)
 
     by_model: dict[str, dict] = {}
     by_day: dict[str, dict] = {}
     by_conv: dict[str, dict] = {}
     for l in logs:
         m = l.get("model") or "unknown"
-        bm = by_model.setdefault(m, {"model": m, "calls": 0, "tokens": 0, "cost_usd": 0.0})
+        bm = by_model.setdefault(m, {"model": m, "calls": 0, "tokens": 0, "cost_usd": 0.0, "provider_cost_usd": 0.0})
         bm["calls"] += 1
         bm["tokens"] += int(l.get("total_tokens") or 0)
         bm["cost_usd"] = round(bm["cost_usd"] + float(l.get("estimated_cost_usd") or 0.0), 6)
+        bm["provider_cost_usd"] = round(bm["provider_cost_usd"] + float(l.get("provider_cost_usd") or 0.0), 6)
 
         d = (l.get("created_at") or "")[:10]
-        bd = by_day.setdefault(d, {"date": d, "calls": 0, "tokens": 0, "cost_usd": 0.0})
+        bd = by_day.setdefault(d, {"date": d, "calls": 0, "tokens": 0, "cost_usd": 0.0, "provider_cost_usd": 0.0})
         bd["calls"] += 1
         bd["tokens"] += int(l.get("total_tokens") or 0)
         bd["cost_usd"] = round(bd["cost_usd"] + float(l.get("estimated_cost_usd") or 0.0), 6)
+        bd["provider_cost_usd"] = round(bd["provider_cost_usd"] + float(l.get("provider_cost_usd") or 0.0), 6)
 
         cid = l.get("conversation_id")
         if cid:
@@ -3392,6 +3400,16 @@ async def admin_ai_usage_summary(
         "error_calls": error_calls,
         "total_tokens": total_tokens,
         "total_cost_usd": total_cost,
+        "estimated_cost_usd": total_cost,
+        "provider_cost_usd": provider_cost,
+        "provider_cost_calls": provider_cost_calls,
+        "token_measured_calls": token_measured_calls,
+        "measurement": {
+            "tokens": "provider_response",
+            "cost": "mixed" if provider_cost_calls else "estimated",
+            "token_coverage_pct": round(token_measured_calls * 100.0 / success_calls, 1) if success_calls else 0.0,
+            "provider_cost_coverage_pct": round(provider_cost_calls * 100.0 / success_calls, 1) if success_calls else 0.0,
+        },
         "by_model": sorted(by_model.values(), key=lambda x: x["cost_usd"], reverse=True),
         "by_day": sorted(by_day.values(), key=lambda x: x["date"]),
         "top_conversations": top_conversations,
@@ -3405,12 +3423,13 @@ async def admin_ai_usage_logs(
     model: str | None = None,
     status: str | None = None,
     conversation_id: str | None = None,
+    provider: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     admin: User = Depends(require_perm("configure_ai")),
 ):
     f, t = _date_bounds(from_, to)
-    q = _build_usage_filter(f, t, model, status, conversation_id)
+    q = _build_usage_filter(f, t, model, status, conversation_id, provider)
     total = await db.ai_usage_logs.count_documents(q)
     items = await db.ai_usage_logs.find(q, {"_id": 0}) \
         .sort("created_at", -1).to_list(offset + limit)
@@ -3431,6 +3450,8 @@ async def admin_ai_usage_quick(admin: User = Depends(require_perm("configure_ai"
             "calls": len(items),
             "tokens": sum(int(i.get("total_tokens") or 0) for i in items),
             "cost_usd": round(sum(float(i.get("estimated_cost_usd") or 0.0) for i in items), 6),
+            "provider_cost_usd": round(sum(float(i.get("provider_cost_usd") or 0.0) for i in items), 6),
+            "provider_cost_calls": sum(1 for i in items if i.get("provider_cost_usd") is not None),
         }
 
     today_stats   = await _agg({"created_at": {"$gte": today_iso_f}})
@@ -3451,6 +3472,46 @@ async def admin_ai_usage_quick(admin: User = Depends(require_perm("configure_ai"
     )
     return {"today": today_stats, "this_month": month_stats,
             "all_time": all_stats, "top_model": top_model_payload}
+
+
+class AIUsageReportingKeyBody(BaseModel):
+    key: Optional[str] = None
+
+
+@api_router.get("/admin/ai-usage/provider-reporting")
+async def admin_ai_usage_provider_reporting(
+    admin: User = Depends(require_perm("configure_ai")),
+):
+    from ai import provider_usage
+    return await provider_usage.reporting_status(db)
+
+
+@api_router.put("/admin/ai-usage/provider-reporting/{provider}")
+async def admin_ai_usage_provider_reporting_put(
+    provider: str,
+    payload: AIUsageReportingKeyBody,
+    admin: User = Depends(require_perm("configure_ai")),
+):
+    from ai import provider_usage
+    try:
+        await provider_usage.save_reporting_key(db, provider, payload.key, admin.user_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return await provider_usage.reporting_status(db)
+
+
+@api_router.post("/admin/ai-usage/provider-report")
+async def admin_ai_usage_provider_report(
+    provider: str,
+    from_: str = Query(..., alias="from"),
+    to: str = Query(...),
+    admin: User = Depends(require_perm("configure_ai")),
+):
+    from ai import provider_usage
+    try:
+        return await provider_usage.fetch_provider_report(db, provider, from_, to)
+    except provider_usage.ProviderUsageError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @api_router.get("/admin/ai-pricing")

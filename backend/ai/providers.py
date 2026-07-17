@@ -264,6 +264,8 @@ class ChatResult:
     completion_tokens: int
     latency_ms: int
     provider: str
+    provider_cost_usd: float | None = None
+    provider_request_id: str | None = None
 
 
 class AIProvider:
@@ -369,6 +371,11 @@ class _OpenAICompatibleProvider(AIProvider):
         except Exception:
             raise LLMUnavailable("Respuesta del proveedor sin contenido")
         usage = data.get("usage") or {}
+        provider_cost = usage.get("cost")
+        try:
+            provider_cost = float(provider_cost) if provider_cost is not None else None
+        except (TypeError, ValueError):
+            provider_cost = None
         return ChatResult(
             content=content,
             model=data.get("model") or self.model,
@@ -376,6 +383,8 @@ class _OpenAICompatibleProvider(AIProvider):
             completion_tokens=int(usage.get("completion_tokens") or 0),
             latency_ms=latency,
             provider=self.name,
+            provider_cost_usd=provider_cost if self.name == "openrouter" else None,
+            provider_request_id=data.get("id"),
         )
 
 
@@ -442,6 +451,7 @@ class AnthropicProvider(AIProvider):
             completion_tokens=int(usage.get("output_tokens") or 0),
             latency_ms=latency,
             provider=self.name,
+            provider_request_id=data.get("id"),
         )
 
 
@@ -494,6 +504,7 @@ class GeminiProvider(AIProvider):
             completion_tokens=int(usage.get("candidatesTokenCount") or 0),
             latency_ms=latency,
             provider=self.name,
+            provider_request_id=data.get("responseId"),
         )
 
 

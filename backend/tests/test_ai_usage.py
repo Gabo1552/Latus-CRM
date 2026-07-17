@@ -107,6 +107,26 @@ class TestUsageLogging:
         assert log["estimated_cost_usd"] == 0.0
         assert log["status"] == "success"
 
+    def test_provider_reported_cost_is_kept_separate(self, srv, monkeypatch):
+        _, fake, _ = srv
+        from ai import providers, usage
+
+        class _Res:
+            content = "{}"; model = "openai/gpt-4o-mini"
+            prompt_tokens = 100; completion_tokens = 50; latency_ms = 20
+            provider = "openrouter"; provider_cost_usd = 0.0042
+            provider_request_id = "gen-123"
+
+        async def fake_chat(self, **kwargs): return _Res()
+        monkeypatch.setattr(providers.OpenRouterProvider, "chat", fake_chat)
+        prov = providers.OpenRouterProvider(model="openai/gpt-4o-mini", api_key="x")
+        _run(usage.call_with_logging(fake, prov, system_prompt="s", user_block="u"))
+        log = fake.ai_usage_logs.docs[-1]
+        assert log["provider_cost_usd"] == pytest.approx(0.0042)
+        assert log["cost_source"] == "provider_response"
+        assert log["token_source"] == "provider_response"
+        assert log["provider_request_id"] == "gen-123"
+
     def test_error_call_creates_error_log(self, srv, monkeypatch):
         _, fake, client = srv
         from ai import providers, usage
@@ -124,6 +144,30 @@ class TestUsageLogging:
         assert "sk-leaky" not in log["error_message"]  # no api_key leak
         assert log["estimated_cost_usd"] == 0.0
         assert log["latency_ms"] >= 0
+
+
+class TestProviderUsageParsing:
+    def test_openai_report_aggregation(self, srv):
+        from ai.provider_usage import _openai_cost, _openai_usage
+        pages = [{"data": [{
+            "start_time": 1730419200,
+            "results": [
+                {"model": "gpt-4o-mini", "input_tokens": 1000, "output_tokens": 500, "num_model_requests": 5},
+                {"model": "gpt-4o", "input_tokens": 200, "output_tokens": 100, "num_model_requests": 1},
+            ],
+        }]}]
+        tokens, requests, by_model, by_day = _openai_usage(pages)
+        assert tokens == 1800 and requests == 6
+        assert by_model[0]["model"] == "gpt-4o-mini"
+        assert by_day[0]["requests"] == 6
+        assert _openai_cost([{"data": [{"results": [{"amount": {"currency": "usd", "value": 1.25}}]}]}]) == 1.25
+
+    def test_anthropic_cost_is_converted_from_cents(self, srv):
+        from ai.provider_usage import _anthropic_cost, _anthropic_tokens
+        result = {"uncached_input_tokens": 100, "cache_read_input_tokens": 30, "output_tokens": 20}
+        assert _anthropic_tokens(result) == 150
+        pages = [{"data": [{"results": [{"amount": "125.5"}, {"amount": "24.5"}]}]}]
+        assert _anthropic_cost(pages) == 1.5
 
 
 class TestUsageEndpoints:
@@ -153,6 +197,8 @@ class TestUsageEndpoints:
         assert d["total_calls"] == 4
         assert d["success_calls"] == 4
         assert d["total_cost_usd"] == pytest.approx(0.001135, abs=1e-6)
+        assert d["estimated_cost_usd"] == d["total_cost_usd"]
+        assert d["measurement"]["cost"] == "estimated"
         models = {b["model"] for b in d["by_model"]}
         assert models == {"gpt-4o-mini", "gpt-4o"}
         # Filtered by model
@@ -160,6 +206,12 @@ class TestUsageEndpoints:
                         headers=_h("T-ADMIN"))
         assert r2.json()["total_calls"] == 1
         assert r2.json()["total_cost_usd"] == 0.001
+
+        # Filtered by provider
+        self._seed_log(fake, provider="anthropic", model="claude-test")
+        r3 = client.get("/api/admin/ai-usage/summary?provider=anthropic", headers=_h("T-ADMIN"))
+        assert r3.json()["total_calls"] == 1
+        assert r3.json()["by_model"][0]["model"] == "claude-test"
 
     def test_logs_pagination(self, srv):
         _, fake, client = srv
@@ -230,6 +282,33 @@ class TestUsageEndpoints:
                        headers=_h("T-ADMIN"))
         assert r.status_code == 400
         assert "no puede ser mayor" in r.text
+
+    def test_reporting_status_and_admin_key_storage(self, srv):
+        _, fake, client = srv
+        r = client.get("/api/admin/ai-usage/provider-reporting", headers=_h("T-ADMIN"))
+        assert r.status_code == 200
+        providers = {item["provider"]: item for item in r.json()["providers"]}
+        assert providers["openai"]["requires_separate_key"] is True
+        assert providers["gemini"]["reporting_supported"] is False
+
+        saved = client.put(
+            "/api/admin/ai-usage/provider-reporting/openai",
+            headers=_h("T-ADMIN"), json={"key": "sk-admin-secret1234"},
+        )
+        assert saved.status_code == 200
+        item = next(x for x in saved.json()["providers"] if x["provider"] == "openai")
+        assert item["configured"] is True
+        assert item["masked"].endswith("1234")
+        raw_doc = fake.app_secrets.docs[-1]
+        assert "sk-admin-secret1234" not in str(raw_doc)
+
+    def test_reporting_key_rejects_unsupported_provider(self, srv):
+        _, _, client = srv
+        r = client.put(
+            "/api/admin/ai-usage/provider-reporting/gemini",
+            headers=_h("T-ADMIN"), json={"key": "secret"},
+        )
+        assert r.status_code == 400
 
 
 class TestPipelineEndToEnd:
