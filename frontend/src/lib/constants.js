@@ -43,7 +43,7 @@ export const statusMeta = (list, key) =>
   list.find((s) => s.key === key) || { label: key, color: "#52525B", bg: "#F4F4F5" };
 
 export const money = (n) =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n || 0);
+  new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n || 0);
 
 export const initials = (name = "?") =>
   name.split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase();

@@ -4696,11 +4696,19 @@ async def _seed(force: bool = False):
 
     This prevents accidental insertion of demo users / tokens in production.
     """
+    scenario_id = "aura_estetica_argentina_v1"
     flag = await db.settings.find_one({"key": "seeded"})
-    if flag and not force:
-        return
     seed_enabled = (os.environ.get("LATUS_SEED_DEMO", "").strip().lower()
                     in ("1", "true", "yes", "on"))
+    if flag and not force:
+        if flag.get("scenario") == scenario_id:
+            return
+        # Sólo migramos automáticamente una demo anterior cuando el entorno
+        # sigue declarado como demo. Una base real nunca se reemplaza aquí.
+        previous_demo_users = await db.users.count_documents({"is_demo": True})
+        if not (seed_enabled and previous_demo_users > 0):
+            return
+        force = True
     if not force:
         admin_count = await db.users.count_documents({"role": "admin", "active": True, "deleted_at": None})
         if admin_count == 0:
@@ -4708,168 +4716,54 @@ async def _seed(force: bool = False):
             await db.users.update_one(
                 {"user_id": "user_local_admin"},
                 {"$set": {
-                    "user_id": "user_local_admin",
-                    "email": "admin@latus.test",
-                    "name": "Administrador Local",
-                    "role": "admin",
-                    "active": True,
-                    "auth_provider": "local",
-                    "password_hash": hash_password("Latus1234"),
-                    "is_demo": False,
-                    "created_at": now_iso(),
-                    "updated_at": now_iso()
-                }},
-                upsert=True
+                    "user_id": "user_local_admin", "email": "admin@latus.test",
+                    "name": "Administrador Local", "role": "admin", "active": True,
+                    "auth_provider": "local", "password_hash": hash_password("Latus1234"),
+                    "is_demo": False, "created_at": now_iso(), "updated_at": now_iso(),
+                }}, upsert=True,
             )
         if not seed_enabled:
             logger.info("_seed skipped: LATUS_SEED_DEMO not set")
             return
+
+    from demo_data import build_demo_dataset
+
     if force:
-        for coll in ["contacts", "leads", "conversations", "messages", "tasks", "notes", "tags", "bot_events", "notifications"]:
+        # El restablecimiento demo ya reemplazaba los datos operativos. Incluimos
+        # ahora catálogo, agenda, áreas y métricas para que todas las pantallas
+        # pertenezcan al mismo escenario.
+        for coll in [
+            "contacts", "leads", "conversations", "messages", "tasks", "notes",
+            "tags", "appointments", "products", "work_areas", "ai_usage_logs",
+            "bot_events", "notifications",
+        ]:
             await db.__getattr__(coll).delete_many({})
         await db.users.delete_many({"is_demo": True})
 
-    AV1 = "https://images.unsplash.com/photo-1560250097-0b93528c311a?crop=entropy&cs=srgb&fm=jpg&w=200&q=70"
-    AV2 = "https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=entropy&cs=srgb&fm=jpg&w=200&q=70"
-    AV3 = "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?crop=entropy&cs=srgb&fm=jpg&w=200&q=70"
+    dataset = build_demo_dataset()
+    for user_doc in dataset["users"]:
+        await db.users.update_one(
+            {"user_id": user_doc["user_id"]}, {"$set": user_doc}, upsert=True,
+        )
+    for collection_name in [
+        "work_areas", "tags", "products", "contacts", "leads", "conversations",
+        "messages", "notes", "tasks", "appointments", "ai_usage_logs",
+    ]:
+        collection = db.__getattr__(collection_name)
+        for document in dataset[collection_name]:
+            await collection.insert_one(document)
 
-    # demo team members
-    demo_users = [
-        {"user_id": "user_demo_sup", "email": "maya@flowdesk.demo", "name": "Maya Sorensen", "role": "supervisor", "picture": AV3},
-        {"user_id": "user_demo_a1", "email": "leo@flowdesk.demo", "name": "Leo Marchetti", "role": "sales_agent", "picture": AV1},
-        {"user_id": "user_demo_a2", "email": "priya@flowdesk.demo", "name": "Priya Nair", "role": "sales_agent", "picture": AV2},
-    ]
-    for u in demo_users:
-        await db.users.update_one({"user_id": u["user_id"]}, {"$set": {**u, "active": True, "is_demo": True, "created_at": now_iso()}}, upsert=True)
-    agent_ids = ["user_demo_a1", "user_demo_a2", "user_demo_sup"]
-
-    tags = [
-        {"id": "tag_hot", "name": "Lead caliente", "color": "#DC2626"},
-        {"id": "tag_vip", "name": "VIP", "color": "#FF4500"},
-        {"id": "tag_demo", "name": "Demo agendada", "color": "#064E3B"},
-        {"id": "tag_followup", "name": "Seguimiento", "color": "#EAB308"},
-    ]
-    await db.tags.insert_many(tags)
-
-    seed_contacts = [
-        ("Carlos Mendez", "+1 415 555 0192", "carlos@brightretail.com", "Bright Retail Co", AV1),
-        ("Sophie Tremblay", "+1 438 555 0117", "sophie@nordwear.ca", "NordWear", AV2),
-        ("Aisha Rahman", "+44 20 7946 0321", "aisha@lumastudio.uk", "Luma Studio", AV3),
-        ("Daniel Kim", "+82 10 5555 8841", "daniel@seoulfit.kr", "SeoulFit", AV1),
-        ("Elena Rossi", "+39 06 5555 7723", "elena@bellacasa.it", "Bella Casa", AV2),
-        ("Marcus Webb", "+1 312 555 0144", "marcus@peakgear.com", "Peak Gear", AV1),
-        ("Yuki Tanaka", "+81 3 5555 2210", "yuki@tokyobloom.jp", "Tokyo Bloom", AV3),
-        ("Fatima Zahra", "+971 4 555 9087", "fatima@dunesco.ae", "Dunes Co", AV2),
-    ]
-    conv_seed = [
-        # (status, priority, bot_enabled, lead_status, value, last_msg, messages[(type,body)])
-        ("open", "high", False, "qualified", 12000, "Perfecto, ¿me podés enviar la propuesta?", [
-            ("contact", "Hola, vi su anuncio en Instagram. ¿Envían al por mayor a EE. UU.?"),
-            ("bot", "¡Hola! Sí, hacemos envíos mayoristas a todo EE. UU. ¿Cuántas unidades buscás?"),
-            ("contact", "Unas 500 unidades para empezar, quizá más el próximo trimestre."),
-            ("bot", "¡Genial! Para 500+ unidades tenemos precios por volumen. Te conecto con un especialista."),
-            ("agent", "Hola Carlos, soy Leo de ventas. Para 500 unidades el precio es USD 24/unidad con envío gratis."),
-            ("contact", "Perfecto, ¿me podés enviar la propuesta?"),
-        ]),
-        ("pending", "medium", True, "contacted", 4500, "Lo consulto con mi equipo y te aviso.", [
-            ("contact", "¿Tienen la colección de primavera en stock?"),
-            ("bot", "¡Sí! La colección de primavera está disponible. ¿Querés un catálogo?"),
-            ("contact", "Sí, por favor."),
-            ("bot", "Te lo envié por correo. Los precios arrancan en USD 18/unidad para pedidos de más de 100."),
-            ("contact", "Lo consulto con mi equipo y te aviso."),
-        ]),
-        ("open", "high", False, "proposal", 28000, "La propuesta se ve bien. ¿Hay descuento anual?", [
-            ("contact", "Estamos comparando 3 proveedores. ¿Qué los diferencia?"),
-            ("agent", "Hola Aisha, excelente pregunta. Ofrecemos despacho en 48 h y un ejecutivo de cuenta dedicado."),
-            ("contact", "La propuesta se ve bien. ¿Hay descuento anual?"),
-        ]),
-        ("resolved", "low", True, "won", 9000, "¡Pago realizado, gracias!", [
-            ("contact", "Listo para hacer el pedido."),
-            ("bot", "¡Excelente! Te envío el enlace de pago ahora."),
-            ("contact", "¡Pago realizado, gracias!"),
-        ]),
-        ("open", "medium", True, "new", 0, "Hola, ¿cuáles son sus precios?", [
-            ("contact", "Hola, ¿cuáles son sus precios?"),
-            ("bot", "¡Hola Elena! Nuestro catálogo arranca en USD 15/unidad. ¿Qué línea te interesa?"),
-        ]),
-        ("pending", "high", False, "qualified", 16500, "¿Podemos coordinar una llamada rápida mañana?", [
-            ("contact", "Necesito 1000 unidades con urgencia para un evento."),
-            ("bot", "Puedo ayudarte con pedidos urgentes por volumen. Te conecto con un especialista."),
-            ("agent", "Hola Marcus, soy Priya. Podemos despachar 1000 unidades en 5 días."),
-            ("contact", "¿Podemos coordinar una llamada rápida mañana?"),
-        ]),
-        ("open", "low", True, "contacted", 3200, "Gracias, lo voy a pensar.", [
-            ("contact", "¿Ofrecen muestras?"),
-            ("bot", "Sí, las muestras cuestan USD 5 cada una, reembolsables en tu primer pedido."),
-            ("contact", "Gracias, lo voy a pensar."),
-        ]),
-        ("open", "medium", False, "lost", 5000, "Elegimos otro proveedor, disculpá.", [
-            ("contact", "¿Cuál es su pedido mínimo?"),
-            ("agent", "Hola Fatima, nuestro mínimo es de 200 unidades."),
-            ("contact", "Elegimos otro proveedor, disculpá."),
-        ]),
-    ]
-
-    for i, (cname, phone, cemail, company, avatar) in enumerate(seed_contacts):
-        cid = new_id("contact")
-        await db.contacts.insert_one({
-            "id": cid, "name": cname, "phone": phone, "email": cemail, "company": company,
-            "avatar": avatar, "tags": [tags[i % len(tags)]["name"]], "notes": None, "created_at": now_iso(),
-        })
-        status, prio, bot, lead_status, value, last_msg, msgs = conv_seed[i]
-        assigned = agent_ids[i % len(agent_ids)]
-        # Leave a couple conversations unassigned so they notify admins + supervisors
-        if i in (4, 5):
-            assigned = None
-        lid = new_id("lead")
-        await db.leads.insert_one({
-            "id": lid, "contact_id": cid, "title": f"Pedido mayorista · {company}",
-            "status": lead_status, "priority": prio, "value": value, "assigned_to": assigned,
-            "source": "WhatsApp", "tags": [tags[i % len(tags)]["name"]],
-            "created_at": now_iso(), "updated_at": now_iso(),
-        })
-        conv_id = new_id("conv")
-        await db.conversations.insert_one({
-            "id": conv_id, "contact_id": cid, "lead_id": lid, "status": status, "priority": prio,
-            "bot_enabled": bot, "assigned_to": assigned, "last_message": last_msg,
-            "last_message_at": now_iso(), "unread": 2 if status == "open" else 0, "created_at": now_iso(),
-        })
-        # Backdate messages ~3h so unanswered customer chats trigger lead_no_response
-        base = datetime.now(timezone.utc) - timedelta(hours=3)
-        for j, (stype, body) in enumerate(msgs):
-            sname = {"contact": cname, "bot": "Bot", "agent": "Agente de ventas"}[stype]
-            await db.messages.insert_one({
-                "id": new_id("msg"), "conversation_id": conv_id, "sender_type": stype,
-                "sender_name": sname, "body": body,
-                "created_at": (base + timedelta(minutes=j * 7)).isoformat(),
-            })
-        if i % 2 == 0:
-            await db.notes.insert_one({
-                "id": new_id("note"), "lead_id": lid,
-                "body": "Cliente sensible al precio pero de alto volumen. Empujar contrato anual.",
-                "author_id": "user_demo_sup", "author_name": "Maya Sorensen", "created_at": now_iso(),
-            })
-        if lead_status in ("qualified", "proposal"):
-            await db.tasks.insert_one({
-                "id": new_id("task"), "title": f"Enviar propuesta a {cname}",
-                "description": "Preparar el PDF de precios por volumen y enviarlo por correo.", "lead_id": lid,
-                "due_date": (datetime.now(timezone.utc) + timedelta(days=i % 3 + 1)).date().isoformat(),
-                "status": "todo", "priority": prio, "assigned_to": assigned, "created_at": now_iso(),
-            })
-
-    await db.tasks.insert_one({
-        "id": new_id("task"), "title": "Revisión semanal del pipeline", "description": "Revisar todas las oportunidades abiertas con el equipo.",
-        "lead_id": None, "due_date": (datetime.now(timezone.utc) + timedelta(days=2)).date().isoformat(),
-        "status": "todo", "priority": "medium", "assigned_to": "user_demo_sup", "created_at": now_iso(),
-    })
-    # Unassigned overdue task -> surfaces to admins/supervisors
-    await db.tasks.insert_one({
-        "id": new_id("task"), "title": "Dar seguimiento a cotización sin respuesta", "description": "Cotización enviada hace días sin respuesta — contactar al cliente.",
-        "lead_id": None, "due_date": (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat(),
-        "status": "todo", "priority": "high", "assigned_to": None, "created_at": now_iso(),
-    })
-
-    await db.settings.update_one({"key": "seeded"}, {"$set": {"key": "seeded", "at": now_iso()}}, upsert=True)
+    await db.bot_settings.update_one(
+        {"_id": "default"}, {"$set": dataset["bot_settings"]}, upsert=True,
+    )
+    await db.settings.update_one(
+        {"key": "app"}, {"$set": dataset["app_settings"]}, upsert=True,
+    )
+    await db.settings.update_one(
+        {"key": "seeded"},
+        {"$set": {"key": "seeded", "at": now_iso(), "scenario": scenario_id}},
+        upsert=True,
+    )
 
 
 async def _seed_roles():

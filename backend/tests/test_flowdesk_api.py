@@ -236,7 +236,7 @@ class TestAdminRBAC:
         r = requests.get(f"{BASE_URL}/api/users", headers=ADMIN_HEADERS)
         assert r.status_code == 200
         users = r.json()
-        assert any(u["email"] == "maya@flowdesk.demo" for u in users)
+        assert any(u["email"] == "valentina@auraestetica.com.ar" for u in users)
 
     def test_role_change_admin(self):
         # promote/demote demo sales agent
