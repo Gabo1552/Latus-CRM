@@ -315,6 +315,28 @@ async def build_appointment_context(db, conv: Mapping[str, Any], settings: Mappi
         "Nunca confirmes un horario fuera de estas disponibilidades.",
     ]
 
+    if settings.get("appointment_rescheduling_enabled", True) and conv.get("contact_id"):
+        existing = await db.appointments.find({
+            "contact_id": conv.get("contact_id"),
+            "event_type": "appointment",
+            "status": "scheduled",
+            "start_time": {"$gte": now_utc.isoformat()},
+        }, {"_id": 0}).sort("start_time", 1).to_list(20)
+        if existing:
+            instructions.append("Turnos próximos ya agendados para este cliente:")
+            for appointment in existing:
+                instructions.append(
+                    f"- {appointment.get('id')}: {appointment.get('title')}; "
+                    f"desde {appointment.get('start_time')} hasta {appointment.get('end_time')}; "
+                    f"persona {appointment.get('assigned_to') or '-'}; servicio {appointment.get('service_id') or '-'}"
+                )
+            instructions.extend([
+                "Si el cliente pide cambiar, mover o reprogramar uno de esos turnos, usá decision=reschedule_appointment.",
+                "En appointment_id colocá el ID exacto del turno existente y en appointment_start_time el nuevo horario.",
+                "No uses schedule_appointment para una reprogramación porque duplicaría la reserva.",
+                "Si el cliente confirma expresamente uno de esos turnos, usá decision=confirm_appointment y colocá su ID exacto en appointment_id.",
+            ])
+
     if mode == "people":
         user_query: dict[str, Any] = {"active": {"$ne": False}}
         if conv.get("assigned_to"):

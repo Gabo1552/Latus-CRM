@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { endOfMonth, format, isSameDay, parseISO, startOfMonth } from "date-fns";
 import { es } from "date-fns/locale";
 import {
-  Bot, BriefcaseBusiness, Calendar as CalendarIcon, CalendarClock, CheckCircle, Clock, MapPin, Pencil,
+  BellRing, Bot, BriefcaseBusiness, Calendar as CalendarIcon, CalendarClock, CheckCircle, Clock, MapPin, Pencil,
   Phone, Plus, Settings2, Trash2, User, Users, XCircle,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
@@ -37,6 +37,9 @@ const newEventForm = (date, assignedTo) => ({
   status: "scheduled",
   assigned_to: assignedTo || "",
   service_id: "",
+  contact_id: "",
+  reminder_enabled: false,
+  reminder_minutes_before: 1440,
 });
 
 const mutationError = (error, fallback) =>
@@ -74,6 +77,11 @@ export default function Calendario() {
   const { data: schedulingConfig } = useQuery({
     queryKey: ["calendar-scheduling-config"],
     queryFn: () => api.get("/calendar/scheduling-config").then((response) => response.data),
+  });
+
+  const { data: contacts = [] } = useQuery({
+    queryKey: ["calendar-contacts"],
+    queryFn: () => api.get("/contacts").then((response) => response.data),
   });
 
   useEffect(() => {
@@ -136,6 +144,15 @@ export default function Calendario() {
     onError: (error) => mutationError(error, "No se pudo eliminar el evento"),
   });
 
+  const sendReminder = useMutation({
+    mutationFn: (id) => api.post(`/appointments/${id}/send-reminder`),
+    onSuccess: () => {
+      refreshAppointments();
+      toast.success("Recordatorio enviado por WhatsApp");
+    },
+    onError: (error) => mutationError(error, "No se pudo enviar el recordatorio"),
+  });
+
   const saveAvailability = useMutation({
     mutationFn: (payload) => api.patch("/calendar/availability", payload),
     onSuccess: (response) => {
@@ -172,6 +189,8 @@ export default function Calendario() {
     setForm({
       ...newEventForm(selectedDate, defaultOwner),
       service_id: activeServices[0]?.id || "",
+      reminder_enabled: !!schedulingConfig?.reminders_enabled,
+      reminder_minutes_before: schedulingConfig?.reminder_minutes_before || 1440,
     });
     setDialogOpen(true);
   };
@@ -191,6 +210,9 @@ export default function Calendario() {
       status: appointment.status || "scheduled",
       assigned_to: appointment.assigned_to || user?.user_id || "",
       service_id: appointment.service_id || activeServices[0]?.id || "",
+      contact_id: appointment.contact_id || appointment.lead?.contact_id || "",
+      reminder_enabled: !!appointment.reminder_enabled,
+      reminder_minutes_before: appointment.reminder_minutes_before || schedulingConfig?.reminder_minutes_before || 1440,
     });
     setDialogOpen(true);
   };
@@ -220,6 +242,9 @@ export default function Calendario() {
         service_id: form.event_type === "appointment" && schedulingConfig?.mode === "business"
           ? form.service_id || null
           : null,
+        contact_id: form.event_type === "appointment" ? form.contact_id || null : null,
+        reminder_enabled: form.event_type === "appointment" ? !!form.reminder_enabled : false,
+        reminder_minutes_before: form.event_type === "appointment" ? Number(form.reminder_minutes_before) || 1440 : null,
       },
     });
   };
@@ -420,12 +445,23 @@ export default function Calendario() {
                           <span className="flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" />{duration} min</span>
                           {appointment.service_name && <span className="flex items-center gap-1.5 font-semibold text-latus-ink"><BriefcaseBusiness className="h-3.5 w-3.5 text-latus-blue" />{appointment.service_name}</span>}
                           {appointment.assigned_user?.name && <span className="flex items-center gap-1.5 font-semibold text-latus-ink"><Users className="h-3.5 w-3.5 text-latus-blue" />{appointment.assigned_user.name}</span>}
+                          {appointment.reminder_enabled && (
+                            <span className="flex items-center gap-1.5"><BellRing className="h-3.5 w-3.5 text-latus-blue" />
+                              {appointment.reminder_status === "sent" ? "Recordatorio enviado" : `Recordatorio ${appointment.reminder_minutes_before} min antes`}
+                            </span>
+                          )}
+                          {appointment.confirmation_status === "confirmed" && <span className="font-bold text-emerald-700">Asistencia confirmada</span>}
                         </div>
                       </div>
 
                       <div className="flex shrink-0 flex-wrap items-center gap-2">
                         {appointment.status === "scheduled" && (
                           <>
+                            {appointment.event_type === "appointment" && contact && (
+                              <Button type="button" variant="outline" size="sm" onClick={() => sendReminder.mutate(appointment.id)} disabled={sendReminder.isPending} className="border-blue-200 text-latus-blue hover:bg-blue-50">
+                                <BellRing className="h-3.5 w-3.5" /> Recordar ahora
+                              </Button>
+                            )}
                             <Button type="button" variant="outline" size="sm" onClick={() => updateStatus.mutate({ id: appointment.id, status: "completed" })} disabled={updateStatus.isPending} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50">
                               <CheckCircle className="h-3.5 w-3.5" /> Completar
                             </Button>
@@ -486,6 +522,20 @@ export default function Calendario() {
               <Input id="calendar-title" data-testid="calendar-event-title" value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} placeholder={form.event_type === "appointment" ? "Ej.: Reunión de seguimiento" : "Ej.: Revisión semanal"} className="mt-1" />
             </div>
 
+            {form.event_type === "appointment" && (
+              <div>
+                <Label className="text-xs font-semibold">Cliente a contactar</Label>
+                <Select value={form.contact_id || "none"} onValueChange={(value) => setForm((current) => ({ ...current, contact_id: value === "none" ? "" : value, reminder_enabled: value === "none" ? false : current.reminder_enabled }))}>
+                  <SelectTrigger data-testid="calendar-event-contact" className="mt-1"><SelectValue placeholder="Seleccionar cliente" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Sin cliente asociado</SelectItem>
+                    {contacts.map((contact) => <SelectItem key={contact.id} value={contact.id}>{contact.name || contact.phone || "Cliente"}{contact.phone ? ` · ${contact.phone}` : ""}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <p className="mt-1 text-xs text-latus-muted">El cliente asociado permite enviar el recordatorio y reconocer si luego confirma o pide reprogramar.</p>
+              </div>
+            )}
+
             {form.event_type === "appointment" && schedulingConfig?.mode === "business" && (
               <div>
                 <Label className="text-xs font-semibold">Servicio del local</Label>
@@ -541,6 +591,19 @@ export default function Calendario() {
                 </SelectContent>
               </Select>
             </div>
+
+            {form.event_type === "appointment" && (
+              <div className="rounded-lg border border-latus-warm-border bg-latus-cream/40 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div><p className="flex items-center gap-2 text-sm font-bold text-latus-ink"><BellRing className="h-4 w-4 text-latus-blue" /> Recordatorio por WhatsApp</p><p className="mt-1 text-xs text-latus-muted">Usa la plantilla predeterminada configurada para reconfirmar el turno.</p></div>
+                  <Switch checked={!!form.reminder_enabled} disabled={!form.contact_id || !schedulingConfig?.reminders_enabled} onCheckedChange={(reminder_enabled) => setForm((current) => ({ ...current, reminder_enabled }))} />
+                </div>
+                {form.reminder_enabled && (
+                  <div className="mt-3 max-w-xs"><Label className="text-xs font-semibold">Minutos antes del turno</Label><Input type="number" min="5" max="43200" value={form.reminder_minutes_before || 1440} onChange={(event) => setForm((current) => ({ ...current, reminder_minutes_before: Number(event.target.value) }))} className="mt-1 bg-white" /></div>
+                )}
+                {!schedulingConfig?.reminders_enabled && <p className="mt-2 text-xs text-amber-700">Activá los recordatorios y elegí una plantilla en Configuración → Agenda.</p>}
+              </div>
+            )}
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">

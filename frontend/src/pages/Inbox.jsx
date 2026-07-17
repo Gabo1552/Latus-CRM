@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { Fragment, useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Send, Bot, User as UserIcon, Sparkles, Search, Phone, Building2,
   MessageSquare, Zap, Copy, RefreshCw, ArrowRightLeft, AlertOctagon,
-  ChevronRight, Lightbulb,
+  ChevronRight, FileText, Lightbulb,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
@@ -17,6 +17,46 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+
+const messageDate = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const messageDayKey = (value) => {
+  const date = messageDate(value);
+  if (!date) return null;
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+};
+
+const formatMessageDay = (value) => {
+  const date = messageDate(value);
+  if (!date) return "";
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (messageDayKey(date) === messageDayKey(today)) return "Hoy";
+  if (messageDayKey(date) === messageDayKey(yesterday)) return "Ayer";
+  const formatted = date.toLocaleDateString("es-AR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    ...(date.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}),
+  });
+  return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+};
+
+const formatMessageTime = (value) => {
+  const date = messageDate(value);
+  return date ? date.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }) : "";
+};
+
+const formatMessageFullDate = (value) => {
+  const date = messageDate(value);
+  return date ? date.toLocaleString("es-AR", { dateStyle: "full", timeStyle: "short" }) : "";
+};
 
 export default function Inbox() {
   const qc = useQueryClient();
@@ -33,6 +73,8 @@ export default function Inbox() {
   const [draft, setDraft] = useState("");
   const [suggestionDraft, setSuggestionDraft] = useState("");
   const [suggestionMeta, setSuggestionMeta] = useState(null); // {confidence, intent}
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const scrollRef = useRef(null);
 
   const { data: workAreas = [] } = useQuery({
@@ -60,6 +102,21 @@ export default function Inbox() {
     refetchInterval: 3000,
   });
 
+  const { data: templateData } = useQuery({
+    queryKey: ["whatsapp-recontact-templates", activeId],
+    queryFn: () => api.get(`/conversations/${activeId}/whatsapp-templates`).then((response) => response.data),
+    enabled: !!activeId && active?.channel === "whatsapp" && !readOnly,
+  });
+  const recontactTemplates = useMemo(() => templateData?.templates || [], [templateData]);
+  const selectedTemplate = recontactTemplates.find((template) => template.id === selectedTemplateId);
+
+  useEffect(() => {
+    if (!selectedTemplateId && recontactTemplates.length) setSelectedTemplateId(recontactTemplates[0].id);
+    if (selectedTemplateId && !recontactTemplates.some((template) => template.id === selectedTemplateId)) {
+      setSelectedTemplateId(recontactTemplates[0]?.id || "");
+    }
+  }, [recontactTemplates, selectedTemplateId]);
+
   useEffect(() => { setSuggestionDraft(""); setSuggestionMeta(null); }, [activeId]);
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -84,6 +141,17 @@ export default function Inbox() {
       if (detail) toast.error(detail);
       else toast.error("No se pudo enviar el mensaje");
     },
+  });
+
+  const sendTemplate = useMutation({
+    mutationFn: () => api.post(`/conversations/${activeId}/send-whatsapp-template`, { template_id: selectedTemplateId }),
+    onSuccess: () => {
+      setTemplateOpen(false);
+      qc.invalidateQueries({ queryKey: ["conversation", activeId] });
+      qc.invalidateQueries({ queryKey: ["conversations"] });
+      toast.success("Plantilla de recontacto enviada");
+    },
+    onError: (error) => toast.error(error.response?.data?.detail || "No se pudo enviar la plantilla"),
   });
 
   // WhatsApp integration status (cheap; cached). Drives badges + composer mode.
@@ -316,20 +384,15 @@ export default function Inbox() {
 
               {/* messages */}
               <div ref={scrollRef} className="flex-1 overflow-auto p-5 space-y-3" style={{ background: "#FAFAF9" }} data-testid="message-thread">
-                {active.messages?.map((m) => {
+                {active.messages?.map((m, index) => {
                   const isSystem = m.sender_type === "system";
-                  if (isSystem) {
-                    return (
-                      <div key={m.id} className="flex justify-center my-2.5" data-testid={`system-message-${m.id}`}>
-                        <div className="bg-[#E9E6DC] text-[#71717A] text-[11px] font-bold uppercase tracking-wider px-3.5 py-1.5 rounded-full shadow-sm max-w-[90%] text-center border border-[#DCD9CE]">
-                          {m.body}
-                        </div>
-                      </div>
-                    );
-                  }
                   const isCustomer = m.sender_type === "contact";
                   const isBot = m.sender_type === "bot";
                   const isOutbound = !isCustomer;
+                  const previous = index > 0 ? active.messages[index - 1] : null;
+                  const showDay = index === 0 || messageDayKey(m.created_at) !== messageDayKey(previous?.created_at);
+                  const time = formatMessageTime(m.created_at);
+                  const fullDate = formatMessageFullDate(m.created_at);
                   const ds = m.delivery_status;
                   const dsLabel = ds === "sent" ? "Enviado"
                     : ds === "delivered" ? "Entregado"
@@ -337,31 +400,62 @@ export default function Inbox() {
                     : ds === "failed" ? "Falló"
                     : null;
                   return (
-                    <div key={m.id} className={`flex ${isCustomer ? "justify-start" : "justify-end"}`}>
-                      <div className={`max-w-[70%] rounded-sm px-3.5 py-2 ${
-                        isCustomer ? "bg-white border border-[#E9E6DC]"
-                        : isBot ? "bg-latus-warm-gray border border-[#E9E6DC]"
-                        : "bg-[#0E8DDB] text-white"}`}>
-                        {!isCustomer && (
-                          <div className={`flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mb-0.5 ${isBot ? "text-[#0E8DDB]" : "text-orange-100"}`}>
-                            {isBot ? <><Bot className="h-2.5 w-2.5" />Bot</> : <><UserIcon className="h-2.5 w-2.5" />{m.sender_name}</>}
+                    <Fragment key={m.id}>
+                      {showDay && formatMessageDay(m.created_at) && (
+                        <div className="flex items-center gap-3 py-1" data-testid={`message-day-${messageDayKey(m.created_at)}`}>
+                          <span className="h-px flex-1 bg-[#E9E6DC]" />
+                          <span className="rounded-full border border-[#E1DED4] bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-[#77736C] shadow-sm">
+                            {formatMessageDay(m.created_at)}
+                          </span>
+                          <span className="h-px flex-1 bg-[#E9E6DC]" />
+                        </div>
+                      )}
+
+                      {isSystem ? (
+                        <div className="flex justify-center my-2.5" data-testid={`system-message-${m.id}`}>
+                          <div className="inline-flex max-w-[90%] flex-wrap items-center justify-center gap-x-2 gap-y-0.5 rounded-full border border-[#DCD9CE] bg-[#E9E6DC] px-3.5 py-1.5 text-center text-[11px] font-bold uppercase tracking-wider text-[#71717A] shadow-sm">
+                            <span>{m.body}</span>
+                            {time && <span className="font-semibold normal-case tracking-normal text-[#8D8981]" title={fullDate}>{time}</span>}
                           </div>
-                        )}
-                        <p className={`text-sm ${isCustomer || isBot ? "text-[#0B1B26]" : "text-white"}`}>{m.body}</p>
-                        {isOutbound && dsLabel && (
-                          <div
-                            data-testid={`delivery-status-${m.id}`}
-                            className={`text-[10px] font-semibold mt-1 text-right ${
-                              ds === "failed"
-                                ? "text-yellow-200"
-                                : isBot ? "text-[#0E8DDB]" : "text-orange-100"
-                            }`}
-                          >
-                            {dsLabel}
+                        </div>
+                      ) : (
+                        <div className={`flex ${isCustomer ? "justify-start" : "justify-end"}`}>
+                          <div className={`max-w-[70%] rounded-sm px-3.5 py-2 ${
+                            isCustomer ? "bg-white border border-[#E9E6DC]"
+                            : isBot ? "bg-latus-warm-gray border border-[#E9E6DC]"
+                            : "bg-[#0E8DDB] text-white"}`}>
+                            {!isCustomer && (
+                              <div className={`flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mb-0.5 ${isBot ? "text-[#0E8DDB]" : "text-orange-100"}`}>
+                                {isBot ? <><Bot className="h-2.5 w-2.5" />Bot</> : <><UserIcon className="h-2.5 w-2.5" />{m.sender_name}</>}
+                              </div>
+                            )}
+                            <p className={`text-sm ${isCustomer || isBot ? "text-[#0B1B26]" : "text-white"}`}>{m.body}</p>
+                            {(time || (isOutbound && dsLabel)) && (
+                              <div className={`mt-1 flex items-center justify-end gap-1 text-[10px] font-semibold ${
+                                isCustomer ? "text-[#96928A]" : isBot ? "text-[#0E8DDB]" : "text-orange-100"
+                              }`}>
+                                {time && <span title={fullDate}>{time}</span>}
+                                {time && isOutbound && dsLabel && <span aria-hidden="true">·</span>}
+                                {isOutbound && dsLabel && (
+                                  <span
+                                    data-testid={`delivery-status-${m.id}`}
+                                    className={ds === "failed" ? "text-yellow-200" : ""}
+                                  >
+                                    {dsLabel}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            {isOutbound && ds === "failed" && (m.whatsapp_error_code || m.whatsapp_error_message) && (
+                              <div className={`mt-1.5 rounded-sm px-2 py-1 text-[10px] font-semibold ${isBot ? "bg-amber-50 text-amber-800" : "bg-white/15 text-yellow-100"}`}>
+                                {m.whatsapp_error_code ? `Error #${m.whatsapp_error_code}` : "Error de WhatsApp"}
+                                {m.whatsapp_error_message ? ` · ${m.whatsapp_error_message}` : ""}
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-                    </div>
+                        </div>
+                      )}
+                    </Fragment>
                   );
                 })}
               </div>
@@ -377,6 +471,11 @@ export default function Inbox() {
                   </p>
                 )}
                 <div className="flex items-end gap-2">
+                  {active.channel === "whatsapp" && recontactTemplates.length > 0 && (
+                    <Button type="button" variant="outline" onClick={() => setTemplateOpen(true)} disabled={readOnly || !waStatus?.configured} className="h-11 shrink-0 border-latus-warm-border bg-white text-latus-ink" title="Enviar plantilla aprobada para recontactar">
+                      <FileText className="h-4 w-4" /><span className="hidden xl:inline">Plantilla</span>
+                    </Button>
+                  )}
                   <Textarea
                     data-testid="message-input"
                     value={draft}
@@ -551,6 +650,34 @@ export default function Inbox() {
           </div>
         )}
       </div>
+
+      <Dialog open={templateOpen} onOpenChange={setTemplateOpen}>
+        <DialogContent className="rounded-xl border-latus-warm-border bg-latus-surface">
+          <DialogHeader><DialogTitle>Enviar plantilla de recontacto</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-latus-muted">Usá una plantilla aprobada por Meta para volver a contactar al cliente, incluso fuera de la ventana de 24 horas.</p>
+            <div>
+              <label className="text-xs font-bold text-latus-ink">Plantilla</label>
+              <Select value={selectedTemplateId} onValueChange={setSelectedTemplateId}>
+                <SelectTrigger className="mt-1"><SelectValue placeholder="Seleccionar plantilla" /></SelectTrigger>
+                <SelectContent>{recontactTemplates.map((template) => <SelectItem key={template.id} value={template.id}>{template.label || template.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            {selectedTemplate && (
+              <div className="rounded-lg border border-latus-warm-border bg-latus-cream/45 p-4">
+                <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-latus-muted">Vista previa</p>
+                <p className="whitespace-pre-wrap text-sm leading-relaxed text-latus-ink">{selectedTemplate.rendered_preview}</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setTemplateOpen(false)}>Cancelar</Button>
+            <Button type="button" onClick={() => sendTemplate.mutate()} disabled={!selectedTemplateId || sendTemplate.isPending} className="bg-latus-blue text-white hover:bg-latus-blue-deep">
+              {sendTemplate.isPending ? "Enviando..." : "Enviar plantilla"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppLayout>
   );
 }

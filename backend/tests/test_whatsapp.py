@@ -147,6 +147,8 @@ class _FakeDB:
         self.bot_events = _Collection()
         self.notes = _Collection()
         self.tasks = _Collection()
+        self.bot_settings = _Collection()
+        self.appointments = _Collection()
 
 
 def _run(coro):
@@ -613,6 +615,44 @@ class TestSendWhatsApp:
         )
         assert r.status_code == 503
         assert r.json()["detail"] == "WhatsApp no configurado"
+
+    def test_recontact_template_uses_approved_meta_payload_and_inbound_number(self, server_and_client):
+        _, fake, client = server_and_client
+        self._seed_conv(fake)
+        _run(fake.bot_settings.insert_one({
+            "_id": "default",
+            "whatsapp_recontact_templates": [{
+                "id": "retomar", "purpose": "recontact", "label": "Retomar consulta",
+                "name": "retomar_consulta", "language": "es_AR",
+                "body_preview": "Hola {{client_name}}, retomamos tu consulta.",
+                "parameter_keys": ["client_name"], "active": True, "sort_order": 0,
+            }],
+        }))
+        captured = {}
+
+        async def fake_post(self, url, headers=None, json=None, **kwargs):
+            captured.update({"url": url, "payload": json})
+            return httpx.Response(200, json={"messages": [{"id": "wamid.TEMPLATE.1"}]}, request=httpx.Request("POST", url))
+
+        listing = client.get(
+            "/api/conversations/cv_S/whatsapp-templates",
+            headers={"Authorization": "Bearer T-ADMIN"},
+        )
+        assert listing.status_code == 200, listing.text
+        assert listing.json()["templates"][0]["rendered_preview"] == "Hola Ana, retomamos tu consulta."
+
+        with patch.object(httpx.AsyncClient, "post", new=fake_post):
+            response = client.post(
+                "/api/conversations/cv_S/send-whatsapp-template",
+                json={"template_id": "retomar"},
+                headers={"Authorization": "Bearer T-ADMIN"},
+            )
+        assert response.status_code == 200, response.text
+        assert "/1234567890/messages" in captured["url"]
+        assert captured["payload"]["type"] == "template"
+        assert captured["payload"]["template"]["name"] == "retomar_consulta"
+        assert captured["payload"]["template"]["components"][0]["parameters"][0]["text"] == "Ana"
+        assert response.json()["message_type"] == "template"
 
 
 # ====================================================================

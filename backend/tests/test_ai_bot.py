@@ -523,6 +523,81 @@ class TestBotInactivityAndTransitions:
         assert len(db.appointments.docs) == 1
         assert "schedule failed" in second.get("error_message", "")
 
+    def test_bot_confirms_existing_appointment_without_creating_another(self, pipeline_mod, monkeypatch):
+        db = _DB()
+        cv = _seed_conv(db, last_text="Sí, confirmo el turno")
+        _run(db.appointments.insert_one({
+            "id": "appt_confirm", "contact_id": "ct1", "conversation_id": cv,
+            "title": "Consulta", "event_type": "appointment", "status": "scheduled",
+            "start_time": "2026-07-20T13:00:00+00:00",
+            "end_time": "2026-07-20T13:30:00+00:00",
+            "confirmation_status": "awaiting_response",
+        }))
+
+        async def fake_llm(**_kwargs):
+            return ({
+                "intent": "confirmar_turno", "confidence": 0.99,
+                "decision": "confirm_appointment", "reply": "Perfecto, tu turno quedó confirmado.",
+                "summary": "Cliente confirmó el turno.", "human_required_reason": None,
+                "next_best_action": None, "lead_status_suggested": None,
+                "bot_status_suggested": None, "evidence_for_status_change": "Confirmación expresa",
+                "appointment_id": "appt_confirm", "appointment_start_time": None,
+                "appointment_assigned_to": None, "appointment_service_id": None,
+            }, "{}")
+
+        monkeypatch.setattr(pipeline_mod, "call_llm_json", fake_llm)
+        event = _run(pipeline_mod.process_inbound(db, cv, "wamid.CONFIRM", wa_send=AsyncMock(return_value={})))
+        appointment = _run(db.appointments.find_one({"id": "appt_confirm"}))
+        assert event["appointment_confirmed"] == "appt_confirm"
+        assert appointment["confirmation_status"] == "confirmed"
+        assert len(db.appointments.docs) == 1
+
+    def test_bot_reschedules_existing_appointment_without_duplication(self, pipeline_mod, monkeypatch):
+        db = _DB()
+        cv = _seed_conv(db, last_text="¿Podemos moverlo a las 11?")
+        weekly = {str(day): ([{"start": "09:00", "end": "18:00"}] if day < 5 else []) for day in range(7)}
+        _run(db.users.insert_one({
+            "user_id": "agent_agenda", "name": "Agente Agenda", "active": True,
+            "calendar_settings": {
+                "enabled": True, "timezone": "America/Argentina/Buenos_Aires",
+                "default_duration_minutes": 30, "buffer_minutes": 0,
+                "weekly_schedule": weekly,
+            },
+        }))
+        _run(db.bot_settings.insert_one({
+            "_id": "default", "appointment_scheduling_enabled": True,
+            "appointment_rescheduling_enabled": True, "appointment_mode": "people",
+            "appointment_timezone": "America/Argentina/Buenos_Aires",
+        }))
+        _run(db.appointments.insert_one({
+            "id": "appt_move", "contact_id": "ct1", "conversation_id": cv,
+            "title": "Consulta", "event_type": "appointment", "status": "scheduled",
+            "start_time": "2026-07-20T13:00:00+00:00",
+            "end_time": "2026-07-20T13:30:00+00:00",
+            "assigned_to": "agent_agenda", "scheduling_mode": "people",
+        }))
+
+        async def fake_llm(**kwargs):
+            assert "appt_move" in kwargs.get("system_prompt", "")
+            return ({
+                "intent": "reprogramar_turno", "confidence": 0.99,
+                "decision": "reschedule_appointment", "reply": "Listo, movimos tu turno a las 11.",
+                "summary": "Cliente reprogramó el turno.", "human_required_reason": None,
+                "next_best_action": None, "lead_status_suggested": None,
+                "bot_status_suggested": None, "evidence_for_status_change": "Pedido expreso",
+                "appointment_id": "appt_move",
+                "appointment_start_time": "2026-07-20T11:00:00-03:00",
+                "appointment_assigned_to": None, "appointment_service_id": None,
+            }, "{}")
+
+        monkeypatch.setattr(pipeline_mod, "call_llm_json", fake_llm)
+        event = _run(pipeline_mod.process_inbound(db, cv, "wamid.MOVE", wa_send=AsyncMock(return_value={})))
+        appointment = _run(db.appointments.find_one({"id": "appt_move"}))
+        assert event["appointment_rescheduled"] == "appt_move"
+        assert appointment["start_time"] == "2026-07-20T14:00:00+00:00"
+        assert appointment["end_time"] == "2026-07-20T14:30:00+00:00"
+        assert len(db.appointments.docs) == 1
+
     def test_bot_won_status_creates_immutable_sale_snapshot(self, pipeline_mod, monkeypatch):
         db = _DB()
         cv = _seed_conv(db, last_text="Confirmo la compra")

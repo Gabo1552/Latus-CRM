@@ -1,6 +1,6 @@
 """Outbound calls to the WhatsApp Cloud API.
 
-Only text messages are supported in this phase. Media uploads are
+Text and approved template messages are supported. Media uploads remain
 intentionally out of scope.
 """
 
@@ -32,14 +32,8 @@ class WhatsAppSendError(Exception):
         self.payload = payload or {}
 
 
-async def send_text_message(cfg: WAConfig, to_wa_id: str, body: str,
-                            *, timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    """Send a single text message via WhatsApp Cloud API.
-
-    Performs **one** retry on transient errors (timeout or 5xx). On
-    persistent failure raises :class:`WhatsAppSendError`. On success
-    returns the parsed JSON from Meta (contains ``messages[0].id``).
-    """
+async def _send_message_payload(cfg: WAConfig, payload: dict,
+                                *, timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
     if not (cfg.access_token and cfg.phone_number_id):
         raise WhatsAppSendError("WhatsApp no configurado", status_code=503)
 
@@ -48,13 +42,6 @@ async def send_text_message(cfg: WAConfig, to_wa_id: str, body: str,
         "Authorization": f"Bearer {cfg.access_token}",
         "Content-Type": "application/json",
     }
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_wa_id,
-        "type": "text",
-        "text": {"body": body},
-    }
-
     last_exc: Exception | None = None
     for attempt in range(2):  # 1 try + 1 retry
         try:
@@ -65,6 +52,7 @@ async def send_text_message(cfg: WAConfig, to_wa_id: str, body: str,
             # Non-2xx -> parse Meta error and decide retry
             data = _safe_json(resp)
             meta_err = (data.get("error") or {}) if isinstance(data, dict) else {}
+            details = (meta_err.get("error_data") or {}).get("details") if isinstance(meta_err, dict) else None
             logger.warning(
                 "WhatsApp send failed status=%s code=%s msg=%s phone_number_id=%s",
                 resp.status_code, meta_err.get("code"), meta_err.get("message"), cfg.phone_number_id,
@@ -75,7 +63,7 @@ async def send_text_message(cfg: WAConfig, to_wa_id: str, body: str,
                 "No se pudo enviar el mensaje",
                 status_code=resp.status_code,
                 error_code=meta_err.get("code"),
-                error_message=str(meta_err.get("message") or ""),
+                error_message=str(details or meta_err.get("message") or ""),
                 payload=data if isinstance(data, dict) else {},
             )
         except WhatsAppSendError:
@@ -101,6 +89,45 @@ async def send_text_message(cfg: WAConfig, to_wa_id: str, body: str,
     # Defensive (loop always returns/raises)
     raise WhatsAppSendError("No se pudo enviar el mensaje", status_code=500,
                             error_message=str(last_exc) if last_exc else "")
+
+
+async def send_text_message(cfg: WAConfig, to_wa_id: str, body: str,
+                            *, timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
+    """Send a free-form text message via WhatsApp Cloud API."""
+    return await _send_message_payload(cfg, {
+        "messaging_product": "whatsapp",
+        "to": to_wa_id,
+        "type": "text",
+        "text": {"body": body},
+    }, timeout=timeout)
+
+
+async def send_template_message(
+    cfg: WAConfig,
+    to_wa_id: str,
+    *,
+    template_name: str,
+    language: str,
+    body_parameters: list[str] | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Send an approved Meta template with ordered text body parameters."""
+    template: dict[str, Any] = {
+        "name": template_name,
+        "language": {"code": language},
+    }
+    if body_parameters:
+        template["components"] = [{
+            "type": "body",
+            "parameters": [{"type": "text", "text": str(value)} for value in body_parameters],
+        }]
+    return await _send_message_payload(cfg, {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_wa_id,
+        "type": "template",
+        "template": template,
+    }, timeout=timeout)
 
 
 def _safe_json(resp: httpx.Response) -> Any:

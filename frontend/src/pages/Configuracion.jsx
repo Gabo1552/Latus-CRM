@@ -925,6 +925,12 @@ function AgendaTab() {
       appointment_available_days: draft.appointment_available_days || [1, 2, 3, 4, 5],
       appointment_business_hours: draft.appointment_business_hours || "09:00-18:00",
       appointment_duration_minutes: Number(draft.appointment_duration_minutes) || 30,
+      whatsapp_recontact_templates: Array.isArray(draft.whatsapp_recontact_templates) ? draft.whatsapp_recontact_templates : [],
+      appointment_reminders_enabled: !!draft.appointment_reminders_enabled,
+      appointment_reminder_minutes_before: Number(draft.appointment_reminder_minutes_before) || 1440,
+      appointment_reminder_templates: Array.isArray(draft.appointment_reminder_templates) ? draft.appointment_reminder_templates : [],
+      appointment_reminder_template_id: draft.appointment_reminder_template_id || null,
+      appointment_rescheduling_enabled: draft.appointment_rescheduling_enabled !== false,
     }),
     onSuccess: (response) => {
       setDraft({ ...response.data });
@@ -942,7 +948,10 @@ function AgendaTab() {
   const dirty = [
     "appointment_scheduling_enabled", "appointment_mode", "appointment_timezone",
     "appointment_services", "appointment_available_days", "appointment_business_hours",
-    "appointment_duration_minutes",
+    "appointment_duration_minutes", "whatsapp_recontact_templates",
+    "appointment_reminders_enabled", "appointment_reminder_minutes_before",
+    "appointment_reminder_templates", "appointment_reminder_template_id",
+    "appointment_rescheduling_enabled",
   ].some((key) => JSON.stringify(draft[key]) !== JSON.stringify(settingsQ.data?.[key]));
 
   return (

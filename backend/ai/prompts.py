@@ -13,7 +13,7 @@ JSON_SCHEMA_HINT = """Respond ONLY with a valid JSON object with this exact shap
 {
   "intent": "...",
   "confidence": 0.0-1.0,
-  "decision": "reply_with_bot|require_human|update_status_only|no_action|schedule_appointment",
+  "decision": "reply_with_bot|require_human|update_status_only|no_action|schedule_appointment|reschedule_appointment|confirm_appointment",
   "reply": "texto en espa\u00f1ol o vac\u00edo",
   "human_required_reason": "... o null",
   "next_best_action": "... o null",
@@ -23,6 +23,7 @@ JSON_SCHEMA_HINT = """Respond ONLY with a valid JSON object with this exact shap
   "evidence_for_status_change": "razon concreta o null",
   "target_work_area": "ID de área de trabajo o null",
   "appointment_start_time": "ISO-8601 con zona horaria o null",
+  "appointment_id": "ID exacto del turno existente a reprogramar o confirmar, o null",
   "appointment_assigned_to": "ID exacto de la persona o null",
   "appointment_service_id": "ID exacto del servicio o null"
 }"""

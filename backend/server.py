@@ -12,6 +12,7 @@ import ssl
 import smtplib
 import hashlib
 from pathlib import Path
+from dataclasses import replace
 from email.message import EmailMessage
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Literal, Any
@@ -31,6 +32,7 @@ from whatsapp import (
     verify_signature,
     parse_inbound_value,
     send_text_message,
+    send_template_message,
     WhatsAppSendError,
 )
 
@@ -386,6 +388,7 @@ class Appointment(BaseModel):
     id: str = Field(default_factory=lambda: new_id("appt"))
     contact_id: Optional[str] = None
     lead_id: Optional[str] = None
+    conversation_id: Optional[str] = None
     title: str
     description: Optional[str] = None
     location: Optional[str] = None
@@ -397,6 +400,15 @@ class Appointment(BaseModel):
     scheduling_mode: str = "people"  # people, business
     service_id: Optional[str] = None
     service_name: Optional[str] = None
+    reminder_enabled: bool = False
+    reminder_minutes_before: Optional[int] = None
+    reminder_template_id: Optional[str] = None
+    reminder_due_at: Optional[str] = None
+    reminder_status: Optional[str] = None
+    reminder_sent_at: Optional[str] = None
+    reminder_error: Optional[str] = None
+    reminder_attempts: int = 0
+    confirmation_status: Optional[str] = None
     created_by_bot: bool = False
     created_by: Optional[str] = None
     created_by_name: Optional[str] = None
@@ -417,6 +429,9 @@ class AppointmentCreate(BaseModel):
     status: Literal["scheduled", "completed", "cancelled"] = "scheduled"
     assigned_to: Optional[str] = None
     service_id: Optional[str] = None
+    reminder_enabled: Optional[bool] = None
+    reminder_minutes_before: Optional[int] = None
+    reminder_template_id: Optional[str] = None
 
 
 class AppointmentUpdate(BaseModel):
@@ -431,6 +446,9 @@ class AppointmentUpdate(BaseModel):
     status: Optional[Literal["scheduled", "completed", "cancelled"]] = None
     assigned_to: Optional[str] = None
     service_id: Optional[str] = None
+    reminder_enabled: Optional[bool] = None
+    reminder_minutes_before: Optional[int] = None
+    reminder_template_id: Optional[str] = None
 
 
 class CalendarAvailabilityUpdate(BaseModel):
@@ -2506,6 +2524,160 @@ class WhatsAppSend(BaseModel):
     text: str
 
 
+class WhatsAppTemplateSend(BaseModel):
+    template_id: str
+    appointment_id: Optional[str] = None
+
+
+def _wa_config_for_conversation(cfg, conv: dict):
+    """Reply from the phone number that actually received this conversation."""
+    external = str(conv.get("channel_external_id") or "")
+    phone_number_id = external.split(":", 1)[0].strip() if ":" in external else ""
+    return replace(cfg, phone_number_id=phone_number_id) if phone_number_id else cfg
+
+
+def _wa_external_message_id(result: dict) -> str:
+    try:
+        return (result.get("messages") or [{}])[0].get("id") or ""
+    except Exception:
+        return ""
+
+
+async def _template_context_for(
+    contact: dict,
+    appointment: dict | None,
+    settings: dict,
+) -> tuple[dict, dict]:
+    from whatsapp.templates import build_template_context
+    assigned_user = {}
+    if appointment and appointment.get("assigned_to"):
+        assigned_user = await db.users.find_one(
+            {"user_id": appointment["assigned_to"]}, {"_id": 0, "name": 1}
+        ) or {}
+    context = build_template_context(
+        contact=contact,
+        appointment=appointment,
+        assigned_user=assigned_user,
+        timezone_name=settings.get("appointment_timezone") or "America/Argentina/Buenos_Aires",
+    )
+    return context, assigned_user
+
+
+async def _send_configured_whatsapp_template(
+    *,
+    conv: dict,
+    contact: dict,
+    template: dict,
+    settings: dict,
+    appointment: dict | None,
+    sender_type: str,
+    sender_name: str,
+) -> dict:
+    from whatsapp.templates import render_template_preview, template_parameter_values
+    cfg = _wa_config_for_conversation(await wa_config_effective(db), conv)
+    if not cfg.is_configured:
+        raise HTTPException(status_code=503, detail="WhatsApp no configurado")
+    wa_id = contact.get("whatsapp_id") or "".join(
+        character for character in (contact.get("phone") or "") if character.isdigit()
+    )
+    if not wa_id:
+        raise HTTPException(status_code=400, detail="El cliente no tiene un WhatsApp asociado")
+    context, _ = await _template_context_for(contact, appointment, settings)
+    try:
+        result = await send_template_message(
+            cfg,
+            wa_id,
+            template_name=template["name"],
+            language=template.get("language") or "es_AR",
+            body_parameters=template_parameter_values(template, context),
+        )
+    except WhatsAppSendError as exc:
+        await _wa_record_send_error(code=exc.error_code, message=exc.error_message or "")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Meta rechazó la plantilla: {exc.error_message or 'Error desconocido'}",
+        ) from exc
+    body = render_template_preview(template, context)
+    msg_doc = {
+        "id": new_id("msg"),
+        "conversation_id": conv["id"],
+        "sender_type": sender_type,
+        "sender_name": sender_name,
+        "body": body,
+        "created_at": now_iso(),
+        "direction": "outbound",
+        "delivery_status": "sent",
+        "external_message_id": _wa_external_message_id(result),
+        "message_type": "template",
+        "channel": "whatsapp",
+        "template_id": template.get("id"),
+        "template_name": template.get("name"),
+        "template_language": template.get("language"),
+        "appointment_id": appointment.get("id") if appointment else None,
+    }
+    await db.messages.insert_one(msg_doc)
+    await db.conversations.update_one(
+        {"id": conv["id"]},
+        {"$set": {"last_message": body, "last_message_at": msg_doc["created_at"], "channel": "whatsapp"}},
+    )
+    return _strip_oid(msg_doc)
+
+
+@api_router.get("/conversations/{conv_id}/whatsapp-templates")
+async def list_conversation_whatsapp_templates(
+    conv_id: str,
+    user: User = Depends(get_current_user),
+):
+    from whatsapp.templates import build_template_context, render_template_preview
+    conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    perms = await get_role_permissions(user.role)
+    if "message_any" not in perms and conv.get("assigned_to") != user.user_id:
+        raise HTTPException(status_code=403, detail="No podés enviar mensajes en esta conversación")
+    contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0}) or {}
+    settings = await _effective_bot_settings()
+    context = build_template_context(
+        contact=contact,
+        timezone_name=settings.get("appointment_timezone") or "America/Argentina/Buenos_Aires",
+    )
+    templates = []
+    for template in settings.get("whatsapp_recontact_templates") or []:
+        if template.get("active") is False:
+            continue
+        templates.append({**template, "rendered_preview": render_template_preview(template, context)})
+    return {"templates": templates}
+
+
+@api_router.post("/conversations/{conv_id}/send-whatsapp-template")
+async def send_conversation_whatsapp_template(
+    conv_id: str,
+    payload: WhatsAppTemplateSend,
+    user: User = Depends(get_current_user),
+):
+    from whatsapp.templates import find_template
+    conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    perms = await get_role_permissions(user.role)
+    if "message_any" not in perms and conv.get("assigned_to") != user.user_id:
+        raise HTTPException(status_code=403, detail="No podés enviar mensajes en esta conversación")
+    settings = await _effective_bot_settings()
+    template = find_template(settings, payload.template_id, purpose="recontact")
+    if not template:
+        raise HTTPException(status_code=404, detail="La plantilla de recontacto no existe o está inactiva")
+    contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0}) or {}
+    return await _send_configured_whatsapp_template(
+        conv=conv,
+        contact=contact,
+        template=template,
+        settings=settings,
+        appointment=None,
+        sender_type="agent",
+        sender_name=user.name,
+    )
+
+
 @api_router.post("/conversations/{conv_id}/send-whatsapp")
 async def send_whatsapp(conv_id: str, payload: WhatsAppSend, user: User = Depends(get_current_user)):
     cfg = await wa_config_effective(db)
@@ -2518,6 +2690,7 @@ async def send_whatsapp(conv_id: str, payload: WhatsAppSend, user: User = Depend
     conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    cfg = _wa_config_for_conversation(cfg, conv)
     perms = await get_role_permissions(user.role)
     if "message_any" not in perms and conv.get("assigned_to") != user.user_id:
         raise HTTPException(status_code=403, detail="Solo el operador asignado o un usuario con permisos pueden enviar mensajes a esta conversación")
@@ -2541,11 +2714,7 @@ async def send_whatsapp(conv_id: str, payload: WhatsAppSend, user: User = Depend
         raise HTTPException(status_code=status, detail=detail)
 
     # Persist outbound message
-    external_id = ""
-    try:
-        external_id = (result.get("messages") or [{}])[0].get("id") or ""
-    except Exception:
-        external_id = ""
+    external_id = _wa_external_message_id(result)
     msg = Message(
         conversation_id=conv_id,
         sender_type="agent",
@@ -2786,7 +2955,7 @@ async def _bot_wa_send(conv: dict, text: str) -> dict:
     """
     if conv.get("channel") != "whatsapp":
         return {"ok": True, "skipped": "non-whatsapp"}
-    cfg = await wa_config_effective(db)
+    cfg = _wa_config_for_conversation(await wa_config_effective(db), conv)
     if not cfg.is_configured:
         raise RuntimeError("WhatsApp no configurado")
     contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0}) or {}
@@ -2825,6 +2994,12 @@ class BotSettingsUpdate(BaseModel):
     appointment_mode: Optional[Literal["people", "business"]] = None
     appointment_timezone: Optional[str] = None
     appointment_services: Optional[List[dict]] = None
+    whatsapp_recontact_templates: Optional[List[dict]] = None
+    appointment_reminders_enabled: Optional[bool] = None
+    appointment_reminder_minutes_before: Optional[int] = None
+    appointment_reminder_templates: Optional[List[dict]] = None
+    appointment_reminder_template_id: Optional[str] = None
+    appointment_rescheduling_enabled: Optional[bool] = None
 
 
 _ALLOWED_BOT_MODELS = {
@@ -2958,6 +3133,46 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
         if not (5 <= duration <= 480):
             raise HTTPException(400, "La duración debe ser de 5 a 480 minutos")
         update["appointment_duration_minutes"] = duration
+    if "whatsapp_recontact_templates" in update or "appointment_reminder_templates" in update:
+        from whatsapp.templates import normalize_templates
+        try:
+            if "whatsapp_recontact_templates" in update:
+                update["whatsapp_recontact_templates"] = normalize_templates(
+                    update["whatsapp_recontact_templates"], purpose="recontact"
+                )
+            if "appointment_reminder_templates" in update:
+                update["appointment_reminder_templates"] = normalize_templates(
+                    update["appointment_reminder_templates"], purpose="appointment_reminder"
+                )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if "appointment_reminder_minutes_before" in update:
+        try:
+            reminder_minutes = int(update["appointment_reminder_minutes_before"])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "La anticipación del recordatorio debe ser un número") from exc
+        if not (5 <= reminder_minutes <= 43200):
+            raise HTTPException(400, "La anticipación debe estar entre 5 minutos y 30 días")
+        update["appointment_reminder_minutes_before"] = reminder_minutes
+    if "appointment_reminder_template_id" in update:
+        update["appointment_reminder_template_id"] = (
+            str(update["appointment_reminder_template_id"] or "").strip() or None
+        )
+    if {"appointment_reminders_enabled", "appointment_reminder_templates",
+        "appointment_reminder_template_id"}.intersection(update):
+        from ai.pipeline import DEFAULT_BOT_SETTINGS
+        current = await db.bot_settings.find_one({"_id": "default"}, {"_id": 0}) or {}
+        effective = {**DEFAULT_BOT_SETTINGS, **current, **update}
+        if effective.get("appointment_reminders_enabled"):
+            active_templates = [
+                template for template in effective.get("appointment_reminder_templates") or []
+                if template.get("active") is not False
+            ]
+            if not active_templates:
+                raise HTTPException(400, "Agregá al menos una plantilla de recordatorio activa")
+            selected_id = effective.get("appointment_reminder_template_id")
+            if not selected_id or not any(template.get("id") == selected_id for template in active_templates):
+                raise HTTPException(400, "Seleccioná la plantilla predeterminada para recordatorios")
     if {"appointment_scheduling_enabled", "appointment_mode", "appointment_services"}.intersection(update):
         from utils.scheduling import SchedulingError, normalize_services
         current = await db.bot_settings.find_one({"_id": "default"}, {"_id": 0}) or {}
@@ -3675,6 +3890,9 @@ async def get_calendar_scheduling_config(user: User = Depends(get_current_user))
         "enabled": bool(settings.get("appointment_scheduling_enabled")),
         "mode": settings.get("appointment_mode") or "people",
         "timezone": settings.get("appointment_timezone"),
+        "reminders_enabled": bool(settings.get("appointment_reminders_enabled")),
+        "reminder_minutes_before": int(settings.get("appointment_reminder_minutes_before") or 1440),
+        "reminder_template_id": settings.get("appointment_reminder_template_id"),
         "services": normalize_services(
             settings.get("appointment_services") or [], settings.get("appointment_timezone")
         ),
@@ -3778,6 +3996,35 @@ async def _apply_scheduling_rules(
     data["service_name"] = slot["resource_name"] if mode == "business" else None
     return data
 
+
+async def _attach_appointment_recipient(data: dict) -> dict:
+    """Persist who the reminder must contact and through which conversation."""
+    if not data.get("contact_id") and data.get("lead_id"):
+        lead = await db.leads.find_one({"id": data["lead_id"]}, {"_id": 0, "contact_id": 1})
+        if lead:
+            data["contact_id"] = lead.get("contact_id")
+    if data.get("contact_id") and not data.get("conversation_id"):
+        conv = await db.conversations.find_one(
+            {"contact_id": data["contact_id"], "channel": "whatsapp"},
+            {"_id": 0},
+            sort=[("last_message_at", -1)],
+        )
+        if conv:
+            data["conversation_id"] = conv.get("id")
+    return data
+
+
+async def _apply_appointment_reminder_settings(
+    data: dict,
+    *,
+    reset_status: bool,
+) -> dict:
+    from utils.appointment_reminders import reminder_fields
+    settings = await _effective_bot_settings()
+    data = await _attach_appointment_recipient(data)
+    data.update(reminder_fields(data, settings, reset_status=reset_status))
+    return data
+
 @api_router.get("/appointments")
 async def list_appointments(
     user: User = Depends(get_current_user),
@@ -3841,6 +4088,7 @@ async def create_appointment(payload: AppointmentCreate, user: User = Depends(ge
     )
     _validate_appointment_times(data["start_time"], data["end_time"])
     data = await _apply_scheduling_rules(data)
+    data = await _apply_appointment_reminder_settings(data, reset_status=True)
     data["created_by_bot"] = False
     data["created_by"] = user.user_id
     data["created_by_name"] = user.name
@@ -3872,11 +4120,110 @@ async def update_appointment(appt_id: str, payload: AppointmentUpdate, user: Use
         candidate = await _apply_scheduling_rules(candidate, exclude_appointment_id=appt_id)
         for key in ("start_time", "end_time", "scheduling_mode", "service_id", "service_name"):
             update[key] = candidate.get(key)
+    reminder_fields_changed = {
+        "start_time", "status", "event_type", "contact_id", "lead_id",
+        "reminder_enabled", "reminder_minutes_before", "reminder_template_id",
+    }.intersection(update)
+    if reminder_fields_changed:
+        reminder_candidate = await _apply_appointment_reminder_settings(
+            {**existing, **update}, reset_status=True
+        )
+        for key in (
+            "contact_id", "conversation_id", "reminder_enabled", "reminder_minutes_before",
+            "reminder_template_id", "reminder_due_at", "reminder_status", "reminder_sent_at",
+            "reminder_error", "reminder_attempts", "confirmation_status",
+        ):
+            update[key] = reminder_candidate.get(key)
     update["updated_by"] = user.user_id
     update["updated_at"] = now_iso()
     await db.appointments.update_one({"id": appt_id}, {"$set": update})
     doc = await db.appointments.find_one({"id": appt_id}, {"_id": 0})
     return Appointment(**doc)
+
+
+async def _send_appointment_reminder(
+    appointment: dict,
+    *,
+    sender_type: str = "bot",
+    sender_name: str | None = None,
+) -> dict:
+    from whatsapp.templates import find_template
+    settings = await _effective_bot_settings()
+    template_id = (
+        appointment.get("reminder_template_id")
+        or settings.get("appointment_reminder_template_id")
+    )
+    template = find_template(settings, template_id or "", purpose="appointment_reminder")
+    if not template:
+        raise HTTPException(
+            status_code=409,
+            detail="No hay una plantilla de recordatorio activa configurada para este turno",
+        )
+    enriched = await _attach_appointment_recipient(dict(appointment))
+    if not enriched.get("contact_id"):
+        raise HTTPException(status_code=409, detail="El turno no tiene un cliente asociado")
+    contact = await db.contacts.find_one({"id": enriched["contact_id"]}, {"_id": 0})
+    if not contact:
+        raise HTTPException(status_code=404, detail="No se encontró el cliente del turno")
+    conv = None
+    if enriched.get("conversation_id"):
+        conv = await db.conversations.find_one({"id": enriched["conversation_id"]}, {"_id": 0})
+    if not conv:
+        conv = await db.conversations.find_one(
+            {"contact_id": enriched["contact_id"], "channel": "whatsapp"},
+            {"_id": 0},
+            sort=[("last_message_at", -1)],
+        )
+    if not conv:
+        raise HTTPException(status_code=409, detail="El cliente no tiene una conversación de WhatsApp")
+    message = await _send_configured_whatsapp_template(
+        conv=conv,
+        contact=contact,
+        template=template,
+        settings=settings,
+        appointment=enriched,
+        sender_type=sender_type,
+        sender_name=sender_name or settings.get("bot_name") or "Bot",
+    )
+    sent_at = now_iso()
+    await db.appointments.update_one(
+        {"id": enriched["id"]},
+        {"$set": {
+            "contact_id": enriched.get("contact_id"),
+            "conversation_id": conv.get("id"),
+            "reminder_template_id": template.get("id"),
+            "reminder_status": "sent",
+            "reminder_sent_at": sent_at,
+            "reminder_error": None,
+            "confirmation_status": "awaiting_response",
+        }},
+    )
+    return message
+
+
+@api_router.post("/appointments/{appt_id}/send-reminder")
+async def send_appointment_reminder_now(
+    appt_id: str,
+    user: User = Depends(get_current_user),
+):
+    appointment = await _get_editable_appointment(appt_id, user)
+    if appointment.get("event_type") != "appointment" or appointment.get("status") != "scheduled":
+        raise HTTPException(status_code=409, detail="Sólo se pueden recordar citas agendadas")
+    try:
+        appointment_start = datetime.fromisoformat(
+            str(appointment.get("start_time") or "").replace("Z", "+00:00")
+        )
+        if appointment_start.tzinfo is None:
+            appointment_start = appointment_start.replace(tzinfo=timezone.utc)
+        if appointment_start.astimezone(timezone.utc) <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=409, detail="No se puede recordar un turno que ya comenzó")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="La fecha del turno no es válida") from exc
+    return await _send_appointment_reminder(
+        appointment,
+        sender_type="agent",
+        sender_name=user.name,
+    )
 
 @api_router.delete("/appointments/{appt_id}")
 async def delete_appointment(appt_id: str, user: User = Depends(get_current_user)):
@@ -4573,6 +4920,10 @@ async def _ensure_indexes() -> None:
             name="ix_appointments_assignee_start",
         )
         await db.appointments.create_index("start_time", name="ix_appointments_start")
+        await db.appointments.create_index(
+            [("reminder_status", 1), ("reminder_due_at", 1)],
+            name="ix_appointments_reminder_due",
+        )
     except Exception as e:  # pragma: no cover - best-effort
         logger.warning("ensure_indexes failed: %s", e)
 
@@ -4810,6 +5161,50 @@ async def close_inactive_conversations(db):
             logger.info("Automatically closed inactive conversation %s after %s hours", conv_id, inactive_hours)
 
 
+async def send_due_appointment_reminders() -> dict:
+    """Claim and send reminders once; safe to run repeatedly from the scheduler."""
+    settings = await _effective_bot_settings()
+    if not settings.get("appointment_reminders_enabled"):
+        return {"sent": 0, "failed": 0}
+    current = now_iso()
+    due = await db.appointments.find({
+        "event_type": "appointment",
+        "status": "scheduled",
+        "reminder_enabled": True,
+        "reminder_due_at": {"$lte": current},
+        "start_time": {"$gt": current},
+        "reminder_status": {"$in": ["pending", "error"]},
+        "$or": [
+            {"reminder_attempts": {"$lt": 3}},
+            {"reminder_attempts": {"$exists": False}},
+        ],
+    }, {"_id": 0}).sort("reminder_due_at", 1).to_list(200)
+    sent = failed = 0
+    for appointment in due:
+        claim = await db.appointments.update_one(
+            {
+                "id": appointment["id"],
+                "reminder_status": {"$in": ["pending", "error"]},
+            },
+            {"$set": {"reminder_status": "sending", "reminder_error": None},
+             "$inc": {"reminder_attempts": 1}},
+        )
+        if claim is not None and getattr(claim, "modified_count", 0) != 1:
+            continue
+        try:
+            await _send_appointment_reminder(appointment)
+            sent += 1
+        except Exception as exc:
+            failed += 1
+            detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            await db.appointments.update_one(
+                {"id": appointment["id"]},
+                {"$set": {"reminder_status": "error", "reminder_error": str(detail)[:500]}},
+            )
+            logger.warning("Appointment reminder failed appointment=%s: %s", appointment.get("id"), detail)
+    return {"sent": sent, "failed": failed}
+
+
 _scheduler = None  # singleton at module level — safe-start guard
 
 
@@ -4841,6 +5236,10 @@ def _start_scheduler():
             await check_and_send_scheduled_reports()
         except Exception:  # pragma: no cover - log only
             logger.exception("scheduled check_and_send_scheduled_reports failed")
+        try:
+            await send_due_appointment_reminders()
+        except Exception:  # pragma: no cover - log only
+            logger.exception("scheduled send_due_appointment_reminders failed")
 
     sched.add_job(
         _job,

@@ -63,6 +63,12 @@ DEFAULT_BOT_SETTINGS = {
     "appointment_mode": "people",
     "appointment_timezone": "America/Argentina/Buenos_Aires",
     "appointment_services": [],
+    "whatsapp_recontact_templates": [],
+    "appointment_reminders_enabled": False,
+    "appointment_reminder_minutes_before": 1440,
+    "appointment_reminder_templates": [],
+    "appointment_reminder_template_id": None,
+    "appointment_rescheduling_enabled": True,
 }
 
 # Sensitive data patterns (Argentinian DNI, CBU, credit card-like)
@@ -471,6 +477,7 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                         "id": "appt_" + uuid.uuid4().hex[:12],
                         "contact_id": conv.get("contact_id"),
                         "lead_id": conv.get("lead_id"),
+                        "conversation_id": conv_id,
                         "title": (
                             f"{slot['resource_name']} · {client_info.splitlines()[0]}"
                             if mode == "business" and client_info
@@ -487,6 +494,8 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                         "created_by_bot": True,
                         "created_at": _now_iso(),
                     }
+                    from utils.appointment_reminders import reminder_fields
+                    appt_doc.update(reminder_fields(appt_doc, settings, reset_status=True))
                     await db.appointments.insert_one(appt_doc)
                     event["appointment_created"] = appt_doc["id"]
                     event["appointment_resource_id"] = slot["resource_id"]
@@ -524,6 +533,145 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                 except Exception as e:
                     logger.exception("Failed to schedule appointment")
                     event["error_message"] = f"schedule failed: {e}"
+        elif decision == "reschedule_appointment":
+            event["decision"] = "reschedule_appointment"
+            appointment_id = parsed.get("appointment_id")
+            appt_start = parsed.get("appointment_start_time")
+            if not settings.get("appointment_rescheduling_enabled", True):
+                event["error_message"] = "reschedule failed: la reprogramación automática está desactivada"
+            elif appointment_id and appt_start and settings.get("appointment_scheduling_enabled"):
+                try:
+                    from datetime import timedelta
+                    from zoneinfo import ZoneInfo
+                    from utils.appointment_reminders import reminder_fields
+                    from utils.scheduling import (
+                        get_business_service,
+                        get_person_availability,
+                        parse_datetime,
+                        validate_appointment_slot,
+                    )
+                    appointment = await db.appointments.find_one({
+                        "id": appointment_id,
+                        "contact_id": conv.get("contact_id"),
+                        "event_type": "appointment",
+                        "status": "scheduled",
+                    }, {"_id": 0})
+                    if not appointment:
+                        raise ValueError("No se encontró un turno próximo de este cliente con ese ID")
+                    mode = appointment.get("scheduling_mode") or settings.get("appointment_mode") or "people"
+                    assigned_to = appointment.get("assigned_to")
+                    service_id = appointment.get("service_id") if mode == "business" else None
+                    if mode == "business":
+                        resource = get_business_service(settings, service_id)
+                        timezone_name = resource["timezone"]
+                    else:
+                        _, resource = await get_person_availability(db, assigned_to, settings)
+                        timezone_name = resource["timezone"]
+                    old_start = parse_datetime(appointment["start_time"], timezone_name)
+                    old_end = parse_datetime(appointment["end_time"], timezone_name)
+                    duration = max(5, int((old_end - old_start).total_seconds() // 60))
+                    new_start = parse_datetime(appt_start, timezone_name)
+                    new_end = new_start + timedelta(minutes=duration)
+                    slot = await validate_appointment_slot(
+                        db,
+                        settings,
+                        start_time=new_start,
+                        end_time=new_end,
+                        mode=mode,
+                        assigned_to=assigned_to,
+                        service_id=service_id,
+                        exclude_appointment_id=appointment_id,
+                    )
+                    update = {
+                        "start_time": slot["start_time"],
+                        "end_time": slot["end_time"],
+                        "updated_at": _now_iso(),
+                        "updated_by": "bot",
+                        "rescheduled_at": _now_iso(),
+                        "rescheduled_by_bot": True,
+                        "conversation_id": conv_id,
+                    }
+                    update.update(reminder_fields({**appointment, **update}, settings, reset_status=True))
+                    await db.appointments.update_one({"id": appointment_id}, {"$set": update})
+                    event["appointment_rescheduled"] = appointment_id
+                    event["appointment_resource_id"] = slot["resource_id"]
+                    cname = client_info.splitlines()[0] if client_info else "un cliente"
+                    notif_payload = (
+                        "appointment_rescheduled",
+                        f"Turno reprogramado: {cname}",
+                        f"El bot movió el turno al {new_start.astimezone(ZoneInfo(slot['timezone'])).strftime('%d/%m %H:%M')}",
+                    )
+                    if reply and wa_send is not None:
+                        await wa_send(conv, reply)
+                        await db.messages.insert_one({
+                            "id": "msg_" + uuid.uuid4().hex[:12],
+                            "conversation_id": conv_id,
+                            "sender_type": "bot",
+                            "sender_name": settings.get("bot_name", "Bot"),
+                            "body": reply,
+                            "direction": "outbound",
+                            "delivery_status": "sent",
+                            "channel": conv.get("channel"),
+                            "created_at": _now_iso(),
+                        })
+                        conv_set["last_message"] = reply
+                        conv_set["last_message_at"] = _now_iso()
+                except Exception as e:
+                    logger.exception("Failed to reschedule appointment")
+                    event["error_message"] = f"reschedule failed: {e}"
+            else:
+                event["error_message"] = "reschedule failed: faltan el turno o el nuevo horario"
+        elif decision == "confirm_appointment":
+            event["decision"] = "confirm_appointment"
+            appointment_id = parsed.get("appointment_id")
+            if appointment_id:
+                try:
+                    appointment = await db.appointments.find_one({
+                        "id": appointment_id,
+                        "contact_id": conv.get("contact_id"),
+                        "event_type": "appointment",
+                        "status": "scheduled",
+                    }, {"_id": 0})
+                    if not appointment:
+                        raise ValueError("No se encontró un turno próximo de este cliente con ese ID")
+                    confirmed_at = _now_iso()
+                    await db.appointments.update_one(
+                        {"id": appointment_id},
+                        {"$set": {
+                            "confirmation_status": "confirmed",
+                            "confirmed_at": confirmed_at,
+                            "confirmation_conversation_id": conv_id,
+                            "updated_at": confirmed_at,
+                            "updated_by": "bot",
+                        }},
+                    )
+                    event["appointment_confirmed"] = appointment_id
+                    cname = client_info.splitlines()[0] if client_info else "un cliente"
+                    notif_payload = (
+                        "appointment_confirmed",
+                        f"Turno confirmado: {cname}",
+                        "El cliente confirmó su asistencia al turno",
+                    )
+                    if reply and wa_send is not None:
+                        await wa_send(conv, reply)
+                        await db.messages.insert_one({
+                            "id": "msg_" + uuid.uuid4().hex[:12],
+                            "conversation_id": conv_id,
+                            "sender_type": "bot",
+                            "sender_name": settings.get("bot_name", "Bot"),
+                            "body": reply,
+                            "direction": "outbound",
+                            "delivery_status": "sent",
+                            "channel": conv.get("channel"),
+                            "created_at": confirmed_at,
+                        })
+                        conv_set["last_message"] = reply
+                        conv_set["last_message_at"] = confirmed_at
+                except Exception as e:
+                    logger.exception("Failed to confirm appointment")
+                    event["error_message"] = f"confirmation failed: {e}"
+            else:
+                event["error_message"] = "confirmation failed: falta el turno"
         else:
             event["decision"] = "no_action"
 

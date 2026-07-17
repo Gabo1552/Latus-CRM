@@ -351,3 +351,54 @@ def test_business_mode_configuration_requires_an_active_service(calendar_api):
     service = valid.json()["appointment_services"][0]
     assert service["id"] == "evaluacion"
     assert service["max_concurrent"] == 3
+
+
+def test_appointment_snapshots_client_and_reminder_schedule(calendar_api):
+    _, fake, client = calendar_api
+    _run(fake.contacts.insert_one({
+        "id": "ct_reminder", "name": "Cliente Recordatorio",
+        "phone": "+5491155550000", "whatsapp_id": "5491155550000",
+    }))
+    _run(fake.conversations.insert_one({
+        "id": "cv_reminder", "contact_id": "ct_reminder", "channel": "whatsapp",
+        "channel_external_id": "1234567890:5491155550000",
+        "last_message_at": "2026-07-17T12:00:00+00:00",
+    }))
+    _run(fake.bot_settings.insert_one({
+        "_id": "default",
+        "appointment_reminders_enabled": True,
+        "appointment_reminder_minutes_before": 1440,
+        "appointment_reminder_template_id": "reminder_default",
+        "appointment_reminder_templates": [{
+            "id": "reminder_default", "purpose": "appointment_reminder",
+            "label": "Recordatorio", "name": "recordatorio_turno", "language": "es_AR",
+            "body_preview": "Hola {{client_name}}", "parameter_keys": ["client_name"],
+            "active": True, "sort_order": 0,
+        }],
+    }))
+
+    response = client.post("/api/appointments", headers=_headers("T-A1"), json={
+        "title": "Turno con recordatorio",
+        "contact_id": "ct_reminder",
+        "start_time": "2026-07-20T13:00:00+00:00",
+        "end_time": "2026-07-20T13:30:00+00:00",
+    })
+    assert response.status_code == 200, response.text
+    appointment = response.json()
+    assert appointment["contact_id"] == "ct_reminder"
+    assert appointment["conversation_id"] == "cv_reminder"
+    assert appointment["reminder_enabled"] is True
+    assert appointment["reminder_due_at"] == "2026-07-19T13:00:00+00:00"
+    assert appointment["reminder_status"] == "pending"
+    assert appointment["confirmation_status"] == "pending"
+
+
+def test_reminder_configuration_requires_active_default_template(calendar_api):
+    _, _, client = calendar_api
+    invalid = client.patch("/api/admin/bot-settings", headers=_headers("T-ADMIN"), json={
+        "appointment_reminders_enabled": True,
+        "appointment_reminder_templates": [],
+        "appointment_reminder_template_id": None,
+    })
+    assert invalid.status_code == 400
+    assert "plantilla de recordatorio activa" in invalid.json()["detail"]

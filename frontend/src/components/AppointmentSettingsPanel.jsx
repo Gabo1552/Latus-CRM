@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BriefcaseBusiness, CalendarClock, Plus, Trash2, UserRound } from "lucide-react";
+import { BellRing, BriefcaseBusiness, CalendarClock, MessageSquareText, Plus, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,130 @@ const makeService = () => ({
   weekly_schedule: cloneWeeklySchedule(DEFAULT_WEEKLY_SCHEDULE),
   sort_order: Date.now(),
 });
+
+const makeTemplate = (purpose, index = 0) => ({
+  id: `${purpose}_${Date.now().toString(36)}_${index}`,
+  label: purpose === "recontact" ? "Nuevo recontacto" : "Recordatorio de turno",
+  name: "",
+  language: "es_AR",
+  body_preview: purpose === "recontact"
+    ? "Hola {{client_name}}, queríamos retomar nuestra conversación."
+    : "Hola {{client_name}}, te recordamos tu turno del {{appointment_date}} a las {{appointment_time}}.",
+  parameter_keys: purpose === "recontact"
+    ? ["client_name"]
+    : ["client_name", "appointment_date", "appointment_time"],
+  active: true,
+  sort_order: index,
+});
+
+function TemplateListEditor({ purpose, templates, onChange }) {
+  const updateTemplate = (index, patch) => onChange(
+    templates.map((template, currentIndex) => currentIndex === index ? { ...template, ...patch } : template),
+  );
+  const title = purpose === "recontact" ? "Plantillas de recontacto" : "Plantillas de recordatorio";
+
+  return (
+    <div className="space-y-3 rounded-lg border border-latus-warm-border bg-latus-cream/35 p-4">
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+        <div>
+          <p className="text-sm font-bold text-latus-ink">{title}</p>
+          <p className="mt-1 text-xs text-latus-muted">Deben estar aprobadas en Meta y coincidir en nombre, idioma y variables.</p>
+        </div>
+        <Button type="button" variant="outline" onClick={() => onChange([...templates, makeTemplate(purpose, templates.length)])} className="shrink-0 border-latus-warm-border bg-white">
+          <Plus className="h-4 w-4" /> Agregar plantilla
+        </Button>
+      </div>
+      {templates.length === 0 ? (
+        <div className="rounded-md border border-dashed border-latus-warm-border bg-white p-5 text-center text-xs text-latus-muted">Todavía no hay plantillas cargadas.</div>
+      ) : (
+        <Accordion type="multiple" className="space-y-2">
+          {templates.map((template, index) => (
+            <AccordionItem key={template.id || index} value={template.id || String(index)} className="overflow-hidden rounded-lg border border-latus-warm-border bg-white px-4">
+              <AccordionTrigger className="gap-3 py-3 hover:no-underline">
+                <div className="flex min-w-0 items-center gap-3 text-left">
+                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${template.active !== false ? "bg-emerald-500" : "bg-neutral-300"}`} />
+                  <div className="min-w-0">
+                    <p className="truncate font-bold text-latus-ink">{template.label || template.name || "Plantilla sin nombre"}</p>
+                    <p className="truncate text-xs font-normal text-latus-muted">{template.name || "Falta el nombre de Meta"} · {template.language || "es_AR"}</p>
+                  </div>
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="space-y-4 px-1 pb-5">
+                <div className="flex items-center justify-between gap-3 rounded-md bg-latus-cream/45 px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <Switch checked={template.active !== false} onCheckedChange={(active) => updateTemplate(index, { active })} />
+                    <span className="text-xs font-bold text-latus-ink">{template.active !== false ? "Disponible" : "Pausada"}</span>
+                  </div>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => onChange(templates.filter((_, currentIndex) => currentIndex !== index))} className="text-red-700 hover:bg-red-50"><Trash2 className="h-4 w-4" /> Eliminar</Button>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div><Label className="text-xs font-semibold">Nombre visible</Label><Input value={template.label || ""} onChange={(event) => updateTemplate(index, { label: event.target.value })} className="mt-1" /></div>
+                  <div><Label className="text-xs font-semibold">Nombre aprobado en Meta</Label><Input value={template.name || ""} onChange={(event) => updateTemplate(index, { name: event.target.value.toLowerCase().replace(/\s+/g, "_") })} className="mt-1 font-mono text-xs" placeholder="recordatorio_turno" /></div>
+                  <div><Label className="text-xs font-semibold">Idioma de Meta</Label><Input value={template.language || "es_AR"} onChange={(event) => updateTemplate(index, { language: event.target.value })} className="mt-1 font-mono text-xs" /></div>
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold">Vista previa</Label>
+                  <Textarea value={template.body_preview || ""} onChange={(event) => updateTemplate(index, { body_preview: event.target.value })} className="mt-1 min-h-20" />
+                  <p className="mt-1 text-[11px] text-latus-muted">Variables: client_name, client_phone, appointment_date, appointment_time, appointment_title, appointment_location, service_name y agent_name.</p>
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold">Variables en el orden de Meta</Label>
+                  <Input value={(template.parameter_keys || []).join(", ")} onChange={(event) => updateTemplate(index, { parameter_keys: event.target.value.split(",").map((key) => key.trim()).filter(Boolean) })} className="mt-1 font-mono text-xs" />
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          ))}
+        </Accordion>
+      )}
+
+    </div>
+  );
+}
+
+function CommunicationsSettings({ draft, onChange }) {
+  const reminderTemplates = Array.isArray(draft.appointment_reminder_templates) ? draft.appointment_reminder_templates : [];
+  return (
+    <Accordion type="single" collapsible defaultValue="communications" className="space-y-3">
+      <AccordionItem value="communications" className="overflow-hidden rounded-xl border border-latus-warm-border bg-white px-4">
+        <AccordionTrigger className="gap-3 py-4 hover:no-underline">
+          <div className="flex min-w-0 items-start gap-3 text-left">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-latus-ice"><MessageSquareText className="h-4 w-4 text-latus-blue" /></div>
+            <div><p className="font-bold text-latus-ink">WhatsApp, recontacto y recordatorios</p><p className="mt-0.5 text-xs font-normal text-latus-muted">Plantillas aprobadas en Meta, envío automático y reprogramación por el bot.</p></div>
+          </div>
+        </AccordionTrigger>
+        <AccordionContent className="space-y-4 px-1 pb-5">
+          <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-xs leading-relaxed text-blue-900">Para escribir fuera de la ventana de atención necesitás una plantilla aprobada en Meta. El nombre, idioma y orden de variables deben coincidir exactamente.</div>
+          <TemplateListEditor purpose="recontact" templates={Array.isArray(draft.whatsapp_recontact_templates) ? draft.whatsapp_recontact_templates : []} onChange={(whatsapp_recontact_templates) => onChange({ whatsapp_recontact_templates })} />
+          <div className="space-y-4 rounded-lg border border-latus-warm-border bg-white p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3"><BellRing className="mt-0.5 h-5 w-5 text-latus-blue" /><div><p className="text-sm font-bold text-latus-ink">Recordar turnos automáticamente</p><p className="mt-1 text-xs text-latus-muted">Envía la plantilla al WhatsApp del cliente asociado a la cita.</p></div></div>
+              <Switch checked={!!draft.appointment_reminders_enabled} onCheckedChange={(appointment_reminders_enabled) => onChange({ appointment_reminders_enabled })} />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label className="text-xs font-semibold">Enviar cuántos minutos antes</Label>
+                <Input type="number" min="5" max="43200" value={draft.appointment_reminder_minutes_before || 1440} onChange={(event) => onChange({ appointment_reminder_minutes_before: Number(event.target.value) })} className="mt-1" />
+                <p className="mt-1 text-[11px] text-latus-muted">1440 = un día; 120 = dos horas.</p>
+              </div>
+              <div>
+                <Label className="text-xs font-semibold">Plantilla predeterminada</Label>
+                <Select value={draft.appointment_reminder_template_id || "none"} onValueChange={(value) => onChange({ appointment_reminder_template_id: value === "none" ? null : value })}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Seleccionar plantilla" /></SelectTrigger>
+                  <SelectContent><SelectItem value="none">Sin seleccionar</SelectItem>{reminderTemplates.filter((template) => template.active !== false).map((template) => <SelectItem key={template.id} value={template.id}>{template.label || template.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="flex items-start justify-between gap-4 rounded-md bg-latus-cream/45 p-3">
+              <div><p className="text-xs font-bold text-latus-ink">Permitir que el bot reprograme</p><p className="mt-1 text-[11px] text-latus-muted">Mueve el turno existente, valida el horario y reprograma el recordatorio sin duplicarlo.</p></div>
+              <Switch checked={draft.appointment_rescheduling_enabled !== false} onCheckedChange={(appointment_rescheduling_enabled) => onChange({ appointment_rescheduling_enabled })} />
+            </div>
+          </div>
+          <TemplateListEditor purpose="appointment_reminder" templates={reminderTemplates} onChange={(appointment_reminder_templates) => onChange({ appointment_reminder_templates })} />
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
+  );
+}
 
 export default function AppointmentSettingsPanel({ draft, onChange, users = [] }) {
   const queryClient = useQueryClient();
@@ -259,6 +383,7 @@ export default function AppointmentSettingsPanel({ draft, onChange, users = [] }
           </AccordionItem>
         </Accordion>
       )}
+      <CommunicationsSettings draft={draft} onChange={onChange} />
     </div>
   );
 }

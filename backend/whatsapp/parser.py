@@ -110,13 +110,14 @@ def parse_inbound_value(value: dict) -> tuple[list[InboundMessage], list[StatusU
     # ---- statuses -------------------------------------------------------
     for st in (value.get("statuses") or []):
         err = (st.get("errors") or [None])[0] or {}
+        error_details = (err.get("error_data") or {}).get("details") if isinstance(err, dict) else None
         statuses.append(StatusUpdate(
             message_id=str(st.get("id") or ""),
             status=str(st.get("status") or ""),
             timestamp=_ts_to_iso(st.get("timestamp")),
             recipient_id=str(st.get("recipient_id") or ""),
             error_code=err.get("code") if err else None,
-            error_message=str((err or {}).get("message") or "") if err else "",
+            error_message=str(error_details or (err or {}).get("message") or "") if err else "",
             raw=st,
         ))
 
