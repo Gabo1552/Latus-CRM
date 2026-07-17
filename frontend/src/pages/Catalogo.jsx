@@ -37,6 +37,30 @@ function fmtPrice(p, cur) {
   return `${cur || "ARS"} ${n.toLocaleString("es-AR")}`;
 }
 
+function toLocalDateTimeInput(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function promoDescription(product) {
+  if (!product?.promo_price) return null;
+  if (product.promo_active) {
+    if (product.promo_limit_type === "units") return `${product.promo_units_remaining} unidades restantes`;
+    if (product.promo_limit_type === "date" && product.promo_end_at) {
+      return `Hasta ${new Date(product.promo_end_at).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}`;
+    }
+    return "Promoción activa";
+  }
+  return {
+    scheduled: "Promoción programada",
+    expired: "Promoción vencida",
+    exhausted: "Cupo promocional agotado",
+  }[product.promo_status] || "Promoción inactiva";
+}
+
 
 export default function Catalogo() {
   const { user } = useAuth();
@@ -255,12 +279,13 @@ export default function Catalogo() {
                         )}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <span className={p.promo_price ? "line-through text-[#888888]" : "font-bold text-[#0B1B26]"}>
+                        <span className={p.promo_active ? "line-through text-[#888888]" : "font-bold text-[#0B1B26]"}>
                           {fmtPrice(p.price, p.currency)}
                         </span>
-                        {p.promo_price && (
-                          <p className="text-xs font-bold text-[#0E8DDB]">{fmtPrice(p.promo_price, p.currency)}</p>
+                        {p.promo_active && (
+                          <p className="text-xs font-bold text-[#0E8DDB]">{fmtPrice(p.effective_price, p.currency)}</p>
                         )}
+                        {p.promo_price && <p className={`text-[10px] ${p.promo_active ? "text-emerald-700" : "text-[#888888]"}`}>{promoDescription(p)}</p>}
                       </td>
                       <td className="px-3 py-2">
                         <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-sm"
@@ -324,10 +349,16 @@ export default function Catalogo() {
 
 function ProductModal({ product, categories, onClose, onSaved }) {
   const isEdit = !!product;
-  const [d, setD] = useState(product || {
+  const [d, setD] = useState(product ? {
+    ...product,
+    promo_start_at: toLocalDateTimeInput(product.promo_start_at),
+    promo_end_at: toLocalDateTimeInput(product.promo_end_at),
+  } : {
     name: "", sku: "", category: "", description: "",
     price: "", currency: "ARS", stock_status: "disponible",
     active: true, tags: [], image_url: "", promo_price: "",
+    promo_limit_type: "none", promo_start_at: "", promo_end_at: "",
+    promo_unit_limit: "", promo_units_used: 0,
     commercial_conditions: "", external_link: "",
   });
   const [tagDraft, setTagDraft] = useState("");
@@ -352,7 +383,32 @@ function ProductModal({ product, categories, onClose, onSaved }) {
     }
     const payload = { ...d };
     if (payload.price === "") delete payload.price;
-    if (payload.promo_price === "") delete payload.promo_price;
+    if (payload.promo_price === "") {
+      payload.promo_price = null;
+      payload.promo_limit_type = "none";
+      payload.promo_start_at = null;
+      payload.promo_end_at = null;
+      payload.promo_unit_limit = null;
+    } else if (payload.promo_limit_type === "date") {
+      if (!payload.promo_end_at) { toast.error("Indicá hasta cuándo dura la promoción"); return; }
+      payload.promo_start_at = payload.promo_start_at ? new Date(payload.promo_start_at).toISOString() : null;
+      payload.promo_end_at = new Date(payload.promo_end_at).toISOString();
+      payload.promo_unit_limit = null;
+    } else if (payload.promo_limit_type === "units") {
+      if (!Number(payload.promo_unit_limit)) { toast.error("Indicá cuántas unidades tendrá la promoción"); return; }
+      payload.promo_start_at = null;
+      payload.promo_end_at = null;
+      payload.promo_unit_limit = Number(payload.promo_unit_limit);
+    } else {
+      payload.promo_start_at = null;
+      payload.promo_end_at = null;
+      payload.promo_unit_limit = null;
+    }
+    delete payload.promo_active;
+    delete payload.promo_status;
+    delete payload.promo_units_remaining;
+    delete payload.effective_price;
+    delete payload.promo_units_used;
     save.mutate(payload);
   };
 
@@ -411,6 +467,51 @@ function ProductModal({ product, categories, onClose, onSaved }) {
             <Input data-testid="modal-promo" type="number" step="0.01" min="0"
                    value={d.promo_price ?? ""} onChange={(e) => setD({ ...d, promo_price: e.target.value })}
                    className="rounded-sm h-9 mt-1" />
+          </div>
+          <div className="sm:col-span-2 rounded-lg border border-[#E9E6DC] bg-latus-cream/45 p-4">
+            <div className="mb-3">
+              <p className="text-xs font-bold uppercase tracking-wider text-[#0B1B26]">Vigencia de la promoción</p>
+              <p className="mt-1 text-xs text-[#888888]">Podés limitarla por fecha o por cantidad de unidades vendidas.</p>
+            </div>
+            {d.promo_price === "" || d.promo_price === null || d.promo_price === undefined ? (
+              <p className="rounded-md border border-dashed border-[#DCD9CE] bg-white px-3 py-2 text-xs text-[#888888]">Ingresá un precio promocional para configurar su duración.</p>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <Label className="text-xs font-bold text-[#888888]">La promoción dura</Label>
+                  <Select value={d.promo_limit_type || "none"} onValueChange={(promo_limit_type) => setD({ ...d, promo_limit_type })}>
+                    <SelectTrigger data-testid="modal-promo-limit-type" className="mt-1 h-9 bg-white"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Sin límite</SelectItem>
+                      <SelectItem value="date">Hasta una fecha</SelectItem>
+                      <SelectItem value="units">Por cantidad de unidades</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {d.promo_limit_type === "units" && (
+                  <div>
+                    <Label className="text-xs font-bold text-[#888888]">Unidades promocionales</Label>
+                    <Input data-testid="modal-promo-unit-limit" type="number" min="1" value={d.promo_unit_limit ?? ""} onChange={(event) => setD({ ...d, promo_unit_limit: event.target.value })} className="mt-1 h-9 bg-white" />
+                    {Number(d.promo_units_used || 0) > 0 && <p className="mt-1 text-[10px] text-[#888888]">Ya utilizadas: {d.promo_units_used}</p>}
+                  </div>
+                )}
+
+                {d.promo_limit_type === "date" && (
+                  <>
+                    <div>
+                      <Label className="text-xs font-bold text-[#888888]">Comienza</Label>
+                      <Input data-testid="modal-promo-start" type="datetime-local" value={d.promo_start_at || ""} onChange={(event) => setD({ ...d, promo_start_at: event.target.value })} className="mt-1 h-9 bg-white" />
+                      <p className="mt-1 text-[10px] text-[#888888]">Opcional; vacío significa desde ahora.</p>
+                    </div>
+                    <div>
+                      <Label className="text-xs font-bold text-[#888888]">Finaliza *</Label>
+                      <Input data-testid="modal-promo-end" type="datetime-local" value={d.promo_end_at || ""} onChange={(event) => setD({ ...d, promo_end_at: event.target.value })} className="mt-1 h-9 bg-white" />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
           <div>
             <Label className="text-xs font-bold text-[#888888]">Moneda</Label>
@@ -532,7 +633,7 @@ function ImportModal({ onClose, onDone }) {
   });
 
   const downloadTemplate = () => {
-    const headers = "name,sku,category,description,price,currency,stock_status,active,tags,image_url,promo_price,commercial_conditions,external_link\n";
+    const headers = "name,sku,category,description,price,currency,stock_status,active,tags,image_url,promo_price,promo_limit_type,promo_start_at,promo_end_at,promo_unit_limit,commercial_conditions,external_link\n";
     const a = document.createElement("a");
     a.href = "data:text/csv;charset=utf-8,\ufeff" + encodeURIComponent(headers);
     a.download = "plantilla_catalogo_latus.csv";

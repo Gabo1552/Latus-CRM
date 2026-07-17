@@ -537,11 +537,31 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             lead = await db.leads.find_one({"id": conv.get("lead_id")}, {"_id": 0}) if conv.get("lead_id") else None
             if lead and normalize_lead_status(lead.get("status")) != lead_status_suggested:
                 db_status = SPANISH_TO_ENGLISH_STATUS.get(lead_status_suggested, lead_status_suggested)
-                event["lead_status_change"] = {"from": lead.get("status"),
-                                               "to": lead_status_suggested}
-                await db.leads.update_one({"id": lead["id"]},
-                                          {"$set": {"status": db_status,
-                                                    "updated_at": _now_iso()}})
+                lead_update = {"status": db_status, "updated_at": _now_iso()}
+                try:
+                    if lead.get("status") != "won" and db_status == "won":
+                        from utils.sales import close_sale
+                        lead_update.update(await close_sale(
+                            db,
+                            lead,
+                            lead.get("products") or [],
+                            user_id=conv.get("assigned_to"),
+                        ))
+                    elif lead.get("status") == "won" and db_status != "won":
+                        from utils.sales import reverse_sale
+                        lead_update["sale_snapshot"] = await reverse_sale(
+                            db,
+                            lead.get("sale_snapshot"),
+                            user_id=conv.get("assigned_to"),
+                        )
+                    await db.leads.update_one({"id": lead["id"]}, {"$set": lead_update})
+                    event["lead_status_change"] = {
+                        "from": lead.get("status"), "to": lead_status_suggested
+                    }
+                except Exception as exc:
+                    logger.warning("Sale close/status change blocked for lead=%s: %s", lead.get("id"), exc)
+                    event["sale_close_blocked"] = True
+                    event["error_message"] = f"sale close blocked: {exc}"
 
         # Summary
         if summary_new:

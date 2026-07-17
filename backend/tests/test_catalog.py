@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -279,3 +280,122 @@ class TestRBACAndMeta:
                    json={"name": "X", "price": 100, "promo_price": 150})
         assert r.status_code == 400
         assert "promo" in r.text.lower()
+
+    def test_21_promotion_can_expire_by_date_or_units(self, srv):
+        _, _, c = srv
+        expired = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        dated = c.post("/api/catalog/products", headers=_h("T-ADMIN"), json={
+            "name": "Promo vencida", "price": 100, "promo_price": 80,
+            "promo_limit_type": "date", "promo_end_at": expired,
+        })
+        assert dated.status_code == 200, dated.text
+        assert dated.json()["promo_active"] is False
+        assert dated.json()["promo_status"] == "expired"
+        assert dated.json()["effective_price"] == 100
+
+        units = c.post("/api/catalog/products", headers=_h("T-ADMIN"), json={
+            "name": "Promo por unidades", "price": 100, "promo_price": 75,
+            "promo_limit_type": "units", "promo_unit_limit": 5,
+        })
+        assert units.status_code == 200, units.text
+        assert units.json()["promo_active"] is True
+        assert units.json()["promo_units_remaining"] == 5
+        assert units.json()["effective_price"] == 75
+
+    def test_22_closed_sale_keeps_price_snapshot_and_consumes_promo_units(self, srv):
+        _, _, c = srv
+        product = c.post("/api/catalog/products", headers=_h("T-ADMIN"), json={
+            "name": "Producto congelado", "price": 100, "promo_price": 80,
+            "currency": "ARS", "promo_limit_type": "units", "promo_unit_limit": 2,
+        }).json()
+
+        lead = c.post("/api/leads", headers=_h("T-ADMIN"), json={
+            "contact_id": "contact_sale", "title": "Venta con snapshot",
+            "products": [{
+                "id": product["product_id"], "name": product["name"],
+                "price": 80, "list_price": 100, "quantity": 1,
+                "currency": "ARS", "promotion_applied": True,
+            }],
+        })
+        assert lead.status_code == 200, lead.text
+        closed = c.patch(
+            f"/api/leads/{lead.json()['id']}", headers=_h("T-ADMIN"), json={"status": "won"}
+        )
+        assert closed.status_code == 200, closed.text
+        snapshot = closed.json()["sale_snapshot"]
+        assert snapshot["total"] == 80
+        assert snapshot["products"][0]["unit_price"] == 80
+        assert snapshot["products"][0]["promotion_applied"] is True
+
+        changed = c.put(
+            f"/api/catalog/products/{product['product_id']}",
+            headers=_h("T-ADMIN"), json={"price": 250},
+        )
+        assert changed.status_code == 200, changed.text
+        stored_sale = c.get(f"/api/leads/{lead.json()['id']}", headers=_h("T-ADMIN")).json()
+        assert stored_sale["closed_value"] == 80
+        assert stored_sale["sale_snapshot"]["products"][0]["unit_price"] == 80
+        assert c.get(
+            f"/api/catalog/products/{product['product_id']}", headers=_h("T-ADMIN")
+        ).json()["promo_units_remaining"] == 1
+
+        second = c.post("/api/leads", headers=_h("T-ADMIN"), json={
+            "contact_id": "contact_sale_2", "title": "Venta sin cupo",
+            "products": [{
+                "id": product["product_id"], "name": product["name"],
+                "price": 80, "list_price": 250, "quantity": 2,
+                "currency": "ARS", "promotion_applied": True,
+            }],
+        }).json()
+        no_capacity = c.patch(
+            f"/api/leads/{second['id']}", headers=_h("T-ADMIN"), json={"status": "won"}
+        )
+        assert no_capacity.status_code == 409
+        assert "Solo quedan 1" in no_capacity.json()["detail"]
+
+    def test_23_closed_sale_products_are_immutable_until_reopened(self, srv):
+        _, _, c = srv
+        lead = c.post("/api/leads", headers=_h("T-ADMIN"), json={
+            "contact_id": "contact_locked", "title": "Venta cerrada",
+            "products": [{"name": "Servicio", "price": 50, "quantity": 1}],
+        }).json()
+        c.patch(f"/api/leads/{lead['id']}", headers=_h("T-ADMIN"), json={"status": "won"})
+        locked = c.patch(
+            f"/api/leads/{lead['id']}", headers=_h("T-ADMIN"),
+            json={"products": [{"name": "Servicio", "price": 999, "quantity": 1}]},
+        )
+        assert locked.status_code == 409
+        assert "venta ya está cerrada" in locked.json()["detail"]
+
+    def test_24_lead_created_as_won_is_snapshotted_and_aggregates_promo_units(self, srv):
+        _, _, c = srv
+        product = c.post("/api/catalog/products", headers=_h("T-ADMIN"), json={
+            "name": "Promo agrupada", "price": 120, "promo_price": 90,
+            "promo_limit_type": "units", "promo_unit_limit": 3,
+        }).json()
+        product_line = {
+            "id": product["product_id"], "name": product["name"],
+            "price": 90, "list_price": 120, "quantity": 2,
+            "currency": "ARS", "promotion_applied": True,
+        }
+
+        rejected = c.post("/api/leads", headers=_h("T-ADMIN"), json={
+            "contact_id": "contact_won_rejected", "title": "Excede promoción",
+            "status": "won", "products": [product_line, {**product_line, "quantity": 2}],
+        })
+        assert rejected.status_code == 409
+        assert "Solo quedan 3" in rejected.json()["detail"]
+        assert c.get(
+            f"/api/catalog/products/{product['product_id']}", headers=_h("T-ADMIN")
+        ).json()["promo_units_remaining"] == 3
+
+        closed = c.post("/api/leads", headers=_h("T-ADMIN"), json={
+            "contact_id": "contact_won", "title": "Cierre directo",
+            "status": "won", "products": [product_line],
+        })
+        assert closed.status_code == 200, closed.text
+        assert closed.json()["closed_value"] == 180
+        assert closed.json()["sale_snapshot"]["products"][0]["unit_price"] == 90
+        assert c.get(
+            f"/api/catalog/products/{product['product_id']}", headers=_h("T-ADMIN")
+        ).json()["promo_units_remaining"] == 1

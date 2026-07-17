@@ -89,7 +89,7 @@ class _DB:
         for n in ("users", "contacts", "leads", "conversations", "messages",
                   "notifications", "bot_events", "bot_settings", "settings",
                   "user_sessions", "wa_status", "whatsapp_events", "app_secrets",
-                  "work_areas", "appointments"):
+                  "work_areas", "appointments", "products"):
             setattr(self, n, _Coll())
 
 
@@ -522,3 +522,37 @@ class TestBotInactivityAndTransitions:
         second = _run(pipeline_mod.process_inbound(db, cv, "wamid.APPT2", wa_send=AsyncMock(return_value={})))
         assert len(db.appointments.docs) == 1
         assert "schedule failed" in second.get("error_message", "")
+
+    def test_bot_won_status_creates_immutable_sale_snapshot(self, pipeline_mod, monkeypatch):
+        db = _DB()
+        cv = _seed_conv(db, last_text="Confirmo la compra")
+        _run(db.products.insert_one({
+            "product_id": "prod_bot_sale", "name": "Plan bot", "price": 120,
+            "promo_price": None, "currency": "ARS", "active": True,
+            "deleted_at": None,
+        }))
+        _run(db.leads.update_one({"id": "ld1"}, {"$set": {
+            "products": [{
+                "id": "prod_bot_sale", "name": "Plan bot", "price": 120,
+                "quantity": 1, "currency": "ARS",
+            }],
+            "value": 120,
+        }}))
+        monkeypatch.setattr(
+            pipeline_mod,
+            "call_llm_json",
+            _llm_factory(
+                decision="update_status_only",
+                lead_status="ganado",
+                evidence="El cliente confirmó la compra",
+                intent="compra_confirmada",
+            ),
+        )
+        event = _run(pipeline_mod.process_inbound(
+            db, cv, "wamid.SALE1", wa_send=AsyncMock(return_value={})
+        ))
+        lead = _run(db.leads.find_one({"id": "ld1"}))
+        assert event.get("sale_close_blocked") is not True
+        assert lead["status"] == "won"
+        assert lead["closed_value"] == 120
+        assert lead["sale_snapshot"]["products"][0]["unit_price"] == 120

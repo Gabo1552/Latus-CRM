@@ -18,10 +18,12 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_CURRENCIES = {"ARS", "USD", "EUR", "BRL", "CLP", "UYU", "MXN"}
 ALLOWED_STOCK_STATUS = {"disponible", "sin_stock", "consultar"}
+ALLOWED_PROMO_LIMIT_TYPES = {"none", "date", "units"}
 
 CSV_HEADERS = [
     "name", "sku", "category", "description", "price", "currency",
     "stock_status", "active", "tags", "image_url", "promo_price",
+    "promo_limit_type", "promo_start_at", "promo_end_at", "promo_unit_limit",
     "commercial_conditions", "external_link",
 ]
 
@@ -68,6 +70,113 @@ def _coerce_float(v: Any) -> float | None:
         return float(s)
     except Exception as e:
         raise ValueError(f"valor numérico inválido: {v!r}") from e
+
+
+def _coerce_int(v: Any) -> int | None:
+    if v is None or v == "":
+        return None
+    try:
+        return int(v)
+    except Exception as e:
+        raise ValueError(f"valor entero inválido: {v!r}") from e
+
+
+def _normalize_iso_datetime(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception as exc:
+        raise ValueError("La fecha de la promoción no es válida") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _as_utc(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def validate_promotion_config(product: dict) -> None:
+    promo_price = product.get("promo_price")
+    if promo_price is None:
+        return
+    price = product.get("price")
+    if price is not None and float(promo_price) >= float(price):
+        raise ValueError("El precio promocional debe ser menor que el precio")
+    limit_type = product.get("promo_limit_type") or "none"
+    if limit_type not in ALLOWED_PROMO_LIMIT_TYPES:
+        raise ValueError("El tipo de vigencia de la promoción no es válido")
+    if limit_type == "date":
+        start = _as_utc(product.get("promo_start_at"))
+        end = _as_utc(product.get("promo_end_at"))
+        if not end:
+            raise ValueError("Indicá hasta cuándo estará vigente la promoción")
+        if start and end <= start:
+            raise ValueError("El fin de la promoción debe ser posterior al inicio")
+    if limit_type == "units":
+        limit = product.get("promo_unit_limit")
+        if limit is None or int(limit) < 1:
+            raise ValueError("La promoción debe tener al menos una unidad disponible")
+        used = int(product.get("promo_units_used") or 0)
+        if int(limit) < used:
+            raise ValueError("El límite no puede ser menor que las unidades promocionales ya vendidas")
+
+
+def promotion_state(product: dict, *, at: datetime | None = None) -> dict[str, Any]:
+    """Return current effective price and promotion availability without mutating storage."""
+    now = (at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    base_price = product.get("price")
+    promo_price = product.get("promo_price")
+    result = {
+        "promo_active": False,
+        "promo_status": "none",
+        "promo_units_remaining": None,
+        "effective_price": base_price,
+    }
+    if promo_price is None or (base_price is not None and float(promo_price) >= float(base_price)):
+        return result
+
+    limit_type = product.get("promo_limit_type") or "none"
+    if limit_type == "date":
+        start = _as_utc(product.get("promo_start_at"))
+        end = _as_utc(product.get("promo_end_at"))
+        if start and now < start:
+            result["promo_status"] = "scheduled"
+            return result
+        if not end or now >= end:
+            result["promo_status"] = "expired"
+            return result
+    elif limit_type == "units":
+        limit = int(product.get("promo_unit_limit") or 0)
+        used = int(product.get("promo_units_used") or 0)
+        remaining = max(0, limit - used)
+        result["promo_units_remaining"] = remaining
+        if remaining <= 0:
+            result["promo_status"] = "exhausted"
+            return result
+
+    result.update({
+        "promo_active": True,
+        "promo_status": "active",
+        "effective_price": promo_price,
+    })
+    return result
+
+
+def product_view(product: dict | None) -> dict | None:
+    clean = _strip(product)
+    if clean is not None:
+        clean.update(promotion_state(clean))
+    return clean
 
 
 def _split_tags(raw) -> list[str]:
@@ -118,6 +227,20 @@ def validate_product(payload: dict, *, partial: bool = False) -> dict:
         if v is not None and v < 0:
             raise ValueError("El precio promocional no puede ser negativo")
         out["promo_price"] = v
+    if "promo_limit_type" in payload:
+        limit_type = str(payload.get("promo_limit_type") or "none").strip().lower()
+        if limit_type not in ALLOWED_PROMO_LIMIT_TYPES:
+            raise ValueError("El tipo de vigencia de la promoción no es válido")
+        out["promo_limit_type"] = limit_type
+    if "promo_start_at" in payload:
+        out["promo_start_at"] = _normalize_iso_datetime(payload.get("promo_start_at"))
+    if "promo_end_at" in payload:
+        out["promo_end_at"] = _normalize_iso_datetime(payload.get("promo_end_at"))
+    if "promo_unit_limit" in payload:
+        limit = _coerce_int(payload.get("promo_unit_limit"))
+        if limit is not None and limit < 1:
+            raise ValueError("La promoción debe tener al menos una unidad disponible")
+        out["promo_unit_limit"] = limit
     if "currency" in payload:
         c = (payload.get("currency") or "ARS").strip().upper()
         if c not in ALLOWED_CURRENCIES:
@@ -154,12 +277,6 @@ def validate_product(payload: dict, *, partial: bool = False) -> dict:
             raise ValueError("El enlace externo debe empezar con http:// o https://")
         out["external_link"] = u or None
 
-    # promo < price cross check
-    pp = out.get("promo_price")
-    p = out.get("price")
-    if pp is not None and p is not None and pp >= p:
-        raise ValueError("El precio promocional debe ser menor que el precio")
-
     return out
 
 
@@ -176,6 +293,10 @@ def _strip(doc: dict | None) -> dict | None:
 
 async def create_product(db, payload: dict, *, user_id: str | None) -> dict:
     clean = validate_product(payload, partial=False)
+    if clean.get("promo_price") is None:
+        clean.update({"promo_limit_type": "none", "promo_start_at": None,
+                      "promo_end_at": None, "promo_unit_limit": None})
+    validate_promotion_config({**clean, "promo_units_used": 0})
     if clean.get("sku"):
         dupe = await db.products.find_one(
             {"sku": clean["sku"], "deleted_at": None}, {"_id": 0, "product_id": 1})
@@ -198,15 +319,24 @@ async def create_product(db, payload: dict, *, user_id: str | None) -> dict:
         "tags": clean.get("tags") or [],
         "image_url": clean.get("image_url"),
         "promo_price": clean.get("promo_price"),
+        "promo_limit_type": clean.get("promo_limit_type") or "none",
+        "promo_start_at": clean.get("promo_start_at"),
+        "promo_end_at": clean.get("promo_end_at"),
+        "promo_unit_limit": clean.get("promo_unit_limit"),
+        "promo_units_used": 0,
         "commercial_conditions": clean.get("commercial_conditions"),
         "external_link": clean.get("external_link"),
     }
     await db.products.insert_one(doc)
-    return _strip(doc)
+    return product_view(doc)
 
 
 async def update_product(db, product_id: str, payload: dict, *,
                          user_id: str | None) -> dict | None:
+    existing = await db.products.find_one(
+        {"product_id": product_id, "deleted_at": None}, {"_id": 0})
+    if not existing:
+        return None
     clean = validate_product(payload, partial=True)
     if clean.get("sku"):
         dupe = await db.products.find_one(
@@ -214,11 +344,18 @@ async def update_product(db, product_id: str, payload: dict, *,
              "product_id": {"$ne": product_id}}, {"_id": 0, "product_id": 1})
         if dupe:
             raise ValueError("Ya existe un producto con ese SKU")
+    combined = {**existing, **clean}
+    if "promo_price" in clean and clean["promo_price"] is None:
+        clean.update({"promo_limit_type": "none", "promo_start_at": None,
+                      "promo_end_at": None, "promo_unit_limit": None})
+        combined.update(clean)
+    validate_promotion_config(combined)
     clean["updated_at"] = _now_iso()
     clean["updated_by"] = user_id
     await db.products.update_one(
         {"product_id": product_id, "deleted_at": None}, {"$set": clean})
-    return await db.products.find_one({"product_id": product_id}, {"_id": 0})
+    updated = await db.products.find_one({"product_id": product_id}, {"_id": 0})
+    return product_view(updated)
 
 
 def build_listing_query(filters: dict) -> dict:

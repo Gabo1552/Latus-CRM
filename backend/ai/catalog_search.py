@@ -117,11 +117,16 @@ def extract_product_query(text: str) -> str:
 
 _FIELDS = ("name", "sku", "category", "price", "currency", "promo_price",
            "stock_status", "description", "commercial_conditions",
-           "image_url", "external_link", "tags")
+           "image_url", "external_link", "tags", "promo_status",
+           "promo_units_remaining", "effective_price")
 
 
 def _trim(p: dict) -> dict:
-    out = {k: p.get(k) for k in _FIELDS}
+    from catalog import product_view
+    view = product_view(p) or {}
+    out = {k: view.get(k) for k in _FIELDS}
+    if not view.get("promo_active"):
+        out["promo_price"] = None
     if out.get("description"):
         out["description"] = (out["description"] or "")[:200]
     return out

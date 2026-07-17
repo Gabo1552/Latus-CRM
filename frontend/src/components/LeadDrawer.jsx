@@ -57,6 +57,7 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
       qc.invalidateQueries({ queryKey: ["contacts"] });
       toast.success("Lead actualizado");
     },
+    onError: (error) => toast.error(error.response?.data?.detail || "No se pudo actualizar el lead"),
   });
 
   const updateContactSource = useMutation({
@@ -96,6 +97,11 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
       toast.success("Tarea agregada");
     },
   });
+
+  const saleLocked = lead?.status === "won";
+  const displayedProducts = saleLocked
+    ? (lead.sale_snapshot?.products || lead?.products || [])
+    : (lead?.products || []);
 
   if (!leadId) return null;
 
@@ -222,7 +228,8 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-latus-cream border border-[#E9E6DC] rounded-sm p-3">
                   <p className="text-xs font-bold uppercase tracking-wider text-[#888888]">Valor Total (Ticket)</p>
-                  <p className="text-2xl font-extrabold tracking-tighter text-[#0B1B26] mt-1">{money(lead.value)}</p>
+                  <p className="text-2xl font-extrabold tracking-tighter text-[#0B1B26] mt-1">{money(lead.closed_value ?? lead.value)}</p>
+                  {saleLocked && <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-emerald-700">Registrado al cerrar la venta</p>}
                 </div>
                 <div>
                   <p className="text-xs font-bold uppercase tracking-wider text-[#888888] mb-1.5">Responsable</p>
@@ -238,22 +245,27 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
 
               {/* Products Section */}
               <div className="border-t border-[#E9E6DC] pt-4">
-                <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#888888] mb-2">Productos ({lead.products?.length || 0})</p>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#888888]">Productos ({displayedProducts.length})</p>
+                  {saleLocked && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-700">Precios congelados</span>}
+                </div>
+                {saleLocked && <p className="mb-3 text-xs leading-relaxed text-[#888888]">Estos importes pertenecen al cierre de la venta y no cambian aunque se actualice el catálogo.</p>}
                 
                 {/* List products already in lead */}
                 <div className="space-y-1.5 mb-3">
-                  {(lead.products || []).length === 0 ? (
+                  {displayedProducts.length === 0 ? (
                     <p className="text-sm text-latus-muted">No hay productos agregados.</p>
                   ) : (
-                    (lead.products || []).map((p, idx) => (
+                    displayedProducts.map((p, idx) => (
                       <div key={idx} className="flex items-center justify-between border border-[#E9E6DC] bg-latus-cream rounded-sm px-3 py-2 text-sm">
                         <div className="min-w-0">
                           <p className="font-semibold text-[#0B1B26] truncate">{p.name}</p>
-                          <p className="text-xs text-[#888888]">{p.quantity} x {money(p.price)}</p>
+                          <p className="text-xs text-[#888888]">{p.quantity} x {money(p.unit_price ?? p.price)}</p>
+                          {p.promotion_applied && <p className="text-[10px] font-bold uppercase text-[#0E8DDB]">Precio promocional aplicado</p>}
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="font-bold text-[#0B1B26]">{money(p.price * p.quantity)}</span>
-                          <button
+                          <span className="font-bold text-[#0B1B26]">{money(p.line_total ?? ((p.unit_price ?? p.price) * p.quantity))}</span>
+                          {!saleLocked && <button
                             onClick={() => {
                               const updated = [...lead.products];
                               updated.splice(idx, 1);
@@ -262,7 +274,7 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
                             className="text-red-500 hover:text-red-700 text-xs font-semibold px-1"
                           >
                             Eliminar
-                          </button>
+                          </button>}
                         </div>
                       </div>
                     ))
@@ -270,7 +282,7 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
                 </div>
 
                 {/* Add product form */}
-                <div className="border border-[#E9E6DC] rounded-sm p-3 space-y-3 bg-white">
+                {!saleLocked && <div className="border border-[#E9E6DC] rounded-sm p-3 space-y-3 bg-white">
                   <p className="text-xs font-bold text-[#0B1B26] uppercase">Agregar Producto</p>
                   
                   {/* Select from catalog */}
@@ -284,7 +296,7 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
                           const prod = catalogQ.data?.items?.find((i) => i.product_id === val);
                           if (prod) {
                             setManualName(prod.name);
-                            setManualPrice(prod.price.toString());
+                            setManualPrice(String(prod.effective_price ?? prod.price));
                           }
                         }}
                       >
@@ -296,7 +308,7 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
                             .filter((item) => item.active)
                             .map((item) => (
                               <SelectItem key={item.product_id} value={item.product_id}>
-                                {item.name} ({money(item.price)})
+                                {item.name} ({money(item.effective_price ?? item.price)}{item.promo_active ? " · promo" : ""})
                               </SelectItem>
                             ))}
                         </SelectContent>
@@ -342,11 +354,16 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
                       <Button
                         disabled={!manualName.trim() || !manualPrice}
                         onClick={() => {
+                          const catalogProduct = catalogQ.data?.items?.find((item) => item.product_id === selectedCatalogProduct);
                           const newProduct = {
                             id: selectedCatalogProduct || null,
                             name: manualName.trim(),
                             price: parseFloat(manualPrice) || 0.0,
                             quantity: manualQuantity,
+                            currency: catalogProduct?.currency || "ARS",
+                            list_price: catalogProduct?.price ?? (parseFloat(manualPrice) || 0.0),
+                            promotion_applied: !!catalogProduct?.promo_active
+                              && Math.abs(Number(manualPrice) - Number(catalogProduct?.promo_price)) < 0.000001,
                           };
                           const updated = [...(lead.products || []), newProduct];
                           patch.mutate({ products: updated });
@@ -362,7 +379,7 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
                       </Button>
                     </div>
                   </div>
-                </div>
+                </div>}
               </div>
 
               {/* Tasks */}

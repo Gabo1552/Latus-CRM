@@ -268,6 +268,9 @@ class LeadProduct(BaseModel):
     name: str
     price: float
     quantity: int = 1
+    currency: Optional[str] = None
+    list_price: Optional[float] = None
+    promotion_applied: bool = False
 
 
 class Lead(BaseModel):
@@ -281,6 +284,10 @@ class Lead(BaseModel):
     source: str = "WhatsApp"
     tags: List[str] = []
     products: List[LeadProduct] = []
+    closed_at: Optional[str] = None
+    closed_by: Optional[str] = None
+    closed_value: Optional[float] = None
+    sale_snapshot: Optional[dict] = None
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
 
@@ -1698,6 +1705,18 @@ async def list_leads(
 @api_router.post("/leads", response_model=Lead)
 async def create_lead(payload: LeadCreate, user: User = Depends(get_current_user)):
     lead = Lead(**payload.model_dump())
+    if lead.status == "won":
+        from utils.sales import SaleError, close_sale
+        try:
+            closed = await close_sale(
+                db,
+                lead.model_dump(),
+                [product.model_dump() for product in lead.products],
+                user_id=user.user_id,
+            )
+            lead = Lead(**{**lead.model_dump(), **closed})
+        except SaleError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     await db.leads.insert_one(lead.model_dump())
     return lead
 
@@ -1715,7 +1734,17 @@ async def get_lead(lead_id: str, user: User = Depends(get_current_user)):
 
 @api_router.patch("/leads/{lead_id}", response_model=Lead)
 async def update_lead(lead_id: str, payload: LeadUpdate, user: User = Depends(get_current_user)):
+    existing = await db.leads.find_one({"id": lead_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Lead not found")
     update = {k: v for k, v in payload.model_dump().items() if v is not None}
+    next_status = update.get("status", existing.get("status"))
+    if existing.get("status") == "won" and next_status == "won" \
+            and ({"products", "value"}.intersection(payload.model_fields_set)):
+        raise HTTPException(
+            status_code=409,
+            detail="La venta ya está cerrada. Reabrila antes de modificar productos o importes",
+        )
     if "assigned_to" in payload.model_fields_set:
         val = payload.assigned_to
         if val is None or (isinstance(val, str) and val.strip() == ""):
@@ -1727,12 +1756,25 @@ async def update_lead(lead_id: str, payload: LeadUpdate, user: User = Depends(ge
         products_list = payload.products or []
         update["products"] = [p.model_dump() for p in products_list]
         update["value"] = sum(float(p.price) * int(p.quantity) for p in products_list)
+
+    if existing.get("status") != "won" and next_status == "won":
+        from utils.sales import SaleError, close_sale
+        sold_products = update.get("products", existing.get("products") or [])
+        try:
+            update.update(await close_sale(
+                db, {**existing, **update}, sold_products, user_id=user.user_id
+            ))
+        except SaleError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    elif existing.get("status") == "won" and next_status != "won":
+        from utils.sales import reverse_sale
+        update["sale_snapshot"] = await reverse_sale(
+            db, existing.get("sale_snapshot"), user_id=user.user_id
+        )
         
     update["updated_at"] = now_iso()
     await db.leads.update_one({"id": lead_id}, {"$set": update})
     doc = await db.leads.find_one({"id": lead_id}, {"_id": 0})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Lead not found")
     # Sync assigned_to to conversation
     if "assigned_to" in update:
         await db.conversations.update_one({"lead_id": lead_id}, {"$set": {"assigned_to": update["assigned_to"]}})
@@ -3198,7 +3240,7 @@ async def catalog_list(
     sort: str = "name",
     user: User = Depends(get_current_user),
 ):
-    from catalog import build_listing_query
+    from catalog import build_listing_query, product_view
     query = build_listing_query({
         "q": q, "category": category, "stock_status": stock_status,
         "active": active, "include_inactive": include_inactive,
@@ -3213,7 +3255,7 @@ async def catalog_list(
         query,
         {"_id": 0, "deleted_at": 0},
     ).sort(field, direction).to_list(offset + limit)
-    return {"items": items[offset:offset + limit], "total": total,
+    return {"items": [product_view(item) for item in items[offset:offset + limit]], "total": total,
             "limit": limit, "offset": offset}
 
 
@@ -3252,12 +3294,13 @@ async def catalog_import_csv(request: Request,
 
 @api_router.get("/catalog/products/{product_id}")
 async def catalog_get(product_id: str, user: User = Depends(get_current_user)):
+    from catalog import product_view
     p = await db.products.find_one(
         {"product_id": product_id, "deleted_at": None},
         {"_id": 0, "deleted_at": 0})
     if not p:
         raise HTTPException(404, "Producto no encontrado")
-    return p
+    return product_view(p)
 
 
 @api_router.post("/catalog/products")
@@ -3922,10 +3965,11 @@ def _compute_dashboard_stats(leads, convs, tasks, contacts, done_statuses, is_ad
     product_revenue = {}
     product_quantity = {}
     for l in won_leads:
-        for p in l.get("products") or []:
+        sold_products = (l.get("sale_snapshot") or {}).get("products") or l.get("products") or []
+        for p in sold_products:
             pname = p.get("name")
             if pname:
-                price = float(p.get("price") or 0.0)
+                price = float(p.get("unit_price", p.get("price")) or 0.0)
                 qty = int(p.get("quantity") or 1)
                 product_revenue[pname] = product_revenue.get(pname, 0.0) + (price * qty)
                 product_quantity[pname] = product_quantity.get(pname, 0) + qty
