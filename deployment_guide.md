@@ -47,6 +47,7 @@ Recomendamos **Railway** para el backend porque maneja procesos de larga duraci�
    | `CORS_ORIGINS` | Tu URL de producción de Vercel (ej. `https://latus-crm.vercel.app`). *¡Crítico para las cookies!* |
    | `LATUS_SEED_DEMO` | `true` (Ponelo en `true` solo en el primer despliegue para precargar leads y pipeline demo. Luego cambialo a `false` o eliminalo). |
    | `LATUS_LLM_KEY` | Clave del sistema universal o clave API de tu proveedor (OpenAI, Anthropic). |
+   | `PLATFORM_ADMIN_EMAILS` | Emails, separados por coma, que podrán administrar planes y licencias de todas las empresas. |
 
 5. **Generar el Dominio Público**:
    - Ve a **Settings** > **Domains** > **Generate Domain** (o asocia tu propio dominio).

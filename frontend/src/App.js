@@ -15,6 +15,8 @@ import Configuracion from "@/pages/Configuracion";
 import ConsumoIA from "@/pages/ConsumoIA";
 import Catalogo from "@/pages/Catalogo";
 import Calendario from "@/pages/Calendario";
+import Suscripcion from "@/pages/Suscripcion";
+import Plataforma from "@/pages/Plataforma";
 import { firstAllowedPath, hasConfigurationAccess, hasPermission } from "@/lib/permissions";
 
 function Protected({ children }) {
@@ -53,11 +55,24 @@ function NoAccess() {
   );
 }
 
+function PlatformAdminOnly({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return null;
+  if (!user) return <Navigate to="/" replace />;
+  return user.is_platform_admin ? children : <Navigate to={firstAllowedPath(user)} replace />;
+}
+
 function AppRouter() {
   const location = useLocation();
   const { user, loading } = useAuth();
   if (location.hash?.includes("session_id=")) {
     return <AuthCallback />;
+  }
+  if (
+    !loading && user && user.subscription_access === false
+    && !user.is_platform_admin && location.pathname !== "/suscripcion"
+  ) {
+    return <Navigate to="/suscripcion" replace />;
   }
 
   return (
@@ -79,6 +94,8 @@ function AppRouter() {
       <Route path="/configuracion" element={<Permitted configuration><Configuracion /></Permitted>} />
       <Route path="/consumo-ia" element={<Permitted permission="ai_view"><ConsumoIA /></Permitted>} />
       <Route path="/catalogo" element={<Permitted permission="catalog_view"><Catalogo /></Permitted>} />
+      <Route path="/suscripcion" element={<Protected><Suscripcion /></Protected>} />
+      <Route path="/plataforma" element={<PlatformAdminOnly><Plataforma /></PlatformAdminOnly>} />
       <Route path="/sin-acceso" element={<Protected><NoAccess /></Protected>} />
       <Route path="*" element={<Navigate to={user ? firstAllowedPath(user) : "/"} replace />} />
     </Routes>

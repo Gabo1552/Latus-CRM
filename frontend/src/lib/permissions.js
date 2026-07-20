@@ -86,6 +86,7 @@ export function hasConfigurationAccess(input) {
 }
 
 export function firstAllowedPath(input) {
+  if (input?.subscription_access === false && !input?.is_platform_admin) return "/suscripcion";
   const candidates = [
     ["crm_view", "/dashboard"],
     ["inbox_view", "/inbox"],

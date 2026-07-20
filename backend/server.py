@@ -150,6 +150,19 @@ def _strip_oid(doc: dict | None) -> dict | None:
     return doc
 
 
+_INTERNAL_ORGANIZATION_FIELDS = {
+    "internal_notes", "billing_updated_by", "provider_customer_id",
+    "provider_subscription_id", "provider_preapproval_id",
+}
+
+
+def _public_organization(doc: dict | None) -> dict | None:
+    clean = _strip_oid(doc)
+    if not clean:
+        return clean
+    return {key: value for key, value in clean.items() if key not in _INTERNAL_ORGANIZATION_FIELDS}
+
+
 LEAD_STATUSES = ["new", "contacted", "qualified", "proposal", "won", "lost"]
 CONV_STATUSES = ["open", "pending", "resolved"]
 PRIORITIES = ["low", "medium", "high"]
@@ -297,6 +310,134 @@ def require_any_perm(*permissions: str):
     return _dep
 
 # ---------------------------------------------------------------------------
+# Billing and license foundation
+# ---------------------------------------------------------------------------
+
+DEFAULT_PLAN_CODE = "starter"
+SUBSCRIPTION_STATUSES = {
+    "not_configured", "trialing", "active", "past_due", "canceled", "suspended",
+}
+LICENSE_STATUSES = {"not_configured", "active", "grace_period", "suspended", "expired"}
+
+PLAN_CATALOG: dict[str, dict[str, Any]] = {
+    "base": {
+        "code": "base", "name": "Base heredado", "monthly_price_ars": 0,
+        "description": "Acceso conservado para empresas creadas antes de habilitar la facturación.",
+        "limits": {"users": 5, "contacts": 5000, "monthly_ai_tokens": 500000},
+        "features": ["CRM completo", "Agenda", "Catálogo", "Bandeja y automatizaciones"],
+        "is_public": False,
+    },
+    "starter": {
+        "code": "starter", "name": "Inicial", "monthly_price_ars": 45000,
+        "description": "Para equipos pequeños que empiezan a ordenar ventas y atención.",
+        "limits": {"users": 3, "contacts": 1500, "monthly_ai_tokens": 250000},
+        "features": ["CRM y pipeline", "Agenda y recordatorios", "Catálogo", "1 canal de WhatsApp"],
+        "is_public": True,
+    },
+    "growth": {
+        "code": "growth", "name": "Crecimiento", "monthly_price_ars": 95000,
+        "description": "Para negocios con varios agentes, más automatización y seguimiento.",
+        "limits": {"users": 10, "contacts": 10000, "monthly_ai_tokens": 1500000},
+        "features": ["Todo Inicial", "Roles personalizados", "Consumo de IA ampliado", "Hasta 2 canales"],
+        "is_public": True,
+        "highlighted": True,
+    },
+    "scale": {
+        "code": "scale", "name": "Escala", "monthly_price_ars": 185000,
+        "description": "Para operaciones con múltiples equipos y necesidades avanzadas.",
+        "limits": {"users": 30, "contacts": 50000, "monthly_ai_tokens": 5000000},
+        "features": ["Todo Crecimiento", "Soporte prioritario", "Mayor capacidad", "Hasta 5 canales"],
+        "is_public": True,
+    },
+}
+
+
+def _parse_billing_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            text_value = str(value).strip()
+            if len(text_value) == 10:
+                text_value = f"{text_value}T23:59:59-03:00"
+            parsed = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def subscription_access_state(organization: dict, *, at: Optional[datetime] = None) -> dict:
+    """Return the effective access decision for an organization.
+
+    ``not_configured`` remains enabled so existing installations are not locked
+    when this billing foundation is deployed. Platform admins can later move an
+    organization to a managed status explicitly.
+    """
+    now = (at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if organization.get("status", "active") != "active":
+        return {"allowed": False, "mode": "blocked", "reason": "organization_inactive"}
+
+    license_status = organization.get("license_status") or "not_configured"
+    if license_status in {"suspended", "expired"}:
+        return {"allowed": False, "mode": "blocked", "reason": f"license_{license_status}"}
+
+    subscription_status = organization.get("subscription_status") or "not_configured"
+    if subscription_status == "suspended":
+        return {"allowed": False, "mode": "blocked", "reason": "subscription_suspended"}
+
+    if subscription_status == "past_due" or license_status == "grace_period":
+        grace_end = _parse_billing_datetime(organization.get("grace_ends_at"))
+        allowed = grace_end is not None and grace_end >= now
+        return {
+            "allowed": allowed,
+            "mode": "grace" if allowed else "blocked",
+            "reason": None if allowed else "payment_overdue",
+            "expires_at": grace_end.isoformat() if grace_end else None,
+        }
+
+    if subscription_status in {"not_configured", "active"}:
+        return {"allowed": True, "mode": subscription_status, "reason": None}
+
+    if subscription_status == "trialing":
+        trial_end = _parse_billing_datetime(organization.get("trial_ends_at"))
+        allowed = trial_end is None or trial_end >= now
+        return {
+            "allowed": allowed,
+            "mode": "trial" if allowed else "blocked",
+            "reason": None if allowed else "trial_expired",
+            "expires_at": trial_end.isoformat() if trial_end else None,
+        }
+
+    if subscription_status == "canceled":
+        period_end = _parse_billing_datetime(organization.get("current_period_end"))
+        allowed = period_end is not None and period_end >= now
+        return {
+            "allowed": allowed,
+            "mode": "canceled_pending" if allowed else "blocked",
+            "reason": None if allowed else "subscription_canceled",
+            "expires_at": period_end.isoformat() if period_end else None,
+        }
+
+    return {"allowed": False, "mode": "blocked", "reason": "subscription_suspended"}
+
+
+def _platform_admin_emails() -> set[str]:
+    return {
+        email.strip().lower()
+        for email in (os.environ.get("PLATFORM_ADMIN_EMAILS") or "").split(",")
+        if email.strip()
+    }
+
+
+def is_platform_admin_email(email: str | None) -> bool:
+    return bool(email and email.strip().lower() in _platform_admin_emails())
+
+
+# ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
 
@@ -313,6 +454,11 @@ class User(BaseModel):
     work_areas: Optional[List[str]] = None
     organization_id: Optional[str] = None
     organization_name: Optional[str] = None
+    plan_code: Optional[str] = None
+    subscription_status: Optional[str] = None
+    license_status: Optional[str] = None
+    subscription_access: bool = True
+    is_platform_admin: bool = False
     created_at: str = Field(default_factory=now_iso)
 
     @field_validator("created_at", mode="before")
@@ -333,9 +479,19 @@ class Organization(BaseModel):
     name: str
     slug: Optional[str] = None
     status: str = "active"
-    plan_code: str = "base"
-    subscription_status: str = "not_configured"
-    license_status: str = "not_configured"
+    plan_code: str = DEFAULT_PLAN_CODE
+    subscription_status: str = "trialing"
+    license_status: str = "active"
+    trial_started_at: Optional[str] = Field(default_factory=now_iso)
+    trial_ends_at: Optional[str] = Field(
+        default_factory=lambda: (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
+    )
+    current_period_end: Optional[str] = None
+    grace_ends_at: Optional[str] = None
+    billing_email: Optional[str] = None
+    billing_cycle: str = "monthly"
+    requested_plan_code: Optional[str] = None
+    billing_request_status: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
     updated_at: Optional[str] = None
 
@@ -346,6 +502,22 @@ class OrganizationCreate(BaseModel):
 
 class OrganizationUpdate(BaseModel):
     name: str
+
+
+class BillingPlanRequest(BaseModel):
+    plan_code: str
+    notes: Optional[str] = None
+
+
+class PlatformSubscriptionUpdate(BaseModel):
+    plan_code: Optional[str] = None
+    subscription_status: Optional[str] = None
+    license_status: Optional[str] = None
+    trial_ends_at: Optional[str] = None
+    current_period_end: Optional[str] = None
+    grace_ends_at: Optional[str] = None
+    billing_email: Optional[str] = None
+    internal_notes: Optional[str] = None
 
 
 class RoleUpdate(BaseModel):
@@ -689,6 +861,7 @@ async def _decorate_user_for_organization(user_doc: dict, organization_id: str) 
     )
     if not organization:
         raise HTTPException(status_code=403, detail="La empresa no está activa")
+    access = subscription_access_state(organization)
     merged = {
         **user_doc,
         "name": membership.get("display_name") or user_doc.get("name"),
@@ -696,10 +869,31 @@ async def _decorate_user_for_organization(user_doc: dict, organization_id: str) 
         "work_areas": membership.get("work_areas", user_doc.get("work_areas") or []),
         "organization_id": organization_id,
         "organization_name": organization.get("name"),
+        "plan_code": organization.get("plan_code") or "base",
+        "subscription_status": organization.get("subscription_status") or "not_configured",
+        "license_status": organization.get("license_status") or "not_configured",
+        "subscription_access": bool(access["allowed"]),
+        "is_platform_admin": is_platform_admin_email(user_doc.get("email")),
     }
     user = User(**merged)
     user.permissions = await get_role_permissions(user.role)
     return user
+
+
+def _subscription_route_is_exempt(request: Request) -> bool:
+    path = request.url.path
+    if path.startswith("/api/platform/") or path.startswith("/api/billing/"):
+        return True
+    if path in {
+        "/api/auth/me", "/api/auth/logout", "/api/auth/password/change",
+        "/api/organizations/current",
+    }:
+        return True
+    if request.method == "GET" and path == "/api/organizations":
+        return True
+    if path.startswith("/api/organizations/") and path.endswith("/switch"):
+        return True
+    return False
 
 async def get_current_user(request: Request) -> User:
     token = _request_session_token(request)
@@ -728,7 +922,19 @@ async def get_current_user(request: Request) -> User:
         raise HTTPException(status_code=403, detail="El usuario no pertenece a una empresa activa")
     set_organization_id(organization_id)
     request.state.organization_id = organization_id
-    return await _decorate_user_for_organization(user_doc, organization_id)
+    user = await _decorate_user_for_organization(user_doc, organization_id)
+    if (
+        not user.subscription_access
+        and not user.is_platform_admin
+        and not _subscription_route_is_exempt(request)
+    ):
+        raise HTTPException(status_code=402, detail={
+            "code": "subscription_required",
+            "message": "La suscripción de esta empresa requiere atención para continuar.",
+            "subscription_status": user.subscription_status,
+            "license_status": user.license_status,
+        })
+    return user
 
 
 async def require_admin(user: User = Depends(get_current_user)) -> User:
@@ -843,6 +1049,12 @@ async def auth_me(user: User = Depends(get_current_user)):
     return user
 
 
+async def require_platform_admin(user: User = Depends(get_current_user)) -> User:
+    if not user.is_platform_admin:
+        raise HTTPException(status_code=403, detail="Acceso reservado al administrador de la plataforma")
+    return user
+
+
 async def _create_owner_organization(user_id: str, user_name: str) -> str:
     organization = Organization(name=f"Empresa de {user_name.strip() or 'nuevo usuario'}").model_dump()
     await _raw_collection("organizations").insert_one(organization)
@@ -934,7 +1146,7 @@ async def list_organizations(user: User = Depends(get_current_user)):
     ).sort("name", 1).to_list(100)
     membership_by_org = {item["organization_id"]: item for item in memberships}
     return [{
-        **organization,
+        **_public_organization(organization),
         "role": membership_by_org[organization["organization_id"]].get("role", "agent"),
         "is_current": organization["organization_id"] == user.organization_id,
     } for organization in organizations]
@@ -947,7 +1159,7 @@ async def get_current_organization(user: User = Depends(get_current_user)):
     )
     if not organization:
         raise HTTPException(status_code=404, detail="Empresa no encontrada")
-    return organization
+    return _public_organization(organization)
 
 
 @api_router.post("/organizations")
@@ -1010,9 +1222,176 @@ async def update_current_organization(payload: OrganizationUpdate,
         {"organization_id": user.organization_id},
         {"$set": {"name": name, "updated_at": now_iso()}},
     )
-    return await _raw_collection("organizations").find_one(
+    return _public_organization(await _raw_collection("organizations").find_one(
         {"organization_id": user.organization_id}, {"_id": 0}
+    ))
+
+
+# ---------------------------------------------------------------------------
+# Plans, subscriptions and platform licenses
+# ---------------------------------------------------------------------------
+
+def _public_plan_catalog(*, include_internal: bool = False) -> list[dict]:
+    return [
+        dict(plan)
+        for plan in PLAN_CATALOG.values()
+        if include_internal or plan.get("is_public", True)
+    ]
+
+
+async def _subscription_payload(organization_id: str, *, include_internal: bool = False) -> dict:
+    organization = await _raw_collection("organizations").find_one(
+        {"organization_id": organization_id}, {"_id": 0}
     )
+    if not organization:
+        raise HTTPException(status_code=404, detail="Empresa no encontrada")
+    plan_code = organization.get("plan_code") or "base"
+    plan = PLAN_CATALOG.get(plan_code) or PLAN_CATALOG["base"]
+    active_members = await _raw_collection("memberships").count_documents({
+        "organization_id": organization_id, "status": "active",
+    })
+    contacts = await _raw_collection("contacts").count_documents({
+        "organization_id": organization_id,
+    })
+    latest_request = await _raw_collection("billing_requests").find_one(
+        {"organization_id": organization_id}, {"_id": 0}, sort=[("created_at", -1)]
+    )
+    return {
+        "organization": organization if include_internal else _public_organization(organization),
+        "plan": dict(plan),
+        "access": subscription_access_state(organization),
+        "usage": {"users": active_members, "contacts": contacts},
+        "latest_request": latest_request,
+    }
+
+
+@api_router.get("/billing/plans")
+async def list_billing_plans(user: User = Depends(get_current_user)):
+    return _public_plan_catalog(include_internal=user.is_platform_admin)
+
+
+@api_router.get("/billing/subscription")
+async def get_billing_subscription(user: User = Depends(get_current_user)):
+    return await _subscription_payload(user.organization_id)
+
+
+@api_router.post("/billing/plan-requests")
+async def create_billing_plan_request(
+    payload: BillingPlanRequest,
+    user: User = Depends(require_perm("settings_admin")),
+):
+    plan = PLAN_CATALOG.get(payload.plan_code)
+    if not plan or not plan.get("is_public", True):
+        raise HTTPException(status_code=400, detail="El plan seleccionado no está disponible")
+    request_doc = {
+        "request_id": new_id("billreq"),
+        "organization_id": user.organization_id,
+        "requested_by": user.user_id,
+        "requested_by_email": user.email,
+        "plan_code": payload.plan_code,
+        "notes": (payload.notes or "").strip()[:1000],
+        "status": "pending",
+        "created_at": now_iso(),
+    }
+    await _raw_collection("billing_requests").insert_one(request_doc)
+    await _raw_collection("organizations").update_one(
+        {"organization_id": user.organization_id},
+        {"$set": {
+            "requested_plan_code": payload.plan_code,
+            "billing_request_status": "pending",
+            "updated_at": now_iso(),
+        }},
+    )
+    return _strip_oid(request_doc)
+
+
+@api_router.get("/platform/organizations")
+async def platform_list_organizations(platform_admin: User = Depends(require_platform_admin)):
+    organizations = await _raw_collection("organizations").find({}, {"_id": 0}).sort(
+        "created_at", -1
+    ).to_list(500)
+    rows = []
+    for organization in organizations:
+        organization_id = organization["organization_id"]
+        rows.append({
+            **organization,
+            "access": subscription_access_state(organization),
+            "active_users": await _raw_collection("memberships").count_documents({
+                "organization_id": organization_id, "status": "active",
+            }),
+            "contacts": await _raw_collection("contacts").count_documents({
+                "organization_id": organization_id,
+            }),
+            "latest_request": await _raw_collection("billing_requests").find_one(
+                {"organization_id": organization_id}, {"_id": 0}, sort=[("created_at", -1)]
+            ),
+        })
+    return rows
+
+
+@api_router.patch("/platform/organizations/{organization_id}/subscription")
+async def platform_update_subscription(
+    organization_id: str,
+    payload: PlatformSubscriptionUpdate,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    organization = await _raw_collection("organizations").find_one(
+        {"organization_id": organization_id}, {"_id": 0}
+    )
+    if not organization:
+        raise HTTPException(status_code=404, detail="Empresa no encontrada")
+    update = payload.model_dump(exclude_unset=True)
+    if "plan_code" in update and update["plan_code"] not in PLAN_CATALOG:
+        raise HTTPException(status_code=400, detail="Plan inválido")
+    if "subscription_status" in update and update["subscription_status"] not in SUBSCRIPTION_STATUSES:
+        raise HTTPException(status_code=400, detail="Estado de suscripción inválido")
+    if "license_status" in update and update["license_status"] not in LICENSE_STATUSES:
+        raise HTTPException(status_code=400, detail="Estado de licencia inválido")
+    for field in ("trial_ends_at", "current_period_end", "grace_ends_at"):
+        if field not in update or update[field] in (None, ""):
+            if field in update:
+                update[field] = None
+            continue
+        parsed = _parse_billing_datetime(update[field])
+        if not parsed:
+            raise HTTPException(status_code=400, detail=f"Fecha inválida en {field}")
+        update[field] = parsed.isoformat()
+    if "billing_email" in update:
+        billing_email = (update["billing_email"] or "").strip().lower()
+        if billing_email and "@" not in billing_email:
+            raise HTTPException(status_code=400, detail="Email de facturación inválido")
+        update["billing_email"] = billing_email or None
+    if "internal_notes" in update:
+        update["internal_notes"] = (update["internal_notes"] or "").strip()[:2000]
+    if update.get("subscription_status") == "active":
+        update["billing_request_status"] = "approved"
+        update["requested_plan_code"] = None
+    update.update({
+        "updated_at": now_iso(),
+        "billing_updated_by": platform_admin.user_id,
+    })
+    await _raw_collection("organizations").update_one(
+        {"organization_id": organization_id}, {"$set": update}
+    )
+    if update.get("subscription_status") == "active":
+        await _raw_collection("billing_requests").update_many(
+            {"organization_id": organization_id, "status": "pending"},
+            {"$set": {
+                "status": "approved",
+                "resolved_at": now_iso(),
+                "resolved_by": platform_admin.user_id,
+            }},
+        )
+    await _raw_collection("billing_events").insert_one({
+        "event_id": new_id("billevt"),
+        "organization_id": organization_id,
+        "type": "subscription_updated",
+        "changes": update,
+        "actor_user_id": platform_admin.user_id,
+        "actor_email": platform_admin.email,
+        "created_at": now_iso(),
+    })
+    return await _subscription_payload(organization_id, include_internal=True)
 
 
 @api_router.post("/auth/logout")
@@ -5650,6 +6029,14 @@ async def _ensure_indexes() -> None:
         )
         await _raw_collection("organizations").create_index(
             "organization_id", unique=True, name="ux_organizations_id",
+        )
+        await _raw_collection("billing_requests").create_index(
+            [("organization_id", 1), ("created_at", -1)],
+            name="ix_billing_requests_org_created",
+        )
+        await _raw_collection("billing_events").create_index(
+            [("organization_id", 1), ("created_at", -1)],
+            name="ix_billing_events_org_created",
         )
         await _raw_collection("user_sessions").create_index(
             [("user_id", 1), ("organization_id", 1)], name="ix_sessions_user_org",

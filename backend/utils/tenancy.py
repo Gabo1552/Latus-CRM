@@ -18,6 +18,7 @@ TENANT_SCOPED_COLLECTIONS = frozenset({
     "ai_usage_logs",
     "app_secrets",
     "appointments",
+    "billing_requests",
     "bot_events",
     "bot_settings",
     "contacts",

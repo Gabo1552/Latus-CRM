@@ -1,4 +1,4 @@
-import { expandPermissions, getModuleAccess, hasPermission, setModuleAccess } from "./permissions";
+import { expandPermissions, firstAllowedPath, getModuleAccess, hasPermission, setModuleAccess } from "./permissions";
 
 describe("modelo de permisos por módulo", () => {
   it("mantiene compatibilidad con permisos anteriores", () => {
@@ -18,5 +18,10 @@ describe("modelo de permisos por módulo", () => {
     expect(getModuleAccess(next, "calendar")).toBe("admin");
     expect(getModuleAccess(next, "crm")).toBe("use");
     expect(next).not.toContain("configure_ai");
+  });
+
+  it("envía una licencia bloqueada a la pantalla de suscripción", () => {
+    expect(firstAllowedPath({ subscription_access: false, permissions: ["crm_admin"] })).toBe("/suscripcion");
+    expect(firstAllowedPath({ subscription_access: false, is_platform_admin: true, permissions: ["crm_admin"] })).toBe("/dashboard");
   });
 });

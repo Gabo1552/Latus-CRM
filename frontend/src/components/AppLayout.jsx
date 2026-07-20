@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, Target, MessageSquare, KanbanSquare,
   CheckSquare, Shield, Settings, LogOut, DollarSign, Package, Calendar,
-  Menu, X, PanelLeftClose, PanelLeftOpen, Sparkles, Building2
+  Menu, X, PanelLeftClose, PanelLeftOpen, Sparkles, Building2, CreditCard, KeyRound
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { initials, roleLabel } from "@/lib/constants";
@@ -73,6 +73,12 @@ export default function AppLayout({ children, title, actions }) {
   }
   if (hasConfigurationAccess(user)) {
     nav.push({ to: "/configuracion", label: "Configuración", icon: Settings, testid: "nav-configuracion" });
+  }
+  if (user?.role === "admin" || hasPermission(user, "settings_view")) {
+    nav.push({ to: "/suscripcion", label: "Suscripción", icon: CreditCard, testid: "nav-suscripcion" });
+  }
+  if (user?.is_platform_admin) {
+    nav.push({ to: "/plataforma", label: "Plataforma", icon: KeyRound, testid: "nav-plataforma" });
   }
 
   const profile = user?.picture ? (

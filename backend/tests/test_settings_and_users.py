@@ -142,6 +142,8 @@ class _FakeDB:
             setattr(self, name, _Coll())
         for name in ("organizations", "memberships", "whatsapp_routes"):
             setattr(self, name, _Coll())
+        for name in ("billing_requests", "billing_events"):
+            setattr(self, name, _Coll())
 
 
 # ---- fixtures -------------------------------------------------------------
@@ -327,6 +329,62 @@ class TestUsersCRUD:
             "email": "reset@latus.test", "password": body["temporary_password"],
         })
         assert r2.status_code == 200
+
+
+# ====================================================================
+# Billing and platform licenses
+# ====================================================================
+class TestBillingFoundation:
+    def test_subscription_summary_and_plan_request(self, srv):
+        server, fake, client = srv
+        summary = client.get("/api/billing/subscription", headers=_h())
+        assert summary.status_code == 200, summary.text
+        body = summary.json()
+        assert body["access"]["allowed"] is True
+        assert body["plan"]["code"] in {"base", "starter"}
+
+        plans = client.get("/api/billing/plans", headers=_h())
+        assert plans.status_code == 200
+        assert {plan["code"] for plan in plans.json()} >= {"starter", "growth", "scale"}
+
+        requested = client.post(
+            "/api/billing/plan-requests", headers=_h(),
+            json={"plan_code": "growth", "notes": "Necesitamos más usuarios"},
+        )
+        assert requested.status_code == 200, requested.text
+        assert requested.json()["status"] == "pending"
+        assert fake.billing_requests.docs[0]["organization_id"] == body["organization"]["organization_id"]
+
+    def test_platform_admin_can_suspend_and_access_is_enforced(self, srv, monkeypatch):
+        server, fake, client = srv
+        monkeypatch.setenv("PLATFORM_ADMIN_EMAILS", "admin@latus.test")
+
+        me = client.get("/api/auth/me", headers=_h())
+        assert me.status_code == 200
+        assert me.json()["is_platform_admin"] is True
+
+        current = client.get("/api/organizations/current", headers=_h()).json()
+        updated = client.patch(
+            f"/api/platform/organizations/{current['organization_id']}/subscription",
+            headers=_h(),
+            json={
+                "subscription_status": "suspended", "license_status": "suspended",
+                "internal_notes": "Dato visible solo para plataforma",
+            },
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["access"]["allowed"] is False
+        assert fake.billing_events.docs
+
+        monkeypatch.delenv("PLATFORM_ADMIN_EMAILS")
+        blocked = client.get("/api/dashboard/metrics", headers=_h())
+        assert blocked.status_code == 402
+        assert blocked.json()["detail"]["code"] == "subscription_required"
+
+        billing_still_available = client.get("/api/billing/subscription", headers=_h())
+        assert billing_still_available.status_code == 200
+        assert "internal_notes" not in billing_still_available.json()["organization"]
+        assert "internal_notes" not in client.get("/api/organizations/current", headers=_h()).json()
 
 
 # ====================================================================
