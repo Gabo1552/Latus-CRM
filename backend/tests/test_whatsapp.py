@@ -149,6 +149,14 @@ class _FakeDB:
         self.tasks = _Collection()
         self.bot_settings = _Collection()
         self.appointments = _Collection()
+        self.organizations = _Collection()
+        self.memberships = _Collection()
+        self.whatsapp_routes = _Collection()
+        self.app_secrets = _Collection()
+        self.products = _Collection()
+        self.ai_usage_logs = _Collection()
+        self.pricing_config = _Collection()
+        self.work_areas = _Collection()
 
 
 def _run(coro):

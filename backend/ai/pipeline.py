@@ -742,10 +742,15 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             targets = []
             assigned_wa = conv_set.get("assigned_work_area") or conv.get("assigned_work_area")
             if assigned_wa:
-                all_active = await db.users.find({
-                    "active": True,
-                    "deleted_at": None
+                from utils.tenancy import get_organization_id
+                all_active = await db.memberships.find({
+                    "organization_id": get_organization_id(),
+                    "status": "active",
                 }, {"_id": 0, "user_id": 1, "work_areas": 1}).to_list(100)
+                if not all_active:
+                    all_active = await db.users.find({
+                        "active": True, "deleted_at": None,
+                    }, {"_id": 0, "user_id": 1, "work_areas": 1}).to_list(100)
                 targets = [
                     u["user_id"] for u in all_active
                     if u.get("work_areas") and assigned_wa in u["work_areas"]
@@ -753,9 +758,17 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             
             if not targets:
                 if not target_uid:
-                    admins = await db.users.find(
-                        {"role": {"$in": ["admin", "supervisor"]}, "active": True,
-                         "deleted_at": None}, {"_id": 0, "user_id": 1}).to_list(20)
+                    from utils.tenancy import get_organization_id
+                    admins = await db.memberships.find(
+                        {"organization_id": get_organization_id(),
+                         "role": {"$in": ["admin", "supervisor"]},
+                         "status": "active"}, {"_id": 0, "user_id": 1}).to_list(20)
+                    if not admins:
+                        admins = await db.users.find(
+                            {"role": {"$in": ["admin", "supervisor"]},
+                             "active": True, "deleted_at": None},
+                            {"_id": 0, "user_id": 1},
+                        ).to_list(20)
                     targets = [a["user_id"] for a in admins] or [None]
                 else:
                     targets = [target_uid]

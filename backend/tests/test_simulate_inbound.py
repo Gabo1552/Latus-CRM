@@ -205,6 +205,8 @@ class _FakeDB:
                      "appointments", "notes", "bot_events", "bot_settings", "ai_usage_logs",
                      "pricing_config", "products", "work_areas"):
             setattr(self, name, _Coll(name))
+        for name in ("organizations", "memberships", "whatsapp_routes"):
+            setattr(self, name, _Coll(name))
 
 
 # ---- fixtures --------------------------------------------------------------

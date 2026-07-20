@@ -217,7 +217,7 @@ def test_each_user_can_configure_own_availability(calendar_api):
     assert response.json()["default_duration_minutes"] == 45
     assert response.json()["weekly_schedule"]["0"] == [{"start": "10:00", "end": "17:00"}]
 
-    stored = _run(fake.users.find_one({"user_id": "u_agent_1"}))
+    stored = _run(fake.memberships.find_one({"user_id": "u_agent_1"}))
     assert stored["calendar_settings"]["buffer_minutes"] == 15
 
     forbidden = client.get("/api/calendar/team-availability", headers=_headers("T-A1"))

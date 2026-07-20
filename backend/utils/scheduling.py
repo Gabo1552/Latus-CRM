@@ -177,10 +177,18 @@ def _overlaps(start: datetime, end: datetime, other_start: datetime, other_end: 
 
 
 async def get_person_availability(db, user_id: str, settings: Mapping[str, Any]) -> tuple[dict, dict]:
+    from utils.tenancy import get_organization_id
+    membership = await db.memberships.find_one({
+        "organization_id": get_organization_id(), "user_id": user_id, "status": "active",
+    }, {"_id": 0})
     user_doc = await db.users.find_one({"user_id": user_id, "active": {"$ne": False}}, {"_id": 0})
     if not user_doc:
         raise SchedulingError("La persona seleccionada no existe o está inactiva")
-    availability = normalize_person_availability(user_doc.get("calendar_settings"), settings)
+    # Compatibilidad con registros previos a la migración multiempresa.
+    membership = membership or {"calendar_settings": user_doc.get("calendar_settings")}
+    availability = normalize_person_availability(
+        membership.get("calendar_settings", user_doc.get("calendar_settings")), settings
+    )
     if not availability["enabled"]:
         raise SchedulingError(f"{user_doc.get('name') or 'La persona'} no tiene habilitada la agenda")
     return user_doc, availability
@@ -338,13 +346,33 @@ async def build_appointment_context(db, conv: Mapping[str, Any], settings: Mappi
             ])
 
     if mode == "people":
-        user_query: dict[str, Any] = {"active": {"$ne": False}}
+        from utils.tenancy import get_organization_id
+        membership_query: dict[str, Any] = {
+            "organization_id": get_organization_id(), "status": "active",
+        }
         if conv.get("assigned_to"):
-            user_query = {"user_id": conv.get("assigned_to"), "active": {"$ne": False}}
-        people = await db.users.find(user_query, {"_id": 0}).to_list(100)
+            membership_query["user_id"] = conv.get("assigned_to")
+        memberships = await db.memberships.find(membership_query, {"_id": 0}).to_list(100)
+        member_by_user = {item["user_id"]: item for item in memberships}
+        if member_by_user:
+            people = await db.users.find({
+                "user_id": {"$in": list(member_by_user)}, "active": {"$ne": False},
+            }, {"_id": 0}).to_list(100)
+        else:
+            legacy_query: dict[str, Any] = {"active": {"$ne": False}}
+            if conv.get("assigned_to"):
+                legacy_query["user_id"] = conv.get("assigned_to")
+            people = await db.users.find(legacy_query, {"_id": 0}).to_list(100)
+            member_by_user = {
+                person["user_id"]: {"calendar_settings": person.get("calendar_settings")}
+                for person in people
+            }
         instructions.append("Personas disponibles (usá el ID exacto en appointment_assigned_to):")
         for person in people:
-            availability = normalize_person_availability(person.get("calendar_settings"), settings)
+            membership = member_by_user[person["user_id"]]
+            availability = normalize_person_availability(
+                membership.get("calendar_settings", person.get("calendar_settings")), settings
+            )
             if not availability["enabled"]:
                 continue
             bookings = await db.appointments.find({

@@ -70,6 +70,9 @@ class _FakeDB:
         self.messages = _Coll()
         self.app_secrets = _Coll()
         self.tasks = _Coll()
+        self.organizations = _Coll()
+        self.memberships = _Coll()
+        self.whatsapp_routes = _Coll()
 
 def _run(coro):
     loop = asyncio.new_event_loop()

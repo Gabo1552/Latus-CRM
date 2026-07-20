@@ -91,6 +91,8 @@ class _DB:
                   "user_sessions", "wa_status", "whatsapp_events", "app_secrets",
                   "work_areas", "appointments", "products"):
             setattr(self, n, _Coll())
+        for n in ("organizations", "memberships", "whatsapp_routes"):
+            setattr(self, n, _Coll())
 
 
 # ---- Helpers --------------------------------------------------------------

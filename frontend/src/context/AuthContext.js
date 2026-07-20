@@ -5,18 +5,31 @@ const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [organizations, setOrganizations] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  const loadOrganizations = useCallback(async () => {
+    try {
+      const res = await api.get("/organizations");
+      setOrganizations(Array.isArray(res.data) ? res.data : []);
+      return res.data;
+    } catch {
+      setOrganizations([]);
+      return [];
+    }
+  }, []);
 
   const checkAuth = useCallback(async () => {
     try {
       const res = await api.get("/auth/me");
       setUser(res.data);
+      await loadOrganizations();
     } catch {
       setUser(null);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadOrganizations]);
 
   useEffect(() => {
     // CRITICAL: If returning from OAuth callback, skip the /me check.
@@ -31,6 +44,14 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     const res = await api.post("/auth/login", { email, password });
     setUser(res.data);
+    await loadOrganizations();
+    return res.data;
+  };
+
+  const switchOrganization = async (organizationId) => {
+    const res = await api.post(`/organizations/${organizationId}/switch`);
+    setUser(res.data);
+    await loadOrganizations();
     return res.data;
   };
 
@@ -41,11 +62,15 @@ export const AuthProvider = ({ children }) => {
       // ignore
     }
     setUser(null);
+    setOrganizations([]);
     window.location.href = "/";
   };
 
   return (
-    <AuthContext.Provider value={{ user, setUser, loading, checkAuth, login, logout }}>
+    <AuthContext.Provider value={{
+      user, setUser, organizations, loading, checkAuth, loadOrganizations,
+      switchOrganization, login, logout,
+    }}>
       {children}
     </AuthContext.Provider>
   );

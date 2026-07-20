@@ -19,6 +19,15 @@ from typing import List, Optional, Literal, Any
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
+from utils.tenancy import (
+    COMPOSITE_ID_COLLECTIONS,
+    TENANT_SCOPED_COLLECTIONS,
+    get_organization_id,
+    reset_organization_id,
+    set_organization_id,
+    tenant_collection,
+)
+
 from utils.business_hours import (
     is_within_business_hours,
     business_seconds_between,
@@ -89,10 +98,16 @@ class _DBProxy:
                 pass
 
     def __getattr__(self, name):
-        return getattr(self.__class__._resolve(), name)
+        raw = getattr(self.__class__._resolve(), name)
+        return tenant_collection(raw, name)
 
     def __getitem__(self, key):
-        return self.__class__._resolve()[key]
+        return tenant_collection(self.__class__._resolve()[key], key)
+
+    @classmethod
+    def raw_collection(cls, name: str):
+        """Bypass tenant scoping for bootstrap and identity operations only."""
+        return cls._resolve()[name]
 
 
 db = _DBProxy()
@@ -296,6 +311,8 @@ class User(BaseModel):
     last_login_at: Optional[str] = None
     permissions: Optional[List[str]] = None
     work_areas: Optional[List[str]] = None
+    organization_id: Optional[str] = None
+    organization_name: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
 
     @field_validator("created_at", mode="before")
@@ -309,6 +326,26 @@ class User(BaseModel):
     @classmethod
     def _normalize_role_field(cls, v: Any):
         return _normalize_role(v if isinstance(v, str) else None)
+
+
+class Organization(BaseModel):
+    organization_id: str = Field(default_factory=lambda: new_id("org"))
+    name: str
+    slug: Optional[str] = None
+    status: str = "active"
+    plan_code: str = "base"
+    subscription_status: str = "not_configured"
+    license_status: str = "not_configured"
+    created_at: str = Field(default_factory=now_iso)
+    updated_at: Optional[str] = None
+
+
+class OrganizationCreate(BaseModel):
+    name: str
+
+
+class OrganizationUpdate(BaseModel):
+    name: str
 
 
 class RoleUpdate(BaseModel):
@@ -595,16 +632,81 @@ class Notification(BaseModel):
 # Auth
 # ---------------------------------------------------------------------------
 
-async def get_current_user(request: Request) -> User:
+def _raw_collection(name: str):
+    """Return an unscoped collection for global identity/bootstrap records."""
+    if isinstance(db, _DBProxy):
+        return _DBProxy.raw_collection(name)
+    return getattr(db, name)
+
+
+def _request_session_token(request: Request) -> Optional[str]:
     token = request.cookies.get("session_token")
     if not token:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             token = auth[7:]
+    return token
+
+
+async def _membership_for_user(user_id: str, organization_id: Optional[str] = None) -> Optional[dict]:
+    memberships = _raw_collection("memberships")
+    query: dict[str, Any] = {"user_id": user_id, "status": "active"}
+    if organization_id:
+        query["organization_id"] = organization_id
+    return await memberships.find_one(query, {"_id": 0})
+
+
+async def _resolve_session_organization(session: dict, user_doc: Optional[dict] = None) -> Optional[str]:
+    organization_id = session.get("organization_id")
+    membership = await _membership_for_user(session["user_id"], organization_id) if organization_id else None
+    if membership:
+        return organization_id
+    if user_doc and user_doc.get("default_organization_id"):
+        membership = await _membership_for_user(session["user_id"], user_doc["default_organization_id"])
+    if not membership:
+        membership = await _membership_for_user(session["user_id"])
+    if not membership:
+        if not user_doc:
+            return None
+        organization_id = await _ensure_existing_user_organization(user_doc)
+        membership = await _membership_for_user(session["user_id"], organization_id)
+        if not membership:
+            return None
+    organization_id = membership["organization_id"]
+    await _raw_collection("user_sessions").update_one(
+        {"session_token": session["session_token"]},
+        {"$set": {"organization_id": organization_id}},
+    )
+    return organization_id
+
+
+async def _decorate_user_for_organization(user_doc: dict, organization_id: str) -> User:
+    membership = await _membership_for_user(user_doc["user_id"], organization_id)
+    if not membership:
+        raise HTTPException(status_code=403, detail="No tenés acceso a esta empresa")
+    organization = await _raw_collection("organizations").find_one(
+        {"organization_id": organization_id, "status": "active"}, {"_id": 0}
+    )
+    if not organization:
+        raise HTTPException(status_code=403, detail="La empresa no está activa")
+    merged = {
+        **user_doc,
+        "name": membership.get("display_name") or user_doc.get("name"),
+        "role": membership.get("role", user_doc.get("role", "agent")),
+        "work_areas": membership.get("work_areas", user_doc.get("work_areas") or []),
+        "organization_id": organization_id,
+        "organization_name": organization.get("name"),
+    }
+    user = User(**merged)
+    user.permissions = await get_role_permissions(user.role)
+    return user
+
+async def get_current_user(request: Request) -> User:
+    token = _request_session_token(request)
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    session = await _raw_collection("user_sessions").find_one({"session_token": token}, {"_id": 0})
     if not session:
         raise HTTPException(status_code=401, detail="Invalid session")
 
@@ -616,14 +718,17 @@ async def get_current_user(request: Request) -> User:
     if expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=401, detail="Session expired")
 
-    user_doc = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+    user_doc = await _raw_collection("users").find_one({"user_id": session["user_id"]}, {"_id": 0})
     if not user_doc:
         raise HTTPException(status_code=401, detail="User not found")
     if not user_doc.get("active", True):
         raise HTTPException(status_code=403, detail="Account deactivated")
-    user = User(**user_doc)
-    user.permissions = await get_role_permissions(user.role)
-    return user
+    organization_id = await _resolve_session_organization(session, user_doc)
+    if not organization_id:
+        raise HTTPException(status_code=403, detail="El usuario no pertenece a una empresa activa")
+    set_organization_id(organization_id)
+    request.state.organization_id = organization_id
+    return await _decorate_user_for_organization(user_doc, organization_id)
 
 
 async def require_admin(user: User = Depends(get_current_user)) -> User:
@@ -694,6 +799,7 @@ async def process_session(request: Request, response: Response):
             # Existing legacy user without explicit provider -> mark as google
             upd["auth_provider"] = "google"
         await db.users.update_one({"user_id": user_id}, {"$set": upd})
+        organization_id = await _ensure_existing_user_organization({**existing, **upd})
     else:
         user_id = new_id("user")
         real_users = await db.users.count_documents({"is_demo": {"$ne": True}, "deleted_at": {"$exists": False}})
@@ -711,12 +817,14 @@ async def process_session(request: Request, response: Response):
             "created_at": now_iso(),
             "last_login_at": now_iso(),
         })
+        organization_id = await _create_owner_organization(user_id, data["name"])
 
     session_token = data["session_token"]
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
     await db.user_sessions.insert_one({
         "user_id": user_id,
         "session_token": session_token,
+        "organization_id": organization_id,
         "expires_at": expires_at.isoformat(),
         "created_at": now_iso(),
     })
@@ -725,15 +833,186 @@ async def process_session(request: Request, response: Response):
         key="session_token", value=session_token, httponly=True,
         secure=True, samesite="none", path="/", max_age=7 * 24 * 60 * 60,
     )
+    set_organization_id(organization_id)
     user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
-    user = User(**user_doc)
-    user.permissions = await get_role_permissions(user.role)
-    return user
+    return await _decorate_user_for_organization(user_doc, organization_id)
 
 
 @api_router.get("/auth/me", response_model=User)
 async def auth_me(user: User = Depends(get_current_user)):
     return user
+
+
+async def _create_owner_organization(user_id: str, user_name: str) -> str:
+    organization = Organization(name=f"Empresa de {user_name.strip() or 'nuevo usuario'}").model_dump()
+    await _raw_collection("organizations").insert_one(organization)
+    await _raw_collection("memberships").insert_one({
+        "organization_id": organization["organization_id"],
+        "user_id": user_id,
+        "role": "admin",
+        "status": "active",
+        "work_areas": [],
+        "display_name": user_name.strip() or "Nuevo usuario",
+        "created_at": now_iso(),
+    })
+    await _raw_collection("users").update_one(
+        {"user_id": user_id},
+        {"$set": {"default_organization_id": organization["organization_id"]}},
+    )
+    return organization["organization_id"]
+
+
+async def _backfill_legacy_adapter_memberships(organization_id: str) -> None:
+    """Keep older in-memory DB adapters usable while they migrate to tenancy."""
+    if isinstance(db, _DBProxy):
+        return
+    users = await _raw_collection("users").find({}, {"_id": 0}).to_list(1000)
+    memberships = _raw_collection("memberships")
+    for legacy_user in users:
+        user_id = legacy_user.get("user_id")
+        if not user_id:
+            continue
+        existing = await memberships.find_one({
+            "organization_id": organization_id, "user_id": user_id,
+        })
+        if not existing:
+            await memberships.insert_one({
+                "organization_id": organization_id,
+                "user_id": user_id,
+                "role": _normalize_role(legacy_user.get("role")),
+                "status": "active" if legacy_user.get("active", True) else "inactive",
+                "work_areas": legacy_user.get("work_areas") or [],
+                "calendar_settings": legacy_user.get("calendar_settings"),
+                "display_name": legacy_user.get("name"),
+                "created_at": legacy_user.get("created_at") or now_iso(),
+            })
+
+
+async def _ensure_existing_user_organization(user_doc: dict) -> str:
+    membership = await _membership_for_user(
+        user_doc["user_id"], user_doc.get("default_organization_id")
+    )
+    if not membership:
+        membership = await _membership_for_user(user_doc["user_id"])
+    if membership:
+        await _backfill_legacy_adapter_memberships(membership["organization_id"])
+        return membership["organization_id"]
+    organization = await _raw_collection("organizations").find_one(
+        {"status": "active"}, {"_id": 0}
+    )
+    if not organization:
+        organization = Organization(
+            name=(os.environ.get("DEFAULT_ORGANIZATION_NAME") or "Latus CRM").strip()
+        ).model_dump()
+        await _raw_collection("organizations").insert_one(organization)
+    organization_id = organization["organization_id"]
+    await _raw_collection("memberships").insert_one({
+        "organization_id": organization_id,
+        "user_id": user_doc["user_id"],
+        "role": _normalize_role(user_doc.get("role")),
+        "status": "active",
+        "work_areas": user_doc.get("work_areas") or [],
+        "display_name": user_doc.get("name"),
+        "created_at": now_iso(),
+    })
+    await _raw_collection("users").update_one(
+        {"user_id": user_doc["user_id"]},
+        {"$set": {"default_organization_id": organization_id}},
+    )
+    await _backfill_legacy_adapter_memberships(organization_id)
+    return organization_id
+
+
+@api_router.get("/organizations")
+async def list_organizations(user: User = Depends(get_current_user)):
+    memberships = await _raw_collection("memberships").find(
+        {"user_id": user.user_id, "status": "active"}, {"_id": 0}
+    ).to_list(100)
+    ids = [membership["organization_id"] for membership in memberships]
+    organizations = await _raw_collection("organizations").find(
+        {"organization_id": {"$in": ids}, "status": "active"}, {"_id": 0}
+    ).sort("name", 1).to_list(100)
+    membership_by_org = {item["organization_id"]: item for item in memberships}
+    return [{
+        **organization,
+        "role": membership_by_org[organization["organization_id"]].get("role", "agent"),
+        "is_current": organization["organization_id"] == user.organization_id,
+    } for organization in organizations]
+
+
+@api_router.get("/organizations/current")
+async def get_current_organization(user: User = Depends(get_current_user)):
+    organization = await _raw_collection("organizations").find_one(
+        {"organization_id": user.organization_id}, {"_id": 0}
+    )
+    if not organization:
+        raise HTTPException(status_code=404, detail="Empresa no encontrada")
+    return organization
+
+
+@api_router.post("/organizations")
+async def create_organization(payload: OrganizationCreate, request: Request,
+                              user: User = Depends(get_current_user)):
+    name = payload.name.strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Ingresá un nombre válido para la empresa")
+    organization = Organization(name=name).model_dump()
+    await _raw_collection("organizations").insert_one(organization)
+    await _raw_collection("memberships").insert_one({
+        "organization_id": organization["organization_id"],
+        "user_id": user.user_id,
+        "role": "admin",
+        "status": "active",
+        "work_areas": [],
+        "display_name": user.name,
+        "created_at": now_iso(),
+    })
+    token = _request_session_token(request)
+    if token:
+        await _raw_collection("user_sessions").update_one(
+            {"session_token": token}, {"$set": {"organization_id": organization["organization_id"]}}
+        )
+    set_organization_id(organization["organization_id"])
+    await _seed_roles()
+    return {**_strip_oid(organization), "role": "admin", "is_current": True}
+
+
+@api_router.post("/organizations/{organization_id}/switch", response_model=User)
+async def switch_organization(organization_id: str, request: Request,
+                              user: User = Depends(get_current_user)):
+    membership = await _membership_for_user(user.user_id, organization_id)
+    if not membership:
+        raise HTTPException(status_code=403, detail="No tenés acceso a esta empresa")
+    organization = await _raw_collection("organizations").find_one(
+        {"organization_id": organization_id, "status": "active"}, {"_id": 0}
+    )
+    if not organization:
+        raise HTTPException(status_code=404, detail="Empresa no encontrada o inactiva")
+    token = _request_session_token(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="Sesión no encontrada")
+    await _raw_collection("user_sessions").update_one(
+        {"session_token": token, "user_id": user.user_id},
+        {"$set": {"organization_id": organization_id, "updated_at": now_iso()}},
+    )
+    set_organization_id(organization_id)
+    user_doc = await _raw_collection("users").find_one({"user_id": user.user_id}, {"_id": 0})
+    return await _decorate_user_for_organization(user_doc, organization_id)
+
+
+@api_router.patch("/organizations/current")
+async def update_current_organization(payload: OrganizationUpdate,
+                                      user: User = Depends(require_perm("settings_admin"))):
+    name = payload.name.strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Ingresá un nombre válido para la empresa")
+    await _raw_collection("organizations").update_one(
+        {"organization_id": user.organization_id},
+        {"$set": {"name": name, "updated_at": now_iso()}},
+    )
+    return await _raw_collection("organizations").find_one(
+        {"organization_id": user.organization_id}, {"_id": 0}
+    )
 
 
 @api_router.post("/auth/logout")
@@ -786,9 +1065,14 @@ async def _issue_session(user_id: str, response: Response) -> str:
     """Create a 7-day session for the given user and set the cookie."""
     session_token = secrets_token_urlsafe(48)
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    user_doc = await _raw_collection("users").find_one({"user_id": user_id}, {"_id": 0})
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    organization_id = await _ensure_existing_user_organization(user_doc)
     await db.user_sessions.insert_one({
         "user_id": user_id,
         "session_token": session_token,
+        "organization_id": organization_id,
         "expires_at": expires_at.isoformat(),
         "created_at": now_iso(),
     })
@@ -796,6 +1080,7 @@ async def _issue_session(user_id: str, response: Response) -> str:
         key="session_token", value=session_token, httponly=True,
         secure=True, samesite="none", path="/", max_age=7 * 24 * 60 * 60,
     )
+    set_organization_id(organization_id)
     return session_token
 
 
@@ -1021,9 +1306,7 @@ async def auth_login(payload: LocalLoginBody, response: Response):
     await _issue_session(user["user_id"], response)
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"last_login_at": now_iso()}})
     user_doc = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
-    user_obj = User(**user_doc)
-    user_obj.permissions = await get_role_permissions(user_obj.role)
-    return user_obj
+    return await _decorate_user_for_organization(user_doc, get_organization_id())
 
 
 @api_router.post("/auth/password/change")
@@ -1055,6 +1338,8 @@ async def auth_forgot_password(payload: ForgotPasswordBody, request: Request):
     if user:
         ap = (user.get("auth_provider") or "google").lower()
         if ap in ("local", "both"):
+            organization_id = await _ensure_existing_user_organization(user)
+            set_organization_id(organization_id)
             await send_password_recovery_email(user_doc=user, request=request)
     return {"ok": True, "message": "Si el email existe, te enviamos instrucciones para recuperar tu acceso."}
 
@@ -1145,9 +1430,6 @@ async def create_custom_role(payload: RoleCreate, user: User = Depends(require_p
         "is_default": False
     }
     await db.roles.insert_one(doc)
-    # Add to global ROLES list so it's recognized as a valid role
-    if rid not in ROLES:
-        ROLES.append(rid)
     return {"ok": True, "role": doc}
 
 @api_router.put("/roles/{role_id}")
@@ -1191,16 +1473,13 @@ async def delete_custom_role(role_id: str, user: User = Depends(require_perm("us
         raise HTTPException(status_code=404, detail="Rol no encontrado")
         
     # Check if any user is currently using this role
-    in_use = await db.users.find_one({"role": rid})
+    in_use = await _raw_collection("memberships").find_one({
+        "organization_id": user.organization_id, "role": rid, "status": "active",
+    })
     if in_use:
         raise HTTPException(status_code=400, detail="No se puede borrar el rol porque está siendo usado por uno o más usuarios")
         
     await db.roles.delete_one({"role_id": rid})
-    if rid in ROLES:
-        try:
-            ROLES.remove(rid)
-        except ValueError:
-            pass
     return {"ok": True}
 
 
@@ -1255,7 +1534,9 @@ async def delete_work_area(wa_id: str, admin: User = Depends(require_perm("users
         
     await db.work_areas.delete_one({"id": wa_id})
     # Remove from all users
-    await db.users.update_many({}, {"$pull": {"work_areas": wa_id}})
+    await _raw_collection("memberships").update_many(
+        {"organization_id": admin.organization_id}, {"$pull": {"work_areas": wa_id}}
+    )
     return {"ok": True}
 
 
@@ -1291,18 +1572,43 @@ def _public_user(d: dict) -> dict:
         "email": d.get("email"),
         "name": d.get("name"),
         "picture": d.get("picture"),
-        "role": _normalize_role(d.get("role")),
-        "is_active": bool(d.get("active", True)) and not d.get("deleted_at"),
-        "active": bool(d.get("active", True)) and not d.get("deleted_at"),
+        "role": _normalize_role(d.get("membership_role", d.get("role"))),
+        "is_active": bool(d.get("membership_active", d.get("active", True))) and not d.get("deleted_at"),
+        "active": bool(d.get("membership_active", d.get("active", True))) and not d.get("deleted_at"),
         "auth_provider": (d.get("auth_provider") or "google").lower(),
         "has_password": bool(d.get("password_hash")),
         "last_login_at": d.get("last_login_at"),
         "created_at": d.get("created_at"),
         "updated_at": d.get("updated_at"),
         "deleted_at": d.get("deleted_at"),
-        "work_areas": d.get("work_areas") or [],
+        "work_areas": d.get("membership_work_areas", d.get("work_areas") or []),
     }
     return out
+
+
+async def _team_user_docs(organization_id: str, *, include_inactive: bool = False) -> list[dict]:
+    membership_query: dict[str, Any] = {"organization_id": organization_id}
+    if not include_inactive:
+        membership_query["status"] = "active"
+    memberships = await _raw_collection("memberships").find(
+        membership_query, {"_id": 0}
+    ).to_list(1000)
+    if not memberships:
+        return []
+    member_by_user = {item["user_id"]: item for item in memberships}
+    users = await _raw_collection("users").find(
+        {"user_id": {"$in": list(member_by_user)}, "deleted_at": None}, {"_id": 0}
+    ).sort("created_at", -1).to_list(1000)
+    return [{
+        **user,
+        "membership_role": member_by_user[user["user_id"]].get("role", "agent"),
+        "membership_active": member_by_user[user["user_id"]].get("status") == "active",
+        "membership_work_areas": member_by_user[user["user_id"]].get("work_areas") or [],
+        "name": member_by_user[user["user_id"]].get("display_name") or user.get("name"),
+        "calendar_settings": member_by_user[user["user_id"]].get(
+            "calendar_settings", user.get("calendar_settings")
+        ),
+    } for user in users]
 
 
 @api_router.get("/admin/users")
@@ -1313,27 +1619,22 @@ async def admin_list_users(
     is_active: Optional[bool] = None,
     include_inactive: bool = False,
 ):
-    query: dict[str, Any] = {}
-    if not include_inactive:
-        # Mongo: ``{field: None}`` matches docs where the field is null OR absent.
-        # Using ``{"$exists": False}`` would miss docs with ``deleted_at: null``.
-        query["deleted_at"] = None
+    docs = await _team_user_docs(admin.organization_id, include_inactive=include_inactive)
     if role:
-        query["role"] = role
+        docs = [doc for doc in docs if doc.get("membership_role") == role]
     if is_active is not None:
-        query["active"] = is_active
+        docs = [doc for doc in docs if bool(doc.get("membership_active")) is is_active]
     if q:
-        query["$or"] = [
-            {"name": {"$regex": q, "$options": "i"}},
-            {"email": {"$regex": q, "$options": "i"}},
-        ]
-    docs = await db.users.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+        needle = q.casefold()
+        docs = [doc for doc in docs if needle in (doc.get("name") or "").casefold()
+                or needle in (doc.get("email") or "").casefold()]
     return [_public_user(d) for d in docs]
 
 
 @api_router.get("/admin/users/{uid}")
 async def admin_get_user(uid: str, admin: User = Depends(require_perm("users_view"))):
-    d = await db.users.find_one({"user_id": uid}, {"_id": 0})
+    docs = await _team_user_docs(admin.organization_id, include_inactive=True)
+    d = next((item for item in docs if item.get("user_id") == uid), None)
     if not d:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     return _public_user(d)
@@ -1353,7 +1654,28 @@ async def admin_create_user(payload: AdminUserCreate, request: Request,
         raise HTTPException(status_code=400, detail="Método de acceso inválido")
     existing = await db.users.find_one({"email": email}, {"_id": 0})
     if existing:
-        raise HTTPException(status_code=409, detail="El email ya está registrado")
+        already_member = await _raw_collection("memberships").find_one({
+            "organization_id": admin.organization_id, "user_id": existing["user_id"],
+        })
+        if already_member:
+            raise HTTPException(status_code=409, detail="El usuario ya pertenece a esta empresa")
+        await _raw_collection("memberships").insert_one({
+            "organization_id": admin.organization_id,
+            "user_id": existing["user_id"],
+            "role": payload.role,
+            "status": "active",
+            "work_areas": payload.work_areas or [],
+            "display_name": payload.name.strip() or existing.get("name"),
+            "created_at": now_iso(),
+            "created_by": admin.user_id,
+        })
+        return {**_public_user({
+            **existing,
+            "name": payload.name.strip() or existing.get("name"),
+            "membership_role": payload.role,
+            "membership_active": True,
+            "membership_work_areas": payload.work_areas or [],
+        }), "email_sent": False, "existing_identity": True}
 
     password_hash: Optional[str] = None
     if ap in ("local", "both"):
@@ -1377,65 +1699,101 @@ async def admin_create_user(payload: AdminUserCreate, request: Request,
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "created_by": admin.user_id,
+        "default_organization_id": admin.organization_id,
     }
     if password_hash:
         doc["password_hash"] = password_hash
     await db.users.insert_one(doc)
+    await _raw_collection("memberships").insert_one({
+        "organization_id": admin.organization_id,
+        "user_id": user_id,
+        "role": payload.role,
+        "status": "active",
+        "work_areas": payload.work_areas or [],
+        "display_name": payload.name.strip(),
+        "created_at": now_iso(),
+        "created_by": admin.user_id,
+    })
     email_sent = await send_welcome_email(user_doc=doc, auth_provider=ap, request=request)
     return {**_public_user(doc), "email_sent": email_sent}
 
 
 async def _count_active_admins() -> int:
-    return await db.users.count_documents({
-        "role": "admin", "active": True, "deleted_at": {"$exists": False},
+    return await _raw_collection("memberships").count_documents({
+        "organization_id": get_organization_id(), "role": "admin", "status": "active",
     })
 
 
 @api_router.patch("/admin/users/{uid}")
 async def admin_update_user(uid: str, payload: AdminUserUpdate, admin: User = Depends(require_perm("users_use"))):
     target = await db.users.find_one({"user_id": uid}, {"_id": 0})
-    if not target:
+    membership = await _raw_collection("memberships").find_one({
+        "organization_id": admin.organization_id, "user_id": uid,
+    }, {"_id": 0})
+    if not target or not membership:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    target_role = membership.get("role", "agent")
     permissions = await get_role_permissions(admin.role)
     can_admin_users = permission_granted(permissions, "users_admin")
     if not can_admin_users and (payload.role is not None or payload.auth_provider is not None):
         raise HTTPException(status_code=403, detail="Sólo quien administra Usuarios puede cambiar roles o métodos de acceso")
-    if not can_admin_users and target.get("role") == "admin":
+    if not can_admin_users and target_role == "admin":
         raise HTTPException(status_code=403, detail="No podés modificar una cuenta administradora")
-    update: dict[str, Any] = {}
+    identity_update: dict[str, Any] = {}
+    membership_update: dict[str, Any] = {}
     if payload.name is not None:
-        update["name"] = payload.name.strip()
+        membership_update["display_name"] = payload.name.strip()
     if payload.role is not None:
         valid_roles = await get_all_roles()
         if payload.role not in valid_roles:
             raise HTTPException(status_code=400, detail="Rol inválido")
         # Don't allow demoting the last admin
-        if target.get("role") == "admin" and payload.role != "admin":
+        if target_role == "admin" and payload.role != "admin":
             if await _count_active_admins() <= 1:
                 raise HTTPException(status_code=400, detail="No se puede degradar al último administrador activo")
-        update["role"] = payload.role
+        membership_update["role"] = payload.role
     if payload.auth_provider is not None:
+        membership_count = await _raw_collection("memberships").count_documents({
+            "user_id": uid, "status": "active",
+        })
+        if membership_count > 1:
+            raise HTTPException(
+                status_code=409,
+                detail="El usuario pertenece a más de una empresa y debe administrar su acceso desde su cuenta",
+            )
         ap = payload.auth_provider.lower()
         if ap not in AUTH_PROVIDERS:
             raise HTTPException(status_code=400, detail="Método de acceso inválido")
-        update["auth_provider"] = ap
+        identity_update["auth_provider"] = ap
     if payload.is_active is not None:
         # Don't allow deactivating self
         if uid == admin.user_id and not payload.is_active:
             raise HTTPException(status_code=400, detail="No podés desactivar tu propia cuenta")
         # Don't allow deactivating the last admin
-        if not payload.is_active and target.get("role") == "admin":
+        if not payload.is_active and target_role == "admin":
             if await _count_active_admins() <= 1:
                 raise HTTPException(status_code=400, detail="No se puede desactivar al último administrador activo")
-        update["active"] = payload.is_active
+        membership_update["status"] = "active" if payload.is_active else "inactive"
     if payload.work_areas is not None:
-        update["work_areas"] = payload.work_areas
-    if not update:
-        return _public_user(target)
-    update["updated_at"] = now_iso()
-    await db.users.update_one({"user_id": uid}, {"$set": update})
+        membership_update["work_areas"] = payload.work_areas
+    if not identity_update and not membership_update:
+        return _public_user({**target, "membership_role": target_role,
+                             "membership_active": membership.get("status") == "active",
+                             "membership_work_areas": membership.get("work_areas") or []})
+    if identity_update:
+        identity_update["updated_at"] = now_iso()
+        await db.users.update_one({"user_id": uid}, {"$set": identity_update})
+    if membership_update:
+        membership_update["updated_at"] = now_iso()
+        await _raw_collection("memberships").update_one(
+            {"organization_id": admin.organization_id, "user_id": uid},
+            {"$set": membership_update},
+        )
     d = await db.users.find_one({"user_id": uid}, {"_id": 0})
-    return _public_user(d)
+    updated_membership = {**membership, **membership_update}
+    return _public_user({**d, "membership_role": updated_membership.get("role", "agent"),
+                         "membership_active": updated_membership.get("status") == "active",
+                         "membership_work_areas": updated_membership.get("work_areas") or []})
 
 
 @api_router.post("/admin/users/{uid}/activate")
@@ -1452,11 +1810,20 @@ async def admin_deactivate(uid: str, admin: User = Depends(require_perm("users_u
 async def admin_reset_password(uid: str, request: Request,
                                admin: User = Depends(require_perm("users_use"))):
     target = await db.users.find_one({"user_id": uid}, {"_id": 0})
-    if not target:
+    membership = await _raw_collection("memberships").find_one({
+        "organization_id": admin.organization_id, "user_id": uid, "status": "active",
+    })
+    if not target or not membership:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     ap = (target.get("auth_provider") or "").lower()
     if ap not in ("local", "both"):
         raise HTTPException(status_code=400, detail="Este usuario no usa contraseña local")
+    membership_count = await _raw_collection("memberships").count_documents({
+        "user_id": uid, "status": "active",
+    })
+    if membership_count > 1:
+        email_sent = await send_password_recovery_email(user_doc=target, request=request)
+        return {"ok": True, "temporary_password": None, "email_sent": email_sent}
     temp = generate_temp_password(12)
     await db.users.update_one({"user_id": uid}, {"$set": {
         "password_hash": hash_password(temp),
@@ -1472,19 +1839,22 @@ async def admin_reset_password(uid: str, request: Request,
 @api_router.delete("/admin/users/{uid}")
 async def admin_delete_user(uid: str, admin: User = Depends(require_perm("users_admin"))):
     target = await db.users.find_one({"user_id": uid}, {"_id": 0})
-    if not target:
+    membership = await _raw_collection("memberships").find_one({
+        "organization_id": admin.organization_id, "user_id": uid,
+    }, {"_id": 0})
+    if not target or not membership:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     if uid == admin.user_id:
         raise HTTPException(status_code=400, detail="No podés eliminar tu propia cuenta")
-    if target.get("role") == "admin":
+    if membership.get("role") == "admin":
         if await _count_active_admins() <= 1:
             raise HTTPException(status_code=400, detail="No se puede eliminar al último administrador activo")
-    await db.users.update_one({"user_id": uid}, {"$set": {
-        "deleted_at": now_iso(),
-        "active": False,
-        "updated_at": now_iso(),
-    }})
-    await db.user_sessions.delete_many({"user_id": uid})
+    await _raw_collection("memberships").update_one(
+        {"organization_id": admin.organization_id, "user_id": uid},
+        {"$set": {"status": "removed", "removed_at": now_iso(),
+                  "removed_by": admin.user_id}},
+    )
+    await db.user_sessions.delete_many({"user_id": uid, "organization_id": admin.organization_id})
     return {"ok": True}
 
 
@@ -1522,8 +1892,10 @@ def _webhook_url(request: Request) -> tuple[str, str]:
     """
     # 1) explicit env -> absolute precedence
     explicit = (os.environ.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    organization_id = get_organization_id()
+    suffix = f"?organization_id={organization_id}" if organization_id else ""
     if explicit:
-        return f"{explicit}/api/webhooks/whatsapp", ""
+        return f"{explicit}/api/webhooks/whatsapp{suffix}", ""
 
     # 2) reverse-proxy headers
     fwd_host = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
@@ -1538,7 +1910,7 @@ def _webhook_url(request: Request) -> tuple[str, str]:
         )
         if not bad:
             # Force HTTPS even if upstream lied (Meta requires HTTPS anyway).
-            return f"https://{host}/api/webhooks/whatsapp", ""
+            return f"https://{host}/api/webhooks/whatsapp{suffix}", ""
     return "", (
         "El backend no puede determinar la URL pública. "
         "Configurá PUBLIC_BASE_URL en backend/.env"
@@ -1583,6 +1955,19 @@ async def admin_wa_config_put(payload: WhatsAppConfigUpdate, admin: User = Depen
         updates[f] = val
     try:
         await save_db_config(db, updates, updated_by=admin.user_id)
+        if "phone_number_id" in updates:
+            await _raw_collection("whatsapp_routes").delete_many({
+                "organization_id": admin.organization_id,
+            })
+            phone_number_id = str(updates.get("phone_number_id") or "").strip()
+            if phone_number_id:
+                await _raw_collection("whatsapp_routes").update_one(
+                    {"phone_number_id": phone_number_id},
+                    {"$set": {"phone_number_id": phone_number_id,
+                              "organization_id": admin.organization_id,
+                              "updated_at": now_iso()}},
+                    upsert=True,
+                )
     except Exception as e:
         logger.exception("admin_wa_config_put failed: %s", e)
         raise HTTPException(status_code=500, detail="No se pudo guardar la configuración")
@@ -1706,8 +2091,14 @@ async def admin_wa_test_webhook_verify(request: Request, admin: User = Depends(r
 
 @api_router.get("/users", response_model=List[User])
 async def list_users(user: User = Depends(get_current_user)):
-    docs = await db.users.find({}, {"_id": 0}).sort("created_at", 1).to_list(500)
-    return [User(**d) for d in docs]
+    docs = await _team_user_docs(user.organization_id)
+    return [User(**{
+        **doc,
+        "role": doc.get("membership_role", "agent"),
+        "work_areas": doc.get("membership_work_areas") or [],
+        "organization_id": user.organization_id,
+        "organization_name": user.organization_name,
+    }) for doc in reversed(docs)]
 
 
 @api_router.patch("/users/{user_id}", response_model=User)
@@ -1715,14 +2106,19 @@ async def update_user(user_id: str, payload: RoleUpdate, admin: User = Depends(r
     valid_roles = await get_all_roles()
     if payload.role not in valid_roles:
         raise HTTPException(status_code=400, detail="Invalid role")
-    update = {"role": payload.role}
+    update = {"role": payload.role, "updated_at": now_iso()}
     if payload.active is not None:
-        update["active"] = payload.active
-    await db.users.update_one({"user_id": user_id}, {"$set": update})
-    doc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+        update["status"] = "active" if payload.active else "inactive"
+    result = await _raw_collection("memberships").update_one(
+        {"organization_id": admin.organization_id, "user_id": user_id}, {"$set": update}
+    )
+    doc = await _raw_collection("users").find_one({"user_id": user_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="User not found")
-    return User(**doc)
+    if getattr(result, "matched_count", 1) == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    return User(**{**doc, "role": payload.role, "organization_id": admin.organization_id,
+                   "organization_name": admin.organization_name})
 
 # ---------------------------------------------------------------------------
 # Contacts
@@ -1738,7 +2134,26 @@ async def list_contacts(user: User = Depends(require_perm("crm_view")), search: 
             {"company": {"$regex": search, "$options": "i"}},
         ]}
     docs = await db.contacts.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    
+    # Repara contactos históricos que quedaron sin su lead asociado.
+    contact_ids = [doc.get("id") for doc in docs if doc.get("id")]
+    linked_leads = await db.leads.find(
+        {"contact_id": {"$in": contact_ids}}, {"_id": 0, "contact_id": 1}
+    ).to_list(1000)
+    linked_ids = {lead.get("contact_id") for lead in linked_leads}
+    for contact in docs:
+        if contact.get("id") in linked_ids:
+            continue
+        lead = Lead(
+            contact_id=contact["id"],
+            title=f"Lead de {contact.get('name') or 'Contacto'}",
+            status="new",
+            priority="medium",
+            value=0.0,
+            assigned_to=user.user_id,
+            tags=[],
+            products=[],
+        )
+        await db.leads.insert_one(lead.model_dump())
     return [Contact(**d) for d in docs]
 
 
@@ -1973,9 +2388,19 @@ async def _notify_target(assigned_to, ntype, title, body, entity_type, entity_id
     if assigned_to:
         await _make_notification(ntype, title, body, entity_type, entity_id, assigned_to, priority)
     else:
-        leaders = await db.users.find({"role": {"$in": ["admin", "supervisor"]}}, {"_id": 0}).to_list(100)
-        for u in leaders:
-            await _make_notification(ntype, title, body, entity_type, entity_id, u["user_id"], priority)
+        memberships = await _raw_collection("memberships").find({
+            "organization_id": get_organization_id(),
+            "role": {"$in": ["admin", "supervisor"]},
+            "status": "active",
+        }, {"_id": 0, "user_id": 1}).to_list(100)
+        if not memberships and not isinstance(db, _DBProxy):
+            memberships = await db.users.find(
+                {"role": {"$in": ["admin", "supervisor"]}},
+                {"_id": 0, "user_id": 1},
+            ).to_list(100)
+        for membership in memberships:
+            await _make_notification(ntype, title, body, entity_type, entity_id,
+                                     membership["user_id"], priority)
 
 
 @api_router.get("/notifications")
@@ -2411,10 +2836,28 @@ async def _wa_get_status_doc() -> dict:
 @api_router.get("/webhooks/whatsapp")
 async def whatsapp_webhook_verify(
     request: Request,
+    organization_id: Optional[str] = Query(default=None),
     hub_mode: Optional[str] = Query(default=None, alias="hub.mode"),
     hub_verify_token: Optional[str] = Query(default=None, alias="hub.verify_token"),
     hub_challenge: Optional[str] = Query(default=None, alias="hub.challenge"),
 ):
+    if not organization_id:
+        organizations = await _raw_collection("organizations").find(
+            {"status": "active"}, {"organization_id": 1, "_id": 0}
+        ).to_list(2)
+        if len(organizations) == 1:
+            organization_id = organizations[0]["organization_id"]
+        elif not organizations and not isinstance(db, _DBProxy):
+            organization_id = "legacy-test"
+        else:
+            raise HTTPException(status_code=400, detail="organization_id required")
+    if isinstance(db, _DBProxy):
+        organization = await _raw_collection("organizations").find_one(
+            {"organization_id": organization_id, "status": "active"}, {"_id": 0}
+        )
+        if not organization:
+            raise HTTPException(status_code=404, detail="organization not found")
+    set_organization_id(organization_id)
     cfg = await wa_config_effective(db)
     if hub_mode == "subscribe" and hub_verify_token and cfg.verify_token and hub_verify_token == cfg.verify_token:
         return Response(content=hub_challenge or "", media_type="text/plain", status_code=200)
@@ -2426,6 +2869,44 @@ async def whatsapp_webhook_verify(
 @api_router.post("/webhooks/whatsapp")
 async def whatsapp_webhook_event(request: Request):
     raw = await request.body()
+    # Route the event from Meta's destination phone to exactly one company.
+    try:
+        payload = await request.json()
+    except Exception as e:
+        logger.warning("WhatsApp webhook invalid JSON: %s", e)
+        return {"ok": True}
+    phone_number_ids = {
+        str(((change.get("value") or {}).get("metadata") or {}).get("phone_number_id") or "").strip()
+        for entry in (payload.get("entry") or [])
+        for change in (entry.get("changes") or [])
+    } - {""}
+    route = None
+    for phone_number_id in phone_number_ids:
+        route = await _raw_collection("whatsapp_routes").find_one(
+            {"phone_number_id": phone_number_id}, {"_id": 0}
+        )
+        if route:
+            break
+    if not route:
+        requested_org = request.query_params.get("organization_id")
+        if requested_org:
+            organization = await _raw_collection("organizations").find_one(
+                {"organization_id": requested_org, "status": "active"}, {"_id": 0}
+            )
+            if organization:
+                route = {"organization_id": requested_org}
+    if not route:
+        organizations = await _raw_collection("organizations").find(
+            {"status": "active"}, {"organization_id": 1, "_id": 0}
+        ).to_list(2)
+        if len(organizations) == 1:
+            route = organizations[0]
+        elif not organizations and not isinstance(db, _DBProxy):
+            route = {"organization_id": "legacy-test"}
+    if not route or not route.get("organization_id"):
+        logger.error("WhatsApp webhook without a configured organization route phones=%s", phone_number_ids)
+        return {"ok": True}
+    set_organization_id(route["organization_id"])
     cfg = await wa_config_effective(db)
     # Signature check (only enforced when APP_SECRET is configured)
     sig_header = request.headers.get("X-Hub-Signature-256") or request.headers.get("x-hub-signature-256")
@@ -2435,14 +2916,6 @@ async def whatsapp_webhook_event(request: Request):
             raise HTTPException(status_code=403, detail="invalid signature")
     else:
         logger.warning("WhatsApp APP_SECRET not configured - signature verification skipped (dev mode)")
-
-    # Parse body. Never propagate 5xx for malformed payloads.
-    try:
-        payload = await request.json()
-    except Exception as e:
-        logger.warning("WhatsApp webhook invalid JSON: %s", e)
-        await _wa_record_event(error={"source": "webhook", "message": f"invalid json: {e}"})
-        return {"ok": True}
 
     try:
         await _process_whatsapp_payload(payload)
@@ -3267,8 +3740,12 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
         uid = update["default_handoff_user_id"]
         if uid:
             uid = uid.strip()
-            user_doc = await db.users.find_one({"user_id": uid})
-            if not user_doc:
+            membership = await _raw_collection("memberships").find_one({
+                "organization_id": admin.organization_id,
+                "user_id": uid,
+                "status": "active",
+            })
+            if not membership:
                 raise HTTPException(400, "El usuario asignado para derivación no existe")
             update["default_handoff_user_id"] = uid
         else:
@@ -4091,10 +4568,9 @@ async def _validate_appointment_assignee(user_id: str | None) -> str:
     target = (user_id or "").strip()
     if not target:
         raise HTTPException(status_code=400, detail="La cita o evento debe estar asignado a un usuario")
-    member = await db.users.find_one(
-        {"user_id": target, "active": {"$ne": False}},
-        {"_id": 0, "user_id": 1},
-    )
+    member = await _raw_collection("memberships").find_one({
+        "organization_id": get_organization_id(), "user_id": target, "status": "active",
+    })
     if not member:
         raise HTTPException(status_code=400, detail="El usuario asignado no existe o está inactivo")
     return target
@@ -4111,13 +4587,16 @@ async def _get_editable_appointment(appt_id: str, user: User) -> dict:
 
 async def _calendar_availability_for(user_id: str, settings: dict) -> tuple[dict, dict]:
     from utils.scheduling import SchedulingError, normalize_person_availability
-    user_doc = await db.users.find_one(
-        {"user_id": user_id, "active": {"$ne": False}}, {"_id": 0}
-    )
-    if not user_doc:
+    user_doc = await db.users.find_one({"user_id": user_id, "active": {"$ne": False}}, {"_id": 0})
+    membership = await _raw_collection("memberships").find_one({
+        "organization_id": get_organization_id(), "user_id": user_id, "status": "active",
+    }, {"_id": 0})
+    if not user_doc or not membership:
         raise HTTPException(status_code=404, detail="Usuario no encontrado o inactivo")
     try:
-        availability = normalize_person_availability(user_doc.get("calendar_settings"), settings)
+        availability = normalize_person_availability(
+            membership.get("calendar_settings", user_doc.get("calendar_settings")), settings
+        )
     except SchedulingError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return user_doc, availability
@@ -4132,7 +4611,10 @@ async def _save_calendar_availability(user_id: str, payload: CalendarAvailabilit
         availability = normalize_person_availability(merged, settings)
     except (SchedulingError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await db.users.update_one({"user_id": user_id}, {"$set": {"calendar_settings": availability}})
+    await _raw_collection("memberships").update_one(
+        {"organization_id": get_organization_id(), "user_id": user_id},
+        {"$set": {"calendar_settings": availability, "updated_at": now_iso()}},
+    )
     return {
         "user_id": user_id,
         "name": user_doc.get("name") or user_doc.get("email") or "Usuario",
@@ -4179,7 +4661,7 @@ async def get_team_calendar_availability(user: User = Depends(require_perm("cale
     if not _is_calendar_manager(user):
         raise HTTPException(status_code=403, detail="Solo administradores y supervisores pueden ver la disponibilidad del equipo")
     settings = await _effective_bot_settings()
-    members = await db.users.find({"active": {"$ne": False}}, {"_id": 0}).sort("name", 1).to_list(500)
+    members = sorted(await _team_user_docs(user.organization_id), key=lambda item: item.get("name") or "")
     result = []
     for member in members:
         from utils.scheduling import normalize_person_availability
@@ -4187,7 +4669,7 @@ async def get_team_calendar_availability(user: User = Depends(require_perm("cale
         result.append({
             "user_id": member.get("user_id"),
             "name": member.get("name") or member.get("email") or "Usuario",
-            "role": _normalize_role(member.get("role")),
+            "role": _normalize_role(member.get("membership_role")),
             **availability,
         })
     return result
@@ -4315,9 +4797,9 @@ async def list_appointments(
             "user_id": member["user_id"],
             "name": member.get("name") or member.get("email") or "Usuario",
             "picture": member.get("picture"),
-            "role": _normalize_role(member.get("role")),
+            "role": _normalize_role(member.get("membership_role", member.get("role"))),
         }
-        for member in await db.users.find({}, {"_id": 0}).to_list(500)
+        for member in await _team_user_docs(user.organization_id, include_inactive=True)
         if member.get("user_id")
     }
     for d in docs:
@@ -4933,6 +5415,105 @@ async def _seed_roles():
         logger.exception("Error seeding roles: %s", str(e))
 
 
+async def _ensure_default_organization() -> str:
+    """Idempotently attach legacy data and users to the first organization."""
+    organizations = _raw_collection("organizations")
+    memberships = _raw_collection("memberships")
+    organization = await organizations.find_one(
+        {"status": "active"}, {"_id": 0}, sort=[("created_at", 1)]
+    )
+    if not organization:
+        organization = Organization(
+            name=(os.environ.get("DEFAULT_ORGANIZATION_NAME") or "Latus CRM").strip()
+        ).model_dump()
+        await organizations.insert_one(organization)
+    organization_id = organization["organization_id"]
+    await organizations.update_one(
+        {"organization_id": organization_id},
+        {"$set": {
+            "plan_code": organization.get("plan_code") or "base",
+            "subscription_status": organization.get("subscription_status") or "not_configured",
+            "license_status": organization.get("license_status") or "not_configured",
+        }},
+    )
+
+    users = _raw_collection("users")
+    async for user_doc in users.find({"deleted_at": None}, {"_id": 0}):
+        user_id = user_doc.get("user_id")
+        if not user_id:
+            continue
+        existing = await memberships.find_one({"user_id": user_id})
+        if not existing:
+            await memberships.insert_one({
+                "organization_id": organization_id,
+                "user_id": user_id,
+                "role": _normalize_role(user_doc.get("role")),
+                "status": "active" if user_doc.get("active", True) else "inactive",
+                "work_areas": user_doc.get("work_areas") or [],
+                "display_name": user_doc.get("name"),
+                "created_at": user_doc.get("created_at") or now_iso(),
+                "migrated_from_legacy": True,
+            })
+        await users.update_one(
+            {"user_id": user_id, "default_organization_id": {"$exists": False}},
+            {"$set": {"default_organization_id": organization_id}},
+        )
+
+    sessions = _raw_collection("user_sessions")
+    async for session in sessions.find({"organization_id": {"$exists": False}}, {"_id": 0}):
+        session_membership = await memberships.find_one({
+            "user_id": session.get("user_id"), "status": "active",
+        }, {"_id": 0})
+        await sessions.update_one(
+            {"session_token": session.get("session_token")},
+            {"$set": {"organization_id": (
+                session_membership.get("organization_id") if session_membership else organization_id
+            )}},
+        )
+
+    for collection_name in TENANT_SCOPED_COLLECTIONS - COMPOSITE_ID_COLLECTIONS:
+        await _raw_collection(collection_name).update_many(
+            {"organization_id": {"$exists": False}},
+            {"$set": {"organization_id": organization_id}},
+        )
+
+    # Preserve legacy logical IDs while making Mongo's physical _id unique per tenant.
+    for collection_name in COMPOSITE_ID_COLLECTIONS:
+        collection = _raw_collection(collection_name)
+        legacy_docs = await collection.find({
+            "$or": [
+                {"organization_id": {"$exists": False}},
+                {"organization_id": organization_id,
+                 "_id": {"$not": {"$regex": f"^{organization_id}:"}}},
+            ]
+        }).to_list(1000)
+        for legacy in legacy_docs:
+            old_id = str(legacy.get("_id", "default"))
+            public_id = old_id.split(":", 1)[-1] if ":" in old_id else old_id
+            new_id_value = f"{organization_id}:{public_id}"
+            replacement = {**legacy, "_id": new_id_value, "organization_id": organization_id}
+            await collection.replace_one({"_id": new_id_value}, replacement, upsert=True)
+            if old_id != new_id_value:
+                await collection.delete_one({"_id": legacy["_id"]})
+    return organization_id
+
+
+async def _bootstrap_tenant_data() -> None:
+    """Run tenant migration and existing seeds in a safe, ordered context."""
+    organization_id = await _ensure_default_organization()
+    token = set_organization_id(organization_id)
+    try:
+        await _seed_roles()
+        await _seed(force=False)
+        # Demo seed can create global user identities; attach those too.
+        await _ensure_default_organization()
+        await backfill_notifications()
+        await _ensure_indexes()
+        await _migrate_promote_first_google_admin()
+    finally:
+        reset_organization_id(token)
+
+
 @app.on_event("startup")
 async def on_startup():
     """Best-effort, non-blocking startup.
@@ -4947,13 +5528,8 @@ async def on_startup():
         except Exception:  # pragma: no cover - logged for ops
             logger.exception("background startup step '%s' failed", step_name)
 
-    # Schedule (but DO NOT await) the DB-touching jobs.
-    asyncio.create_task(_bg_step("_seed_roles", _seed_roles()))
-    asyncio.create_task(_bg_step("_seed", _seed(force=False)))
-    asyncio.create_task(_bg_step("backfill_notifications", backfill_notifications()))
-    asyncio.create_task(_bg_step("_ensure_indexes", _ensure_indexes()))
-    asyncio.create_task(_bg_step("_migrate_promote_first_google_admin",
-                                 _migrate_promote_first_google_admin()))
+    # Ordered because every seed/index operation must run inside one tenant.
+    asyncio.create_task(_bg_step("_bootstrap_tenant_data", _bootstrap_tenant_data()))
 
     # Scheduler is sync and doesn't touch DB — fine to start in foreground.
     try:
@@ -5034,6 +5610,11 @@ async def _migrate_promote_first_google_admin() -> None:
                       "promoted_to_admin_by": "auto-migration",
                       "promoted_to_admin_at": now_iso()}},
         )
+        if get_organization_id():
+            await _raw_collection("memberships").update_one(
+                {"organization_id": get_organization_id(), "user_id": chosen["user_id"]},
+                {"$set": {"role": "admin", "updated_at": now_iso()}},
+            )
         logger.warning(
             "Promoted %s (%s) to admin via auto-migration (no real Google admin existed)",
             chosen.get("email"), chosen.get("user_id"),
@@ -5045,41 +5626,79 @@ async def _migrate_promote_first_google_admin() -> None:
 async def _ensure_indexes() -> None:
     """Idempotently create indexes needed by WhatsApp idempotency."""
     try:
+        # Replace legacy global uniqueness with tenant-local uniqueness.
+        for collection_name, index_name in (
+            ("messages", "ux_messages_external_id"),
+            ("messages", "ux_org_messages_external_id"),
+            ("bot_events", "ux_bot_events_trigger"),
+            ("bot_events", "ux_org_bot_events_trigger"),
+            ("products", "ux_products_sku"),
+            ("products", "ux_org_products_sku"),
+        ):
+            try:
+                await _raw_collection(collection_name).drop_index(index_name)
+            except Exception:
+                pass
+        await _raw_collection("memberships").create_index(
+            [("organization_id", 1), ("user_id", 1)], unique=True,
+            name="ux_membership_org_user",
+        )
+        await _raw_collection("memberships").create_index(
+            [("user_id", 1), ("status", 1)], name="ix_membership_user_status",
+        )
+        await _raw_collection("organizations").create_index(
+            "organization_id", unique=True, name="ux_organizations_id",
+        )
+        await _raw_collection("user_sessions").create_index(
+            [("user_id", 1), ("organization_id", 1)], name="ix_sessions_user_org",
+        )
+        await _raw_collection("whatsapp_routes").create_index(
+            "phone_number_id", unique=True, name="ux_whatsapp_route_phone",
+        )
         await db.messages.create_index(
-            "external_message_id", unique=True, sparse=True,
-            name="ux_messages_external_id",
+            [("organization_id", 1), ("external_message_id", 1)],
+            unique=True, name="ux_org_messages_external_id",
+            partialFilterExpression={"external_message_id": {"$type": "string"}},
         )
         await db.conversations.create_index(
-            [("channel", 1), ("channel_external_id", 1)],
-            sparse=True, name="ix_conversations_channel",
+            [("organization_id", 1), ("channel", 1), ("channel_external_id", 1)],
+            sparse=True, name="ix_org_conversations_channel",
         )
         await db.contacts.create_index(
-            "whatsapp_id", sparse=True, name="ix_contacts_whatsapp_id",
+            [("organization_id", 1), ("whatsapp_id", 1)],
+            sparse=True, name="ix_org_contacts_whatsapp_id",
         )
         await db.bot_events.create_index(
-            "triggered_by_message_id", unique=True, sparse=True,
-            name="ux_bot_events_trigger",
+            [("organization_id", 1), ("triggered_by_message_id", 1)],
+            unique=True, name="ux_org_bot_events_trigger",
+            partialFilterExpression={"triggered_by_message_id": {"$type": "string"}},
         )
-        await db.ai_usage_logs.create_index([("created_at", -1), ("status", 1)],
-                                            name="ix_ai_usage_dt_status")
-        await db.ai_usage_logs.create_index("model", name="ix_ai_usage_model")
-        await db.ai_usage_logs.create_index("conversation_id",
-                                            sparse=True, name="ix_ai_usage_conv")
-        await db.products.create_index("sku", unique=True, sparse=True,
-                                       name="ux_products_sku")
-        await db.products.create_index("name", name="ix_products_name")
-        await db.products.create_index("category", name="ix_products_category")
-        await db.products.create_index("tags", name="ix_products_tags")
+        await db.ai_usage_logs.create_index(
+            [("organization_id", 1), ("created_at", -1), ("status", 1)],
+            name="ix_org_ai_usage_dt_status")
+        await db.ai_usage_logs.create_index(
+            [("organization_id", 1), ("model", 1)], name="ix_org_ai_usage_model")
+        await db.ai_usage_logs.create_index(
+            [("organization_id", 1), ("conversation_id", 1)],
+            sparse=True, name="ix_org_ai_usage_conv")
+        await db.products.create_index(
+            [("organization_id", 1), ("sku", 1)], unique=True,
+            name="ux_org_products_sku",
+            partialFilterExpression={"sku": {"$type": "string"}})
+        await db.products.create_index([("organization_id", 1), ("name", 1)], name="ix_org_products_name")
+        await db.products.create_index([("organization_id", 1), ("category", 1)], name="ix_org_products_category")
+        await db.products.create_index([("organization_id", 1), ("tags", 1)], name="ix_org_products_tags")
         await db.password_reset_tokens.create_index("token_hash", unique=True, name="ux_password_reset_token_hash")
         await db.password_reset_tokens.create_index("expires_at", name="ix_password_reset_expires")
         await db.appointments.create_index(
-            [("assigned_to", 1), ("start_time", 1)],
-            name="ix_appointments_assignee_start",
+            [("organization_id", 1), ("assigned_to", 1), ("start_time", 1)],
+            name="ix_org_appointments_assignee_start",
         )
-        await db.appointments.create_index("start_time", name="ix_appointments_start")
         await db.appointments.create_index(
-            [("reminder_status", 1), ("reminder_due_at", 1)],
-            name="ix_appointments_reminder_due",
+            [("organization_id", 1), ("start_time", 1)], name="ix_org_appointments_start")
+        await db.appointments.create_index(
+            [("organization_id", 1), ("reminder_status", 1), ("reminder_due_at", 1)],
+            name="ix_org_appointments_reminder_due",
         )
     except Exception as e:  # pragma: no cover - best-effort
         logger.warning("ensure_indexes failed: %s", e)
@@ -5236,7 +5855,13 @@ async def check_and_send_scheduled_reports():
             except Exception:
                 run_monthly = True
     if run_daily or run_weekly or run_monthly:
-        leaders = await db.users.find({"role": {"$in": ["admin", "supervisor"]}}, {"_id": 0}).to_list(100)
+        leader_memberships = await _raw_collection("memberships").find({
+            "organization_id": get_organization_id(),
+            "role": {"$in": ["admin", "supervisor"]},
+            "status": "active",
+        }, {"_id": 0, "user_id": 1}).to_list(100)
+        leader_ids = [membership["user_id"] for membership in leader_memberships]
+        leaders = await db.users.find({"user_id": {"$in": leader_ids}}, {"_id": 0}).to_list(100)
         recipients = [u["email"].strip().lower() for u in leaders if u.get("email") and "@" in u["email"]]
         if recipients:
             base_url = _resolve_app_base_url(settings)
@@ -5397,22 +6022,33 @@ def _start_scheduler():
     sched = AsyncIOScheduler(timezone="UTC")
 
     async def _job():
-        try:
-            await scan_lead_no_response()
-        except Exception:  # pragma: no cover - log only
-            logger.exception("scheduled scan_lead_no_response failed")
-        try:
-            await close_inactive_conversations(db)
-        except Exception:
-            logger.exception("scheduled close_inactive_conversations failed")
-        try:
-            await check_and_send_scheduled_reports()
-        except Exception:  # pragma: no cover - log only
-            logger.exception("scheduled check_and_send_scheduled_reports failed")
-        try:
-            await send_due_appointment_reminders()
-        except Exception:  # pragma: no cover - log only
-            logger.exception("scheduled send_due_appointment_reminders failed")
+        organizations = await _raw_collection("organizations").find(
+            {"status": "active"}, {"organization_id": 1, "_id": 0}
+        ).to_list(10000)
+        for organization in organizations:
+            organization_id = organization.get("organization_id")
+            if not organization_id:
+                continue
+            token = set_organization_id(organization_id)
+            try:
+                try:
+                    await scan_lead_no_response()
+                except Exception:  # pragma: no cover - log only
+                    logger.exception("scheduled scan_lead_no_response failed org=%s", organization_id)
+                try:
+                    await close_inactive_conversations(db)
+                except Exception:
+                    logger.exception("scheduled close_inactive_conversations failed org=%s", organization_id)
+                try:
+                    await check_and_send_scheduled_reports()
+                except Exception:  # pragma: no cover - log only
+                    logger.exception("scheduled check_and_send_scheduled_reports failed org=%s", organization_id)
+                try:
+                    await send_due_appointment_reminders()
+                except Exception:  # pragma: no cover - log only
+                    logger.exception("scheduled send_due_appointment_reminders failed org=%s", organization_id)
+            finally:
+                reset_organization_id(token)
 
     sched.add_job(
         _job,
@@ -5466,7 +6102,10 @@ _WRITE_EXEMPT_PATHS = {
 async def block_viewer_on_writes(request: Request, call_next):
     method = request.method
     path = request.url.path
-    if method in _WRITE_METHODS and path.startswith("/api/") and path not in _WRITE_EXEMPT_PATHS:
+    is_exempt = path in _WRITE_EXEMPT_PATHS or (
+        path.startswith("/api/organizations/") and path.endswith("/switch")
+    )
+    if method in _WRITE_METHODS and path.startswith("/api/") and not is_exempt:
         token = request.cookies.get("session_token")
         if not token:
             auth = request.headers.get("Authorization", "")
@@ -5478,7 +6117,14 @@ async def block_viewer_on_writes(request: Request, call_next):
                 if session:
                     user_doc = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
                     if user_doc:
-                        role = _normalize_role(user_doc.get("role"))
+                        membership = await _raw_collection("memberships").find_one({
+                            "organization_id": session.get("organization_id"),
+                            "user_id": session["user_id"],
+                            "status": "active",
+                        }, {"_id": 0})
+                        role = _normalize_role(
+                            membership.get("role") if membership else user_doc.get("role")
+                        )
                         perms = await get_role_permissions(role)
                         if not any(
                             permission_granted(perms, f"{module}_use")
@@ -5511,6 +6157,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def organization_context_middleware(request: Request, call_next):
+    """Select the session's tenant before any route or permission middleware."""
+    context_token = set_organization_id(None)
+    try:
+        session_token = _request_session_token(request)
+        if session_token:
+            session = await _raw_collection("user_sessions").find_one(
+                {"session_token": session_token}, {"_id": 0}
+            )
+            if session:
+                user_doc = await _raw_collection("users").find_one(
+                    {"user_id": session.get("user_id")}, {"_id": 0}
+                )
+                organization_id = await _resolve_session_organization(session, user_doc)
+                if organization_id:
+                    set_organization_id(organization_id)
+                    request.state.organization_id = organization_id
+        return await call_next(request)
+    finally:
+        reset_organization_id(context_token)
 
 
 @app.on_event("shutdown")

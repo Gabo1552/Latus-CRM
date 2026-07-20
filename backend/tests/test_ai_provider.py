@@ -143,8 +143,9 @@ class TestAIProviderConfig:
         _, _, client = srv
         assert client.put("/api/admin/ai-provider", headers=_h("T-AGENT"),
                           json={"provider": "built_in"}).status_code == 403
+        # El nivel visualizar permite consultar, pero no modificar.
         assert client.get("/api/admin/ai-provider",
-                          headers=_h("T-VIEWER")).status_code == 403
+                          headers=_h("T-VIEWER")).status_code == 200
 
 
 # ============================================================================

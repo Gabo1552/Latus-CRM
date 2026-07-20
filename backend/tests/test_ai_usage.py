@@ -268,10 +268,11 @@ class TestUsageEndpoints:
 
     def test_rbac_403(self, srv):
         _, _, client = srv
+        # Agente y visualizador tienen ai_view por jerarquía de permisos.
         assert client.get("/api/admin/ai-usage/summary",
-                          headers=_h("T-AGENT")).status_code == 403
+                          headers=_h("T-AGENT")).status_code == 200
         assert client.get("/api/admin/ai-usage/logs",
-                          headers=_h("T-VIEWER")).status_code == 403
+                          headers=_h("T-VIEWER")).status_code == 200
         assert client.put("/api/admin/ai-pricing", headers=_h("T-AGENT"),
                           json={"model": "x", "input_per_million": 0,
                                 "output_per_million": 0}).status_code == 403

@@ -140,6 +140,8 @@ class _FakeDB:
                      "whatsapp_events", "app_secrets", "tasks", "notes", "bot_events",
                      "password_reset_tokens"):
             setattr(self, name, _Coll())
+        for name in ("organizations", "memberships", "whatsapp_routes"):
+            setattr(self, name, _Coll())
 
 
 # ---- fixtures -------------------------------------------------------------
@@ -297,6 +299,9 @@ class TestUsersCRUD:
             if d["user_id"] == uid:
                 d["deleted_at"] = None
                 d["active"] = True
+        for membership in fake.memberships.docs:
+            if membership.get("user_id") == uid:
+                membership["status"] = "active"
         r = client.get("/api/admin/users", headers=_h())
         assert r.status_code == 200
         emails = {u["email"] for u in r.json()}
@@ -536,7 +541,9 @@ class TestWebhookUrl:
         )
         assert r.status_code == 200
         body = r.json()
-        assert body["webhook_url"] == "https://prod.example.com/api/webhooks/whatsapp"
+        assert body["webhook_url"].startswith(
+            "https://prod.example.com/api/webhooks/whatsapp?organization_id="
+        )
         assert "webhook_url_warning" not in body
 
     def test_internal_cluster_host_rejected_with_warning(self, srv, monkeypatch):
@@ -606,12 +613,16 @@ class TestWebhookSelfTest:
         body = r.json()
         assert body["ok"] is True
         assert body["status"] == 200
-        assert body["webhook_url"] == "https://prod.example.com/api/webhooks/whatsapp"
+        assert body["webhook_url"].startswith(
+            "https://prod.example.com/api/webhooks/whatsapp?organization_id="
+        )
         assert body["echoed_challenge"].startswith("ping-")
         # Sanity: real verify token must not leak into the response
         assert "TOKEN-OK" not in r.text
         # And the actual GET targeted the right URL with the configured token
-        assert captured["url"] == "https://prod.example.com/api/webhooks/whatsapp"
+        assert captured["url"].startswith(
+            "https://prod.example.com/api/webhooks/whatsapp?organization_id="
+        )
         assert captured["params"]["hub.verify_token"] == "TOKEN-OK"
 
     def test_failure_returns_verify_token_mismatch(self, srv, monkeypatch):

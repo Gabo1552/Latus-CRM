@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, Target, MessageSquare, KanbanSquare,
   CheckSquare, Shield, Settings, LogOut, DollarSign, Package, Calendar,
-  Menu, X, PanelLeftClose, PanelLeftOpen, Sparkles
+  Menu, X, PanelLeftClose, PanelLeftOpen, Sparkles, Building2
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { initials, roleLabel } from "@/lib/constants";
@@ -21,9 +21,10 @@ const NAV = [
 ];
 
 export default function AppLayout({ children, title, actions }) {
-  const { user, logout } = useAuth();
+  const { user, organizations, loadOrganizations, switchOrganization, logout } = useAuth();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [switchingOrganization, setSwitchingOrganization] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(() => {
     try {
       return window.localStorage.getItem("crm-nav-collapsed") === "true";
@@ -31,6 +32,22 @@ export default function AppLayout({ children, title, actions }) {
       return false;
     }
   });
+
+  useEffect(() => {
+    if (user && organizations.length === 0) loadOrganizations();
+  }, [user, organizations.length, loadOrganizations]);
+
+  const handleOrganizationChange = async (event) => {
+    const organizationId = event.target.value;
+    if (!organizationId || organizationId === user?.organization_id) return;
+    setSwitchingOrganization(true);
+    try {
+      await switchOrganization(organizationId);
+      window.location.reload();
+    } finally {
+      setSwitchingOrganization(false);
+    }
+  };
 
   const toggleDesktopNav = () => {
     setNavCollapsed((collapsed) => {
@@ -102,7 +119,9 @@ export default function AppLayout({ children, title, actions }) {
                 <div className="whitespace-nowrap text-[1.45rem] font-extrabold leading-none tracking-[-0.04em] text-white">
                   <span>Tu</span>{" "}<span className="font-light text-latus-ice">logo</span>
                 </div>
-                <p className="mt-1.5 whitespace-nowrap text-[8px] font-bold uppercase tracking-[0.24em] text-latus-ice/55">Tu marca, tu espacio</p>
+                <p className="mt-1.5 max-w-[150px] truncate text-[9px] font-bold uppercase tracking-[0.16em] text-latus-ice/60">
+                  {user?.organization_name || "Tu marca, tu espacio"}
+                </p>
               </div>
             </div>
             <button type="button" onClick={() => setMenuOpen(false)} className="p-1 text-white/70 lg:hidden" aria-label="Cerrar menú">
@@ -174,6 +193,25 @@ export default function AppLayout({ children, title, actions }) {
           </div>
           <div className="flex items-center gap-2.5 md:gap-4">
             <div className="hidden items-center gap-3 sm:flex">{actions}</div>
+            {organizations.length > 0 && (
+              <label className="hidden items-center gap-2 rounded-xl border border-latus-warm-border bg-latus-surface px-2.5 py-2 shadow-sm md:flex">
+                <Building2 className="h-4 w-4 shrink-0 text-latus-blue" />
+                <span className="sr-only">Empresa activa</span>
+                <select
+                  value={user?.organization_id || ""}
+                  onChange={handleOrganizationChange}
+                  disabled={switchingOrganization}
+                  className="max-w-[190px] cursor-pointer bg-transparent pr-1 text-sm font-semibold text-latus-ink outline-none disabled:cursor-wait disabled:opacity-60"
+                  data-testid="organization-switcher"
+                >
+                  {organizations.map((organization) => (
+                    <option key={organization.organization_id} value={organization.organization_id}>
+                      {organization.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <NotificationBell />
             <button
               type="button"

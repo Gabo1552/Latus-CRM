@@ -219,6 +219,9 @@ class _FakeDB:
         self.notifications = _Collection()
         self.users = _Collection()
         self.settings = _Collection()
+        self.organizations = _Collection()
+        self.memberships = _Collection()
+        self.whatsapp_routes = _Collection()
 
 
 @pytest.fixture
