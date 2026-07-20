@@ -1833,7 +1833,9 @@ async def admin_reset_password(uid: str, request: Request,
     }})
     logger.info("admin reset password user=%s by=%s", uid, admin.user_id)
     email_sent = await send_password_recovery_email(user_doc=target, request=request)
-    return {"ok": True, "temporary_password": None if email_sent else temp, "email_sent": email_sent}
+    # The generated password is only available in this response, so the admin
+    # can hand it to the user even when the recovery email was delivered.
+    return {"ok": True, "temporary_password": temp, "email_sent": email_sent}
 
 
 @api_router.delete("/admin/users/{uid}")
