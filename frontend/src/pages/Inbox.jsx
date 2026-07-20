@@ -7,6 +7,7 @@ import {
   ChevronRight, FileText, Lightbulb,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { hasPermission } from "@/lib/permissions";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import AppLayout from "@/components/AppLayout";
@@ -62,7 +63,7 @@ export default function Inbox() {
   const qc = useQueryClient();
   const location = useLocation();
   const { user } = useAuth();
-  const readOnly = user?.role === "viewer";
+  const readOnly = !hasPermission(user, "inbox_use");
   const [activeId, setActiveId] = useState(location.state?.convId || null);
 
   useEffect(() => {

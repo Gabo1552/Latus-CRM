@@ -12,6 +12,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { LEAD_STATUSES, CONV_STATUSES, money, statusMeta } from "@/lib/constants";
 import { StatusBadge, Avatar } from "@/components/Bits";
 import { useAuth } from "@/context/AuthContext";
+import { hasPermission } from "@/lib/permissions";
 
 function Metric({ label, value, sub, compareValue, testid }) {
   let difference = null;
@@ -99,7 +100,7 @@ export default function Dashboard() {
       }
     }).then((r) => r.data) 
   });
-  const { data: convs = [] } = useQuery({ queryKey: ["convs-recent"], queryFn: () => api.get("/conversations").then((r) => r.data) });
+  const { data: convs = [] } = useQuery({ queryKey: ["convs-recent"], queryFn: () => api.get("/conversations").then((r) => r.data), enabled: hasPermission(user, "inbox_view") });
 
   const chartData = m
     ? LEAD_STATUSES.map((s) => ({ name: s.label, value: m.leads_by_status[s.key] || 0, color: s.color }))
@@ -108,8 +109,7 @@ export default function Dashboard() {
   const attn = m?.requires_attention || { open_handoffs: [], unread_conversations: [], overdue_tasks: [], no_response: [] };
   const attnTotal = attn.open_handoffs.length + attn.unread_conversations.length + attn.overdue_tasks.length + (attn.no_response?.length || 0);
 
-  const role = user?.role ? user.role.toLowerCase() : "";
-  const isAdminOrSupervisor = role === "admin" || role === "supervisor";
+  const isAdminOrSupervisor = hasPermission(user, "crm_admin");
   const firstName = (user?.name || "Usuario").trim().split(/\s+/)[0];
 
   const [activeTab, setActiveTab] = useState("presales");

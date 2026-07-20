@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import {
   Users as UsersIcon, MessageSquareText, Plus, MoreHorizontal, Search,
   Copy, RefreshCw, CheckCircle2, AlertTriangle, KeyRound, Trash2, Eye, EyeOff,
-  Bot, CalendarClock, Sparkles, Lightbulb, Shield, Check, CheckSquare, Package, Building2,
+  Bot, CalendarClock, Sparkles, Lightbulb, Shield, CheckSquare, Package, Building2,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import AppointmentSettingsPanel from "@/components/AppointmentSettingsPanel";
@@ -31,32 +31,17 @@ import {
 } from "@/components/ui/dropdown-menu";
 import api from "@/lib/api";
 import { roleMeta, AUTH_PROVIDERS } from "@/lib/constants";
+import { normalizeAmericaTimezone } from "@/lib/americaTimezones";
+import {
+  ACCESS_LEVELS, MODULE_PERMISSIONS, getModuleAccess, hasConfigurationAccess,
+  hasPermission, setModuleAccess,
+} from "@/lib/permissions";
 
 const DEFAULT_ROLE_OPTIONS = [
   { key: "admin", label: "Administrador" },
   { key: "supervisor", label: "Supervisor" },
   { key: "agent", label: "Agente" },
   { key: "viewer", label: "Consulta" },
-];
-
-const ALL_PERMISSIONS = [
-  { key: "write_crm", label: "Escritura CRM", desc: "Crear/editar contactos, leads, notas y tareas" },
-  { key: "write_catalog", label: "Catálogo", desc: "Administrar productos del catálogo" },
-  { key: "manage_users", label: "Usuarios", desc: "Crear, editar, activar/desactivar y borrar usuarios" },
-  { key: "configure_whatsapp", label: "WhatsApp", desc: "Configurar credenciales y webhook de WhatsApp" },
-  { key: "configure_ai", label: "IA", desc: "Configurar proveedores de IA, bot, modelos y precios" },
-  { key: "manage_settings", label: "Ajustes", desc: "Cambiar ajustes generales del CRM" },
-  { key: "message_any", label: "Mensajes globales", desc: "Enviar mensajes en cualquier conversación" },
-  { key: "trigger_bot_any", label: "Bot global", desc: "Activar bot IA en cualquier conversación" },
-];
-
-const TZ_OPTIONS = [
-  "America/Argentina/Cordoba",
-  "America/Argentina/Buenos_Aires",
-  "America/Mexico_City",
-  "America/Bogota",
-  "Europe/Madrid",
-  "UTC",
 ];
 
 function RolePill({ role }) {
@@ -917,21 +902,29 @@ function AgendaTab() {
   }, [settingsQ.data, draft]);
 
   const save = useMutation({
-    mutationFn: () => api.patch("/admin/bot-settings", {
-      appointment_scheduling_enabled: !!draft.appointment_scheduling_enabled,
-      appointment_mode: draft.appointment_mode || "people",
-      appointment_timezone: draft.appointment_timezone || "America/Argentina/Buenos_Aires",
-      appointment_services: Array.isArray(draft.appointment_services) ? draft.appointment_services : [],
-      appointment_available_days: draft.appointment_available_days || [1, 2, 3, 4, 5],
-      appointment_business_hours: draft.appointment_business_hours || "09:00-18:00",
-      appointment_duration_minutes: Number(draft.appointment_duration_minutes) || 30,
-      whatsapp_recontact_templates: Array.isArray(draft.whatsapp_recontact_templates) ? draft.whatsapp_recontact_templates : [],
-      appointment_reminders_enabled: !!draft.appointment_reminders_enabled,
-      appointment_reminder_minutes_before: Number(draft.appointment_reminder_minutes_before) || 1440,
-      appointment_reminder_templates: Array.isArray(draft.appointment_reminder_templates) ? draft.appointment_reminder_templates : [],
-      appointment_reminder_template_id: draft.appointment_reminder_template_id || null,
-      appointment_rescheduling_enabled: draft.appointment_rescheduling_enabled !== false,
-    }),
+    mutationFn: () => {
+      const appointmentTimezone = normalizeAmericaTimezone(draft.appointment_timezone);
+      return api.patch("/admin/bot-settings", {
+        appointment_scheduling_enabled: !!draft.appointment_scheduling_enabled,
+        appointment_mode: draft.appointment_mode || "people",
+        appointment_timezone: appointmentTimezone,
+        appointment_services: Array.isArray(draft.appointment_services)
+          ? draft.appointment_services.map((service) => ({
+            ...service,
+            timezone: normalizeAmericaTimezone(service.timezone, appointmentTimezone),
+          }))
+          : [],
+        appointment_available_days: draft.appointment_available_days || [1, 2, 3, 4, 5],
+        appointment_business_hours: draft.appointment_business_hours || "09:00-18:00",
+        appointment_duration_minutes: Number(draft.appointment_duration_minutes) || 30,
+        whatsapp_recontact_templates: Array.isArray(draft.whatsapp_recontact_templates) ? draft.whatsapp_recontact_templates : [],
+        appointment_reminders_enabled: !!draft.appointment_reminders_enabled,
+        appointment_reminder_minutes_before: Number(draft.appointment_reminder_minutes_before) || 1440,
+        appointment_reminder_templates: Array.isArray(draft.appointment_reminder_templates) ? draft.appointment_reminder_templates : [],
+        appointment_reminder_template_id: draft.appointment_reminder_template_id || null,
+        appointment_rescheduling_enabled: draft.appointment_rescheduling_enabled !== false,
+      });
+    },
     onSuccess: (response) => {
       setDraft({ ...response.data });
       qc.invalidateQueries({ queryKey: ["admin-bot-settings"] });
@@ -2339,11 +2332,8 @@ function RolesTab() {
     onError: (e) => toast.error(e?.response?.data?.detail || "Error al eliminar"),
   });
 
-  const togglePerm = (role, perm) => {
-    const current = role.permissions || [];
-    const next = current.includes(perm)
-      ? current.filter((p) => p !== perm)
-      : [...current, perm];
+  const changeAccess = (role, module, level) => {
+    const next = setModuleAccess(role.permissions || [], module, level);
     updateRole.mutate({ role_id: role.role_id, permissions: next, name: role.name });
   };
 
@@ -2365,81 +2355,74 @@ function RolesTab() {
         </Button>
       </div>
 
-      {/* Roles Grid */}
-      <div className="bg-white border border-[#E9E6DC] rounded-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[#E9E6DC] bg-[#F9F8F6]">
-                <th className="text-left px-4 py-3 font-bold text-[#0B1B26] text-xs uppercase tracking-wider sticky left-0 bg-[#F9F8F6] z-10 min-w-[160px]">Rol</th>
-                {ALL_PERMISSIONS.map((p) => (
-                  <th key={p.key} className="text-center px-3 py-3 font-semibold text-[#888888] text-[10px] uppercase tracking-wider min-w-[100px]">
-                    <div>{p.label}</div>
-                  </th>
-                ))}
-                <th className="w-12"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {roles.map((role) => (
-                <tr key={role.role_id} className="border-b border-[#E9E6DC] last:border-0 hover:bg-[#F9F8F6] transition-colors">
-                  <td className="px-4 py-3 sticky left-0 bg-white z-10">
-                    <div className="font-bold text-[#0B1B26]">{role.name}</div>
-                    <div className="text-[10px] text-[#888888] font-mono">{role.role_id}</div>
-                  </td>
-                  {ALL_PERMISSIONS.map((p) => {
-                    const has = (role.permissions || []).includes(p.key);
-                    return (
-                      <td key={p.key} className="text-center px-3 py-3">
-                        <button
-                          data-testid={`perm-${role.role_id}-${p.key}`}
-                          onClick={() => togglePerm(role, p.key)}
-                          className={`h-7 w-7 rounded-sm border inline-flex items-center justify-center transition-all duration-150 ${
-                            has
-                              ? "bg-[#064E3B] border-[#064E3B] text-white shadow-sm"
-                              : "border-zinc-300 text-transparent hover:border-[#0E8DDB] hover:bg-[#EFF6FF]"
-                          }`}
-                        >
-                          <Check className="h-4 w-4" strokeWidth={3} />
-                        </button>
-                      </td>
-                    );
-                  })}
-                  <td className="px-2 py-3">
-                    {!role.is_default && (
-                      <button
-                        data-testid={`delete-role-${role.role_id}`}
-                        onClick={() => deleteRole.mutate(role.role_id)}
-                        className="text-zinc-400 hover:text-red-500 transition-colors p-1"
-                        title="Eliminar rol"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        {ACCESS_LEVELS.filter((level) => level.value !== "none").map((level) => (
+          <div key={level.value} className="rounded-xl border border-[#E9E6DC] bg-[#F9F8F6] p-4">
+            <p className="text-sm font-bold text-[#0B1B26]">{level.label}</p>
+            <p className="mt-1 text-xs leading-relaxed text-[#777]">{level.description}</p>
+          </div>
+        ))}
       </div>
 
-      {/* Permission descriptions */}
-      <div className="bg-[#F9F8F6] border border-[#E9E6DC] rounded-sm p-4">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-[#888888] mb-3">Referencia de permisos</h3>
-        <div className="grid grid-cols-2 gap-2">
-          {ALL_PERMISSIONS.map((p) => (
-            <div key={p.key} className="flex items-start gap-2">
-              <span className="font-mono text-[10px] bg-white px-1.5 py-0.5 border border-[#E9E6DC] rounded-sm text-[#0E8DDB] whitespace-nowrap shrink-0">{p.key}</span>
-              <span className="text-xs text-[#888888]">{p.desc}</span>
-            </div>
-          ))}
-        </div>
+      <div className="space-y-4">
+        {roles.map((role) => {
+          const protectedAdmin = role.role_id === "admin";
+          return (
+            <section key={role.role_id} className="overflow-hidden rounded-xl border border-[#E9E6DC] bg-white shadow-[0_8px_24px_rgba(13,31,42,0.035)]">
+              <div className="flex items-center justify-between border-b border-[#E9E6DC] bg-[#F9F8F6] px-5 py-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-[#0B1B26]">{role.name}</h3>
+                    {protectedAdmin && <span className="rounded-full bg-[#0E8DDB]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#0E8DDB]">Protegido</span>}
+                  </div>
+                  <p className="mt-0.5 font-mono text-[10px] text-[#888]">{role.role_id}</p>
+                </div>
+                {!role.is_default && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    data-testid={`delete-role-${role.role_id}`}
+                    onClick={() => deleteRole.mutate(role.role_id)}
+                    className="text-zinc-500 hover:bg-red-50 hover:text-red-600"
+                  >
+                    <Trash2 className="mr-1.5 h-4 w-4" /> Eliminar
+                  </Button>
+                )}
+              </div>
+              <div className="grid gap-x-6 gap-y-4 p-5 md:grid-cols-2">
+                {MODULE_PERMISSIONS.map((module) => {
+                  const level = protectedAdmin ? "admin" : getModuleAccess(role.permissions, module.key);
+                  return (
+                    <div key={module.key} className="grid gap-3 rounded-lg border border-[#EEEAE2] p-3 sm:grid-cols-[1fr_170px] sm:items-center">
+                      <div>
+                        <p className="text-sm font-semibold text-[#0B1B26]">{module.label}</p>
+                        <p className="mt-0.5 text-xs text-[#888]">{module.description}</p>
+                      </div>
+                      <Select
+                        value={level}
+                        disabled={protectedAdmin || updateRole.isPending}
+                        onValueChange={(value) => changeAccess(role, module.key, value)}
+                      >
+                        <SelectTrigger data-testid={`permission-${role.role_id}-${module.key}`} className="h-9 bg-white text-xs font-semibold">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ACCESS_LEVELS.map((access) => <SelectItem key={access.value} value={access.value}>{access.label}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
       </div>
 
       {/* Create Role Dialog */}
       <Dialog open={showCreate} onOpenChange={(o) => !o && setShowCreate(false)}>
-        <DialogContent className="rounded-sm sm:max-w-md">
+        <DialogContent className="max-h-[90vh] overflow-y-auto rounded-xl sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Nuevo Rol</DialogTitle>
           </DialogHeader>
@@ -2465,36 +2448,25 @@ function RolesTab() {
               />
             </div>
             <div>
-              <Label className="text-xs font-semibold">Permisos</Label>
-              <div className="mt-2 space-y-1.5">
-                {ALL_PERMISSIONS.map((p) => {
-                  const active = newRolePerms.includes(p.key);
-                  return (
-                    <button
-                      key={p.key}
-                      type="button"
-                      data-testid={`new-role-perm-${p.key}`}
-                      onClick={() => {
-                        setNewRolePerms((prev) =>
-                          active ? prev.filter((x) => x !== p.key) : [...prev, p.key]
-                        );
-                      }}
-                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-sm border text-left text-sm transition-colors ${
-                        active
-                          ? "bg-[#064E3B]/5 border-[#064E3B] text-[#064E3B]"
-                          : "bg-white border-zinc-200 text-[#888888] hover:border-[#0E8DDB]"
-                      }`}
+              <Label className="text-xs font-semibold">Acceso por módulo</Label>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {MODULE_PERMISSIONS.map((module) => (
+                  <div key={module.key} className="rounded-lg border border-[#E9E6DC] p-3">
+                    <p className="text-sm font-semibold text-[#0B1B26]">{module.label}</p>
+                    <p className="mb-2 mt-0.5 min-h-8 text-xs text-[#888]">{module.description}</p>
+                    <Select
+                      value={getModuleAccess(newRolePerms, module.key)}
+                      onValueChange={(value) => setNewRolePerms((current) => setModuleAccess(current, module.key, value))}
                     >
-                      <span className={`h-4 w-4 rounded-sm border flex items-center justify-center shrink-0 ${
-                        active ? "bg-[#064E3B] border-[#064E3B]" : "border-zinc-300"
-                      }`}>
-                        {active && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
-                      </span>
-                      <span className="font-semibold">{p.label}</span>
-                      <span className="text-xs text-[#888888] ml-auto">{p.desc}</span>
-                    </button>
-                  );
-                })}
+                      <SelectTrigger data-testid={`new-role-perm-${module.key}`} className="h-9 text-xs font-semibold">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ACCESS_LEVELS.map((access) => <SelectItem key={access.value} value={access.value}>{access.label}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
@@ -3022,9 +2994,8 @@ export default function Configuracion() {
   if (loading) return null;
   if (!user) return <Navigate to="/" replace />;
 
-  const perms = user.permissions || [];
-  const hasPerm = (p) => perms.includes(p);
-  const hasAnyAdmin = hasPerm("manage_users") || hasPerm("configure_whatsapp") || hasPerm("configure_ai") || hasPerm("manage_settings");
+  const hasPerm = (permission) => hasPermission(user, permission);
+  const hasAnyAdmin = hasConfigurationAccess(user);
 
   if (!hasAnyAdmin) {
     return (
@@ -3062,15 +3033,15 @@ export default function Configuracion() {
 
   // Build visible tabs based on permissions
   const tabs = [];
-  if (hasPerm("manage_users")) tabs.push({ key: "users", label: "Usuarios", description: "Equipo, accesos y estado de usuarios", icon: UsersIcon, testid: "tab-users" });
-  if (hasPerm("configure_whatsapp")) tabs.push({ key: "whatsapp", label: "WhatsApp", description: "Conexión, credenciales y webhook", icon: MessageSquareText, testid: "tab-whatsapp" });
-  if (hasPerm("configure_ai")) tabs.push({ key: "agenda", label: "Agenda", description: "Horarios, personas, servicios y cupos", icon: CalendarClock, testid: "tab-agenda" });
-  if (hasPerm("configure_ai")) tabs.push({ key: "bot", label: "Bot IA", description: "Comportamiento y respuestas del asistente", icon: Bot, testid: "tab-bot-ia" });
-  if (hasPerm("configure_ai")) tabs.push({ key: "ai", label: "IA y automatización", description: "Proveedores, modelos y automatizaciones", icon: Sparkles, testid: "tab-ai-auto" });
-  if (hasPerm("manage_users")) tabs.push({ key: "roles", label: "Roles y accesos", description: "Permisos disponibles para cada rol", icon: Shield, testid: "tab-roles" });
-  if (hasPerm("manage_users")) tabs.push({ key: "work-areas", label: "Áreas de trabajo", description: "Organización y distribución del equipo", icon: Building2, testid: "tab-work-areas" });
-  if (hasPerm("manage_settings")) tabs.push({ key: "crm", label: "Tareas y catálogo", description: "Estados, categorías y opciones del CRM", icon: Package, testid: "tab-crm-config" });
-  if (hasPerm("manage_settings")) tabs.push({ key: "email", label: "Email", description: "Servidor de correo y notificaciones", icon: MessageSquareText, testid: "tab-email-config" });
+  if (hasPerm("users_admin")) tabs.push({ key: "users", label: "Usuarios", description: "Equipo, accesos y estado de usuarios", icon: UsersIcon, testid: "tab-users" });
+  if (hasPerm("whatsapp_admin")) tabs.push({ key: "whatsapp", label: "WhatsApp", description: "Conexión, credenciales y webhook", icon: MessageSquareText, testid: "tab-whatsapp" });
+  if (hasPerm("calendar_admin")) tabs.push({ key: "agenda", label: "Agenda", description: "Horarios, personas, servicios y cupos", icon: CalendarClock, testid: "tab-agenda" });
+  if (hasPerm("ai_admin")) tabs.push({ key: "bot", label: "Bot IA", description: "Comportamiento y respuestas del asistente", icon: Bot, testid: "tab-bot-ia" });
+  if (hasPerm("ai_admin")) tabs.push({ key: "ai", label: "IA y automatización", description: "Proveedores, modelos y automatizaciones", icon: Sparkles, testid: "tab-ai-auto" });
+  if (hasPerm("users_admin")) tabs.push({ key: "roles", label: "Roles y accesos", description: "Permisos disponibles para cada rol", icon: Shield, testid: "tab-roles" });
+  if (hasPerm("users_admin")) tabs.push({ key: "work-areas", label: "Áreas de trabajo", description: "Organización y distribución del equipo", icon: Building2, testid: "tab-work-areas" });
+  if (hasPerm("settings_admin")) tabs.push({ key: "crm", label: "Tareas y catálogo", description: "Estados, categorías y opciones del CRM", icon: Package, testid: "tab-crm-config" });
+  if (hasPerm("settings_admin")) tabs.push({ key: "email", label: "Email", description: "Servidor de correo y notificaciones", icon: MessageSquareText, testid: "tab-email-config" });
 
   // If current tab is not visible, switch to first available
   const activeTab = tabs.find((t) => t.key === tab) ? tab : (tabs[0]?.key || "users");

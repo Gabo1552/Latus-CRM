@@ -16,8 +16,12 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import LeadDrawer from "@/components/LeadDrawer";
+import { useAuth } from "@/context/AuthContext";
+import { hasPermission } from "@/lib/permissions";
 
 export default function Leads() {
+  const { user } = useAuth();
+  const canUse = hasPermission(user, "crm_use");
   const qc = useQueryClient();
   const location = useLocation();
   const [filters, setFilters] = useState({ status: "all", priority: "all", assigned_to: "all" });
@@ -65,7 +69,7 @@ export default function Leads() {
   return (
     <AppLayout
       title="Leads"
-      actions={
+      actions={canUse ? (
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button data-testid="new-lead-button" className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm font-semibold">
@@ -129,7 +133,7 @@ export default function Leads() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-      }
+      ) : null}
     >
       <div className="p-6 md:p-8 space-y-5 animate-in fade-in duration-300">
         {/* Filters */}

@@ -9,6 +9,7 @@ import AppLayout from "@/components/AppLayout";
 import { Badge } from "@/components/Bits";
 import { useAuth } from "@/context/AuthContext";
 import api from "@/lib/api";
+import { hasPermission } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -64,9 +65,7 @@ function promoDescription(product) {
 
 export default function Catalogo() {
   const { user } = useAuth();
-  const perms = user?.permissions || [];
-  const canWrite = perms.includes("write_catalog");
-  const canRead = !!user; // any authenticated user can read
+  const canWrite = hasPermission(user, "catalog_admin");
 
   const [filters, setFilters] = useState({
     q: "", category: "all", stock_status: "all", include_inactive: false,

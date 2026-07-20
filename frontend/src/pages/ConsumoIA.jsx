@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Navigate, Link } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -10,6 +10,7 @@ import {
 import AppLayout from "@/components/AppLayout";
 import { useAuth } from "@/context/AuthContext";
 import api from "@/lib/api";
+import { hasPermission } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -45,8 +46,8 @@ function monthStart()  { const d = new Date(); d.setDate(1); return d.toISOStrin
 
 export default function ConsumoIA() {
   const { user } = useAuth();
-  const perms = user?.permissions || [];
-  const isAdmin = perms.includes("configure_ai");
+  const canView = hasPermission(user, "ai_view");
+  const canAdmin = hasPermission(user, "ai_admin");
 
   const [filters, setFilters] = useState({
     from: monthStart(),
@@ -64,7 +65,7 @@ export default function ConsumoIA() {
   const quickQ = useQuery({
     queryKey: ["ai-usage-quick"],
     queryFn: () => api.get("/admin/ai-usage/quick").then((r) => r.data),
-    enabled: isAdmin,
+    enabled: canView,
   });
   const params = useMemo(() => {
     if (rangeBad) return null;
@@ -80,26 +81,25 @@ export default function ConsumoIA() {
   const summaryQ = useQuery({
     queryKey: ["ai-usage-summary", params],
     queryFn: () => api.get(`/admin/ai-usage/summary?${params}`).then((r) => r.data),
-    enabled: isAdmin && params !== null,
+    enabled: canView && params !== null,
   });
   const logsQ = useQuery({
     queryKey: ["ai-usage-logs", params, logsPage],
     queryFn: () => api.get(`/admin/ai-usage/logs?${params}&limit=${LIMIT}&offset=${logsPage * LIMIT}`)
       .then((r) => r.data),
-    enabled: isAdmin && params !== null,
+    enabled: canView && params !== null,
   });
   const pricingQ = useQuery({
     queryKey: ["ai-pricing"],
     queryFn: () => api.get("/admin/ai-pricing").then((r) => r.data),
-    enabled: isAdmin,
+    enabled: canView,
   });
   const reportingQ = useQuery({
     queryKey: ["ai-usage-provider-reporting"],
     queryFn: () => api.get("/admin/ai-usage/provider-reporting").then((r) => r.data),
-    enabled: isAdmin,
+    enabled: canView,
   });
 
-  if (user && !isAdmin) return <Navigate to="/dashboard" replace />;
   const reloadAll = () => {
     qc.invalidateQueries({ queryKey: ["ai-usage-quick"] });
     qc.invalidateQueries({ queryKey: ["ai-usage-summary"] });
@@ -160,6 +160,7 @@ export default function ConsumoIA() {
         </div>
 
         <ProviderVerificationPanel
+          canAdmin={canAdmin}
           status={reportingQ.data}
           loading={reportingQ.isPending}
           from={filters.from}
@@ -262,7 +263,7 @@ export default function ConsumoIA() {
         />
 
         {/* Pricing editor */}
-        <PricingEditor pricing={pricingQ.data} onSaved={() => qc.invalidateQueries({ queryKey: ["ai-pricing"] })} />
+        <PricingEditor canAdmin={canAdmin} pricing={pricingQ.data} onSaved={() => qc.invalidateQueries({ queryKey: ["ai-pricing"] })} />
       </div>
     </AppLayout>
   );
@@ -273,7 +274,7 @@ export default function ConsumoIA() {
 // Quick cards
 // ---------------------------------------------------------------------------
 
-function ProviderVerificationPanel({ status, loading, from, to, onStatusChanged }) {
+function ProviderVerificationPanel({ status, loading, from, to, onStatusChanged, canAdmin }) {
   const [providerChoice, setProviderChoice] = useState("");
   const [keyDraft, setKeyDraft] = useState("");
   const [report, setReport] = useState(null);
@@ -337,7 +338,7 @@ function ProviderVerificationPanel({ status, loading, from, to, onStatusChanged 
               <p className="mt-3 text-sm leading-relaxed text-latus-muted">{capability.description}</p>
             </div>
 
-            {capability.requires_separate_key && (
+            {canAdmin && capability.requires_separate_key && (
               <div className="rounded-xl border border-latus-warm-border p-4">
                 <Label className="flex items-center gap-2 text-xs font-bold text-latus-ink"><KeyRound className="h-3.5 w-3.5 text-latus-blue" /> {capability.key_label}</Label>
                 <div className="mt-2 flex flex-col gap-2 sm:flex-row">
@@ -349,7 +350,7 @@ function ProviderVerificationPanel({ status, loading, from, to, onStatusChanged 
               </div>
             )}
 
-            {capability.reporting_supported && (
+            {canAdmin && capability.reporting_supported && (
               <Button data-testid="provider-report-fetch" onClick={() => fetchReport.mutate()} disabled={!capability.configured || fetchReport.isPending || !from || !to} className="h-10 rounded-lg bg-latus-ink px-4 text-white hover:bg-latus-ink-soft">
                 {fetchReport.isPending ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Database className="mr-2 h-4 w-4" />} Consultar consumo real
               </Button>
@@ -627,7 +628,7 @@ function LogsTable({ logs, total, page, numPages, onPrev, onNext, loading }) {
 // ---------------------------------------------------------------------------
 
 
-function PricingEditor({ pricing, onSaved }) {
+function PricingEditor({ pricing, onSaved, canAdmin }) {
   const [drafts, setDrafts] = useState({}); // { model: {input, output} }
   const save = useMutation({
     mutationFn: (payload) => api.put("/admin/ai-pricing", payload),
@@ -658,7 +659,7 @@ function PricingEditor({ pricing, onSaved }) {
         </div>
         <Button data-testid="pricing-reset"
                 variant="outline" size="sm" className="rounded-sm"
-                onClick={() => reset.mutate()} disabled={reset.isPending}>
+                onClick={() => reset.mutate()} disabled={!canAdmin || reset.isPending}>
           <RotateCcw className="h-3.5 w-3.5 mr-1" /> Restaurar valores por defecto
         </Button>
       </div>
@@ -682,18 +683,20 @@ function PricingEditor({ pricing, onSaved }) {
                 <td className="px-3 py-2 text-right">
                   <Input data-testid={`pricing-input-${m}`} type="number" step="0.001" min="0"
                          value={cur.input}
+                         disabled={!canAdmin}
                          onChange={(e) => onChange(m, "input", e.target.value)}
                          className="rounded-sm h-8 text-right w-28 ml-auto" />
                 </td>
                 <td className="px-3 py-2 text-right">
                   <Input data-testid={`pricing-output-${m}`} type="number" step="0.001" min="0"
                          value={cur.output}
+                         disabled={!canAdmin}
                          onChange={(e) => onChange(m, "output", e.target.value)}
                          className="rounded-sm h-8 text-right w-28 ml-auto" />
                 </td>
                 <td className="px-3 py-2 text-right">
                   <Button data-testid={`pricing-save-${m}`}
-                          size="sm" disabled={!dirty || bad || save.isPending}
+                          size="sm" disabled={!canAdmin || !dirty || bad || save.isPending}
                           onClick={() => save.mutate({
                             model: m,
                             input_per_million: cur.input,

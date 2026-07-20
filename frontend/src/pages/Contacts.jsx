@@ -14,6 +14,8 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import LeadDrawer from "@/components/LeadDrawer";
+import { useAuth } from "@/context/AuthContext";
+import { hasPermission } from "@/lib/permissions";
 
 const leadSourceMeta = {
   "Meta Ads": { color: "#1D4ED8", bg: "#EFF6FF", label: "Meta Ads" },
@@ -22,6 +24,8 @@ const leadSourceMeta = {
 };
 
 export default function Contacts() {
+  const { user } = useAuth();
+  const canUse = hasPermission(user, "crm_use");
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
@@ -83,7 +87,7 @@ export default function Contacts() {
   return (
     <AppLayout
       title="Clientes y Contactos"
-      actions={
+      actions={canUse ? (
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button data-testid="new-contact-button" className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm font-semibold">
@@ -103,7 +107,7 @@ export default function Contacts() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-      }
+      ) : null}
     >
       <div className="p-6 md:p-8 space-y-5 animate-in fade-in duration-300">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

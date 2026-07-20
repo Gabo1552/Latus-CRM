@@ -16,8 +16,12 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useAuth } from "@/context/AuthContext";
+import { hasPermission } from "@/lib/permissions";
 
 export default function Tasks() {
+  const { user } = useAuth();
+  const canUse = hasPermission(user, "crm_use");
   const qc = useQueryClient();
   const [tab, setTab] = useState("todo");
   const [open, setOpen] = useState(false);
@@ -127,7 +131,7 @@ export default function Tasks() {
             </button>
           </div>
 
-          <Dialog open={open} onOpenChange={setOpen}>
+          {canUse && <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
               <Button data-testid="new-task-button" className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm font-semibold">
                 <Plus className="h-4 w-4 mr-1" /> Nueva tarea
@@ -201,7 +205,7 @@ export default function Tasks() {
                 <Button data-testid="submit-task-button" disabled={!form.title || create.isPending} onClick={() => create.mutate()} className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm w-full font-semibold">Crear tarea</Button>
               </DialogFooter>
             </DialogContent>
-          </Dialog>
+          </Dialog>}
         </div>
       }
     >
@@ -222,6 +226,7 @@ export default function Tasks() {
                 {filtered.map((t) => (
                   <div key={t.id} data-testid={`task-row-${t.id}`} className="bg-white border border-[#E9E6DC] rounded-sm p-4 flex items-center gap-4 hover:border-zinc-300 transition-colors">
                     <button
+                      disabled={!canUse}
                       onClick={() => toggle.mutate({ id: t.id, status: toggleStatus(t) })}
                       data-testid={`task-toggle-${t.id}`}
                       className={`h-5 w-5 rounded-sm border flex items-center justify-center shrink-0 transition-colors ${doneStatuses.has(t.status) ? "bg-[#064E3B] border-[#064E3B]" : "border-zinc-300 hover:border-[#0E8DDB]"}`}

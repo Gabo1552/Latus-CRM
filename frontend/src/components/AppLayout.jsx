@@ -7,16 +7,17 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { initials, roleLabel } from "@/lib/constants";
+import { firstAllowedPath, hasConfigurationAccess, hasPermission } from "@/lib/permissions";
 import NotificationBell from "@/components/NotificationBell";
 
 const NAV = [
-  { to: "/dashboard", label: "Panel principal", icon: LayoutDashboard, testid: "nav-dashboard" },
-  { to: "/inbox", label: "Bandeja", icon: MessageSquare, testid: "nav-inbox" },
-  { to: "/calendario", label: "Calendario", icon: Calendar, testid: "nav-calendario" },
-  { to: "/leads", label: "Leads", icon: Target, testid: "nav-leads" },
-  { to: "/pipeline", label: "Pipeline", icon: KanbanSquare, testid: "nav-pipeline" },
-  { to: "/contacts", label: "Clientes", icon: Users, testid: "nav-contacts" },
-  { to: "/tasks", label: "Tareas", icon: CheckSquare, testid: "nav-tasks" },
+  { to: "/dashboard", label: "Panel principal", icon: LayoutDashboard, testid: "nav-dashboard", permission: "crm_view" },
+  { to: "/inbox", label: "Bandeja", icon: MessageSquare, testid: "nav-inbox", permission: "inbox_view" },
+  { to: "/calendario", label: "Calendario", icon: Calendar, testid: "nav-calendario", permission: "calendar_view" },
+  { to: "/leads", label: "Leads", icon: Target, testid: "nav-leads", permission: "crm_view" },
+  { to: "/pipeline", label: "Pipeline", icon: KanbanSquare, testid: "nav-pipeline", permission: "crm_view" },
+  { to: "/contacts", label: "Clientes", icon: Users, testid: "nav-contacts", permission: "crm_view" },
+  { to: "/tasks", label: "Tareas", icon: CheckSquare, testid: "nav-tasks", permission: "crm_view" },
 ];
 
 export default function AppLayout({ children, title, actions }) {
@@ -43,17 +44,17 @@ export default function AppLayout({ children, title, actions }) {
     });
   };
 
-  const perms = user?.permissions || [];
-  const hasPerm = (permission) => perms.includes(permission);
-  const hasAnyAdmin = hasPerm("manage_users") || hasPerm("configure_whatsapp") || hasPerm("configure_ai") || hasPerm("manage_settings");
-
-  const nav = [...NAV];
-  if (hasPerm("write_catalog")) {
+  const nav = NAV.filter((item) => hasPermission(user, item.permission));
+  if (hasPermission(user, "catalog_view")) {
     nav.push({ to: "/catalogo", label: "Catálogo", icon: Package, testid: "nav-catalogo" });
   }
-  if (hasAnyAdmin) {
+  if (["users_view", "settings_view", "whatsapp_view"].some((permission) => hasPermission(user, permission))) {
     nav.push({ to: "/admin", label: "Administración", icon: Shield, testid: "nav-admin" });
+  }
+  if (hasPermission(user, "ai_view")) {
     nav.push({ to: "/consumo-ia", label: "Consumo de IA", icon: DollarSign, testid: "nav-consumo-ia" });
+  }
+  if (hasConfigurationAccess(user)) {
     nav.push({ to: "/configuracion", label: "Configuración", icon: Settings, testid: "nav-configuracion" });
   }
 
@@ -176,7 +177,7 @@ export default function AppLayout({ children, title, actions }) {
             <NotificationBell />
             <button
               type="button"
-              onClick={() => navigate("/configuracion")}
+              onClick={() => navigate(hasConfigurationAccess(user) ? "/configuracion" : firstAllowedPath(user))}
               className="flex items-center gap-2 rounded-full"
               data-testid="sidebar-profile"
               title={`${user?.name || "Usuario"} · ${roleLabel(user?.role)}`}

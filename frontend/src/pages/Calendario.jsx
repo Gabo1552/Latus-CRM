@@ -19,6 +19,8 @@ import WeeklyScheduleEditor, { cloneWeeklySchedule } from "@/components/WeeklySc
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { AMERICA_TIMEZONES, normalizeAmericaTimezone } from "@/lib/americaTimezones";
+import { hasPermission } from "@/lib/permissions";
 
 const STATUS_META = {
   scheduled: { label: "Agendada", className: "border-amber-200 bg-amber-50 text-amber-700" },
@@ -48,9 +50,9 @@ const mutationError = (error, fallback) =>
 export default function Calendario() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const role = user?.role === "sales_agent" ? "agent" : user?.role;
-  const canViewTeam = role === "admin" || role === "supervisor";
-  const canConfigureAgenda = (user?.permissions || []).includes("configure_ai");
+  const canViewTeam = hasPermission(user, "calendar_admin");
+  const canUseAgenda = hasPermission(user, "calendar_use");
+  const canConfigureAgenda = hasPermission(user, "calendar_admin");
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [visibleMonth, setVisibleMonth] = useState(new Date());
   const [teamFilter, setTeamFilter] = useState(canViewTeam ? "all" : user?.user_id || "");
@@ -154,7 +156,10 @@ export default function Calendario() {
   });
 
   const saveAvailability = useMutation({
-    mutationFn: (payload) => api.patch("/calendar/availability", payload),
+    mutationFn: (payload) => api.patch("/calendar/availability", {
+      ...payload,
+      timezone: normalizeAmericaTimezone(payload.timezone),
+    }),
     onSuccess: (response) => {
       setAvailabilityDraft({
         ...response.data,
@@ -292,14 +297,16 @@ export default function Calendario() {
           </select>
         </div>
       )}
-      <Button
-        type="button"
-        data-testid="new-calendar-event"
-        onClick={openCreateDialog}
-        className="bg-latus-blue font-semibold text-white hover:bg-latus-blue-deep"
-      >
-        <Plus className="h-4 w-4" /> Nuevo evento
-      </Button>
+      {canUseAgenda && (
+        <Button
+          type="button"
+          data-testid="new-calendar-event"
+          onClick={openCreateDialog}
+          className="bg-latus-blue font-semibold text-white hover:bg-latus-blue-deep"
+        >
+          <Plus className="h-4 w-4" /> Nuevo evento
+        </Button>
+      )}
     </div>
   );
 
@@ -342,7 +349,7 @@ export default function Calendario() {
                 </p>
               </div>
             </div>
-            <div className="mt-4 grid gap-2">
+            {canUseAgenda && <div className="mt-4 grid gap-2">
               <Button type="button" onClick={openAvailability} className="w-full bg-latus-blue text-white hover:bg-latus-blue-deep">
                 <CalendarClock className="h-4 w-4" /> Configurar mi horario
               </Button>
@@ -353,7 +360,7 @@ export default function Calendario() {
                   </a>
                 </Button>
               )}
-            </div>
+            </div>}
           </div>
 
           <div className="latus-card p-5">
@@ -454,7 +461,7 @@ export default function Calendario() {
                         </div>
                       </div>
 
-                      <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      {canUseAgenda && <div className="flex shrink-0 flex-wrap items-center gap-2">
                         {appointment.status === "scheduled" && (
                           <>
                             {appointment.event_type === "appointment" && contact && (
@@ -476,7 +483,7 @@ export default function Calendario() {
                         <Button type="button" variant="ghost" size="icon" onClick={() => confirmDelete(appointment)} disabled={deleteAppointment.isPending} className="text-latus-muted hover:bg-red-50 hover:text-red-700" aria-label={`Eliminar ${appointment.title}`}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
-                      </div>
+                      </div>}
                     </div>
                   </article>
                 );
@@ -636,7 +643,12 @@ export default function Calendario() {
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div>
                   <Label className="text-xs font-semibold">Zona horaria</Label>
-                  <Input value={availabilityDraft.timezone || "America/Argentina/Buenos_Aires"} onChange={(event) => setAvailabilityDraft((current) => ({ ...current, timezone: event.target.value }))} className="mt-1" />
+                  <Select value={normalizeAmericaTimezone(availabilityDraft.timezone)} onValueChange={(timezone) => setAvailabilityDraft((current) => ({ ...current, timezone }))}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Seleccionar zona horaria" /></SelectTrigger>
+                    <SelectContent>
+                      {AMERICA_TIMEZONES.map((timezone) => <SelectItem key={timezone.value} value={timezone.value}>{timezone.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label className="text-xs font-semibold">Duración habitual</Label>

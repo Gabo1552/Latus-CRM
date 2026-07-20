@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BellRing, BriefcaseBusiness, CalendarClock, ClipboardCopy, ExternalLink, HelpCircle, MessageSquareText, Plus, Settings2, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
@@ -12,6 +12,31 @@ import { Textarea } from "@/components/ui/textarea";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import WeeklyScheduleEditor, { cloneWeeklySchedule, DEFAULT_WEEKLY_SCHEDULE } from "@/components/WeeklyScheduleEditor";
+import { AMERICA_TIMEZONES, DEFAULT_AMERICA_TIMEZONE, normalizeAmericaTimezone } from "@/lib/americaTimezones";
+
+let editorKeySequence = 0;
+const nextEditorKey = (prefix) => `${prefix}_${++editorKeySequence}`;
+
+function useStableEditorKeys(length, prefix) {
+  const keys = useRef([]);
+  while (keys.current.length < length) keys.current.push(nextEditorKey(prefix));
+  if (keys.current.length > length) keys.current.length = length;
+  return keys.current;
+}
+
+function AmericaTimezoneSelect({ value, fallback, onChange, className = "" }) {
+  const selected = normalizeAmericaTimezone(value, fallback);
+  return (
+    <Select value={selected} onValueChange={onChange}>
+      <SelectTrigger className={className}><SelectValue placeholder="Seleccionar zona horaria" /></SelectTrigger>
+      <SelectContent>
+        {AMERICA_TIMEZONES.map((timezone) => (
+          <SelectItem key={timezone.value} value={timezone.value}>{timezone.label}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
 
 const makeService = () => ({
   id: `servicio_${Date.now().toString(36)}`,
@@ -83,6 +108,7 @@ const copyGuideText = async (value, label) => {
 };
 
 function TemplateListEditor({ purpose, templates, onChange }) {
+  const editorKeys = useStableEditorKeys(templates.length, `plantilla_${purpose}`);
   const updateTemplate = (index, patch) => onChange(
     templates.map((template, currentIndex) => currentIndex === index ? { ...template, ...patch } : template),
   );
@@ -104,7 +130,7 @@ function TemplateListEditor({ purpose, templates, onChange }) {
       ) : (
         <Accordion type="multiple" className="space-y-2">
           {templates.map((template, index) => (
-            <AccordionItem key={template.id || index} value={template.id || String(index)} className="overflow-hidden rounded-lg border border-latus-warm-border bg-white px-4">
+            <AccordionItem key={editorKeys[index]} value={editorKeys[index]} className="overflow-hidden rounded-lg border border-latus-warm-border bg-white px-4">
               <AccordionTrigger className="gap-3 py-3 hover:no-underline">
                 <div className="flex min-w-0 items-center gap-3 text-left">
                   <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${template.active !== false ? "bg-emerald-500" : "bg-neutral-300"}`} />
@@ -134,7 +160,7 @@ function TemplateListEditor({ purpose, templates, onChange }) {
                 </div>
                 <div>
                   <Label className="text-xs font-semibold">Variables en el orden de Meta</Label>
-                  <Input value={(template.parameter_keys || []).join(", ")} onChange={(event) => updateTemplate(index, { parameter_keys: event.target.value.split(",").map((key) => key.trim()).filter(Boolean) })} className="mt-1 font-mono text-xs" />
+                  <Input value={(template.parameter_keys || []).join(", ")} onChange={(event) => updateTemplate(index, { parameter_keys: event.target.value.split(",").map((key) => key.trim()) })} className="mt-1 font-mono text-xs" />
                 </div>
               </AccordionContent>
             </AccordionItem>
@@ -321,6 +347,8 @@ export default function AppointmentSettingsPanel({ draft, onChange, users = [] }
   const queryClient = useQueryClient();
   const mode = draft.appointment_mode || "people";
   const services = Array.isArray(draft.appointment_services) ? draft.appointment_services : [];
+  const serviceEditorKeys = useStableEditorKeys(services.length, "servicio");
+  const generalTimezone = normalizeAmericaTimezone(draft.appointment_timezone);
   const activeUsers = useMemo(() => users.filter((user) => user.active !== false), [users]);
   const [selectedUserId, setSelectedUserId] = useState("");
   const [personDraft, setPersonDraft] = useState(null);
@@ -397,7 +425,7 @@ export default function AppointmentSettingsPanel({ draft, onChange, users = [] }
                 <div>
                   <p className="font-bold text-latus-ink">Modalidad y zona horaria</p>
                   <p className="mt-0.5 text-xs font-normal text-latus-muted">
-                    {mode === "people" ? "Citas con personas" : "Citas en el local"} · {draft.appointment_timezone || "America/Argentina/Buenos_Aires"}
+                    {mode === "people" ? "Citas con personas" : "Citas en el local"} · {generalTimezone}
                   </p>
                 </div>
               </div>
@@ -416,7 +444,8 @@ export default function AppointmentSettingsPanel({ draft, onChange, users = [] }
                 </div>
                 <div>
                   <Label className="text-xs font-bold text-latus-ink">Zona horaria general</Label>
-                  <Input value={draft.appointment_timezone || "America/Argentina/Buenos_Aires"} onChange={(event) => onChange({ appointment_timezone: event.target.value })} className="mt-1 bg-white" />
+                  <AmericaTimezoneSelect value={draft.appointment_timezone} onChange={(appointment_timezone) => onChange({ appointment_timezone })} className="mt-1 bg-white" />
+                  <p className="mt-1 text-[11px] text-latus-muted">Sólo se muestran zonas horarias del continente americano.</p>
                 </div>
               </div>
             </AccordionContent>
@@ -492,7 +521,7 @@ export default function AppointmentSettingsPanel({ draft, onChange, users = [] }
                   ) : (
                     <Accordion type="multiple" className="space-y-2">
                       {services.map((service, index) => (
-                        <AccordionItem key={`${service.id || "service"}-${index}`} value={`${service.id || "service"}-${index}`} className="overflow-hidden rounded-lg border border-latus-warm-border bg-latus-cream/30 px-4">
+                        <AccordionItem key={serviceEditorKeys[index]} value={serviceEditorKeys[index]} className="overflow-hidden rounded-lg border border-latus-warm-border bg-latus-cream/30 px-4">
                           <AccordionTrigger className="gap-3 py-3 hover:no-underline">
                             <div className="flex min-w-0 items-center gap-3 text-left">
                               <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${service.active !== false ? "bg-emerald-500" : "bg-neutral-300"}`} />
@@ -534,7 +563,7 @@ export default function AppointmentSettingsPanel({ draft, onChange, users = [] }
                               </div>
                               <div>
                                 <Label className="text-xs font-semibold">Zona horaria</Label>
-                                <Input value={service.timezone || draft.appointment_timezone || "America/Argentina/Buenos_Aires"} onChange={(event) => updateService(index, { timezone: event.target.value })} className="mt-1 bg-white" />
+                                <AmericaTimezoneSelect value={service.timezone} fallback={generalTimezone || DEFAULT_AMERICA_TIMEZONE} onChange={(timezone) => updateService(index, { timezone })} className="mt-1 bg-white" />
                               </div>
                             </div>
                             <div>
