@@ -1784,11 +1784,16 @@ async def create_billing_checkout(
             else:
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    payer_email_to_send = billing_email
+    if settings.get("access_token", "").startswith("TEST-") and "@testuser.com" not in billing_email and "test_user" not in billing_email:
+        payer_email_to_send = "test_user_buyer@testuser.com"
+
     provider_payload = {
         "reason": f"Latus CRM - Plan {plan['name']}",
         "external_reference": _mercadopago_external_reference(
             user.organization_id, payload.plan_code
         ),
+        "payer_email": payer_email_to_send,
         "auto_recurring": {
             "frequency": 1,
             "frequency_type": "months",
@@ -1798,8 +1803,6 @@ async def create_billing_checkout(
         "back_url": f"{APP_BASE_URL}/suscripcion?checkout=retorno",
         "status": "pending",
     }
-    if not settings.get("access_token", "").startswith("TEST-"):
-        provider_payload["payer_email"] = billing_email
     try:
         preapproval = await _mercadopago_request(
             "POST", "/preapproval", payload=provider_payload
