@@ -2,6 +2,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Respons
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DuplicateKeyError
 import os
 import base64
 import asyncio
@@ -11,6 +12,8 @@ import httpx
 import ssl
 import smtplib
 import hashlib
+import hmac
+import json
 from pathlib import Path
 from dataclasses import replace
 from email.message import EmailMessage
@@ -153,6 +156,10 @@ def _strip_oid(doc: dict | None) -> dict | None:
 _INTERNAL_ORGANIZATION_FIELDS = {
     "internal_notes", "billing_updated_by", "provider_customer_id",
     "provider_subscription_id", "provider_preapproval_id",
+    "provider_plan_code", "provider_status", "provider_last_synced_at",
+    "provider_last_payment_status", "provider_last_payment_at",
+    "provider_last_invoice_modified", "provider_checkout_created_at",
+    "billing_manual_override",
 }
 
 
@@ -507,6 +514,11 @@ class OrganizationUpdate(BaseModel):
 class BillingPlanRequest(BaseModel):
     plan_code: str
     notes: Optional[str] = None
+
+
+class BillingCheckoutRequest(BaseModel):
+    plan_code: str
+    billing_email: Optional[str] = None
 
 
 class PlatformSubscriptionUpdate(BaseModel):
@@ -1231,6 +1243,253 @@ async def update_current_organization(payload: OrganizationUpdate,
 # Plans, subscriptions and platform licenses
 # ---------------------------------------------------------------------------
 
+MERCADOPAGO_API_BASE_URL = "https://api.mercadopago.com"
+
+
+class MercadoPagoAPIError(RuntimeError):
+    def __init__(self, message: str, *, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _mercadopago_settings() -> dict:
+    token = (os.environ.get("MERCADOPAGO_ACCESS_TOKEN") or "").strip()
+    webhook_secret = (os.environ.get("MERCADOPAGO_WEBHOOK_SECRET") or "").strip()
+    return {
+        "access_token": token,
+        "webhook_secret": webhook_secret,
+        "checkout_ready": bool(token and webhook_secret and APP_BASE_URL),
+        "webhook_ready": bool(token and webhook_secret),
+    }
+
+
+def _mercadopago_external_reference(organization_id: str, plan_code: str) -> str:
+    return f"latus:{organization_id}:{plan_code}"
+
+
+def _parse_mercadopago_external_reference(value: Any) -> tuple[Optional[str], Optional[str]]:
+    parts = str(value or "").split(":")
+    if len(parts) != 3 or parts[0] != "latus":
+        return None, None
+    return parts[1] or None, parts[2] or None
+
+
+def _mercadopago_signature_is_valid(
+    signature: str | None,
+    request_id: str | None,
+    data_id: str | None,
+    secret: str,
+) -> bool:
+    """Validate Mercado Pago's HMAC-SHA256 Webhook signature.
+
+    The manifest order and omission rules follow the official Webhooks guide.
+    Replay safety is handled separately through the persisted request id.
+    """
+    if not signature or not secret:
+        return False
+    values: dict[str, str] = {}
+    for part in signature.split(","):
+        key, separator, value = part.strip().partition("=")
+        if separator and key in {"ts", "v1"}:
+            values[key] = value.strip()
+    timestamp = values.get("ts")
+    supplied_hash = values.get("v1")
+    if not timestamp or not supplied_hash:
+        return False
+    manifest = ""
+    if data_id:
+        manifest += f"id:{str(data_id).lower()};"
+    if request_id:
+        manifest += f"request-id:{request_id};"
+    manifest += f"ts:{timestamp};"
+    expected_hash = hmac.new(
+        secret.encode("utf-8"), manifest.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected_hash, supplied_hash)
+
+
+async def _mercadopago_request(
+    method: str,
+    path: str,
+    *,
+    payload: Optional[dict] = None,
+) -> dict:
+    settings = _mercadopago_settings()
+    if not settings["access_token"]:
+        raise MercadoPagoAPIError("Mercado Pago no está configurado")
+    headers = {
+        "Authorization": f"Bearer {settings['access_token']}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            response = await client.request(
+                method,
+                f"{MERCADOPAGO_API_BASE_URL}{path}",
+                headers=headers,
+                json=payload,
+            )
+    except httpx.HTTPError as exc:
+        raise MercadoPagoAPIError("No se pudo conectar con Mercado Pago") from exc
+    if response.status_code >= 400:
+        try:
+            provider_detail = response.json()
+        except ValueError:
+            provider_detail = {}
+        message = (
+            provider_detail.get("message")
+            or provider_detail.get("error")
+            or "Mercado Pago rechazó la operación"
+        )
+        raise MercadoPagoAPIError(str(message), status_code=response.status_code)
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise MercadoPagoAPIError("Mercado Pago devolvió una respuesta inválida") from exc
+
+
+def _billing_grace_end() -> str:
+    try:
+        days = max(1, min(30, int(os.environ.get("BILLING_GRACE_DAYS") or "7")))
+    except ValueError:
+        days = 7
+    return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+
+
+async def _find_organization_for_provider_resource(resource: dict) -> Optional[dict]:
+    preapproval_id = str(resource.get("preapproval_id") or resource.get("id") or "")
+    if preapproval_id:
+        organization = await _raw_collection("organizations").find_one(
+            {"provider_preapproval_id": preapproval_id}, {"_id": 0}
+        )
+        if organization:
+            return organization
+    organization_id, _ = _parse_mercadopago_external_reference(
+        resource.get("external_reference")
+    )
+    if not organization_id:
+        return None
+    return await _raw_collection("organizations").find_one(
+        {"organization_id": organization_id}, {"_id": 0}
+    )
+
+
+async def _apply_mercadopago_preapproval(resource: dict) -> Optional[str]:
+    organization = await _find_organization_for_provider_resource(resource)
+    if not organization:
+        return None
+    provider_id = str(resource.get("id") or "")
+    current_provider_id = str(organization.get("provider_preapproval_id") or "")
+    if current_provider_id and provider_id and current_provider_id != provider_id:
+        return organization["organization_id"]
+    _, referenced_plan = _parse_mercadopago_external_reference(
+        resource.get("external_reference")
+    )
+    plan_code = referenced_plan if referenced_plan in PLAN_CATALOG else organization.get("plan_code")
+    provider_status = str(resource.get("status") or "").lower()
+    manual_override = bool(organization.get("billing_manual_override")) or bool(
+        organization.get("billing_updated_by")
+        and organization.get("license_status") in {"suspended", "expired"}
+    )
+    update: dict[str, Any] = {
+        "provider_preapproval_id": provider_id or current_provider_id or None,
+        "provider_subscription_id": provider_id or current_provider_id or None,
+        "provider_plan_code": plan_code,
+        "provider_status": provider_status or None,
+        "provider_last_synced_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    next_payment_date = resource.get("next_payment_date")
+    if provider_status == "authorized" and not manual_override:
+        update.update({
+            "plan_code": plan_code,
+            "subscription_status": "active",
+            "license_status": "active",
+            "current_period_end": next_payment_date or organization.get("current_period_end"),
+            "grace_ends_at": None,
+            "billing_request_status": "approved",
+            "requested_plan_code": None,
+        })
+    elif provider_status == "paused" and not manual_override:
+        update.update({
+            "subscription_status": "past_due",
+            "license_status": "grace_period",
+            "grace_ends_at": organization.get("grace_ends_at") or _billing_grace_end(),
+        })
+    elif provider_status == "canceled" and not manual_override:
+        update.update({
+            "subscription_status": "canceled",
+            "license_status": "active",
+            "current_period_end": organization.get("current_period_end") or now_iso(),
+        })
+    await _raw_collection("organizations").update_one(
+        {"organization_id": organization["organization_id"]}, {"$set": update}
+    )
+    if provider_status == "authorized" and not manual_override:
+        await _raw_collection("billing_requests").update_many(
+            {"organization_id": organization["organization_id"], "status": "pending"},
+            {"$set": {
+                "status": "approved",
+                "resolved_at": now_iso(),
+                "resolved_by": "mercadopago",
+            }},
+        )
+    return organization["organization_id"]
+
+
+async def _apply_mercadopago_payment(resource: dict) -> Optional[str]:
+    organization = await _find_organization_for_provider_resource(resource)
+    if not organization:
+        return None
+    resource_preapproval_id = str(resource.get("preapproval_id") or "")
+    current_preapproval_id = str(organization.get("provider_preapproval_id") or "")
+    if (
+        resource_preapproval_id and current_preapproval_id
+        and resource_preapproval_id != current_preapproval_id
+    ):
+        return organization["organization_id"]
+    payment = resource.get("payment") if isinstance(resource.get("payment"), dict) else resource
+    payment_status = str(payment.get("status") or resource.get("status") or "").lower()
+    provider_status = str(organization.get("provider_status") or "").lower()
+    manual_override = bool(organization.get("billing_manual_override")) or bool(
+        organization.get("billing_updated_by")
+        and organization.get("license_status") in {"suspended", "expired"}
+    )
+    modified_at = resource.get("last_modified") or resource.get("date_last_updated") or now_iso()
+    previous_modified = _parse_billing_datetime(organization.get("provider_last_invoice_modified"))
+    incoming_modified = _parse_billing_datetime(modified_at)
+    if previous_modified and incoming_modified and incoming_modified < previous_modified:
+        return organization["organization_id"]
+    update: dict[str, Any] = {
+        "provider_last_payment_status": payment_status or None,
+        "provider_last_payment_at": payment.get("date_approved") or modified_at,
+        "provider_last_invoice_modified": modified_at,
+        "provider_last_synced_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    if (
+        payment_status == "approved" and not manual_override
+        and provider_status not in {"paused", "canceled"}
+    ):
+        update.update({
+            "subscription_status": "active",
+            "license_status": "active",
+            "grace_ends_at": None,
+        })
+    elif (
+        payment_status in {"rejected", "cancelled", "cancelled_by_collector"}
+        and not manual_override and provider_status not in {"paused", "canceled"}
+    ):
+        update.update({
+            "subscription_status": "past_due",
+            "license_status": "grace_period",
+            "grace_ends_at": organization.get("grace_ends_at") or _billing_grace_end(),
+        })
+    await _raw_collection("organizations").update_one(
+        {"organization_id": organization["organization_id"]}, {"$set": update}
+    )
+    return organization["organization_id"]
+
 def _public_plan_catalog(*, include_internal: bool = False) -> list[dict]:
     return [
         dict(plan)
@@ -1256,12 +1515,22 @@ async def _subscription_payload(organization_id: str, *, include_internal: bool 
     latest_request = await _raw_collection("billing_requests").find_one(
         {"organization_id": organization_id}, {"_id": 0}, sort=[("created_at", -1)]
     )
+    provider_settings = _mercadopago_settings()
     return {
         "organization": organization if include_internal else _public_organization(organization),
         "plan": dict(plan),
         "access": subscription_access_state(organization),
         "usage": {"users": active_members, "contacts": contacts},
         "latest_request": latest_request,
+        "payment_provider": {
+            "name": "Mercado Pago",
+            "checkout_ready": provider_settings["checkout_ready"],
+            "webhook_ready": provider_settings["webhook_ready"],
+            "status": organization.get("provider_status"),
+            "plan_code": organization.get("provider_plan_code"),
+            "last_synced_at": organization.get("provider_last_synced_at"),
+            "last_payment_status": organization.get("provider_last_payment_status"),
+        },
     }
 
 
@@ -1303,6 +1572,337 @@ async def create_billing_plan_request(
         }},
     )
     return _strip_oid(request_doc)
+
+
+@api_router.post("/billing/checkout")
+async def create_billing_checkout(
+    payload: BillingCheckoutRequest,
+    user: User = Depends(require_perm("settings_admin")),
+):
+    plan = PLAN_CATALOG.get(payload.plan_code)
+    if not plan or not plan.get("is_public", True) or plan["monthly_price_ars"] <= 0:
+        raise HTTPException(status_code=400, detail="El plan seleccionado no está disponible")
+    settings = _mercadopago_settings()
+    if not settings["checkout_ready"]:
+        raise HTTPException(
+            status_code=503,
+            detail="Mercado Pago todavía no está configurado para cobrar en línea",
+        )
+    billing_email = (payload.billing_email or user.email or "").strip().lower()
+    if "@" not in billing_email:
+        raise HTTPException(status_code=400, detail="Ingresá un email de facturación válido")
+    organization = await _raw_collection("organizations").find_one(
+        {"organization_id": user.organization_id}, {"_id": 0}
+    )
+    if not organization:
+        raise HTTPException(status_code=404, detail="Empresa no encontrada")
+    if bool(organization.get("billing_manual_override")) or bool(
+        organization.get("billing_updated_by")
+        and organization.get("license_status") in {"suspended", "expired"}
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="La licencia fue bloqueada por la administración de la plataforma",
+        )
+
+    current_provider_id = organization.get("provider_preapproval_id")
+    current_provider_status = str(organization.get("provider_status") or "").lower()
+    current_provider_plan = organization.get("provider_plan_code")
+
+    async def change_active_plan(provider_id: str, *, reactivate: bool = False) -> dict:
+        provider_update = {
+            "reason": f"Latus CRM - Plan {plan['name']}",
+            "external_reference": _mercadopago_external_reference(
+                user.organization_id, payload.plan_code
+            ),
+            "auto_recurring": {
+                "transaction_amount": plan["monthly_price_ars"],
+                "currency_id": "ARS",
+            },
+        }
+        if reactivate:
+            provider_update["status"] = "authorized"
+        try:
+            provider_result = await _mercadopago_request(
+                "PUT",
+                f"/preapproval/{provider_id}",
+                payload=provider_update,
+            )
+        except MercadoPagoAPIError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        provider_status = str(provider_result.get("status") or "").lower()
+        if provider_status != "authorized":
+            await _apply_mercadopago_preapproval(provider_result)
+            raise HTTPException(
+                status_code=409,
+                detail="Mercado Pago no dejó la suscripción activa; actualizá el estado e intentá nuevamente",
+            )
+        update = {
+            "plan_code": payload.plan_code,
+            "provider_plan_code": payload.plan_code,
+            "provider_status": provider_status,
+            "subscription_status": "active",
+            "license_status": "active",
+            "billing_email": billing_email,
+            "billing_request_status": "approved",
+            "requested_plan_code": None,
+            "provider_last_synced_at": now_iso(),
+            "updated_at": now_iso(),
+        }
+        await _raw_collection("organizations").update_one(
+            {"organization_id": user.organization_id}, {"$set": update}
+        )
+        await _raw_collection("billing_requests").update_many(
+            {"organization_id": user.organization_id, "status": "pending"},
+            {"$set": {
+                "status": "approved",
+                "resolved_at": now_iso(),
+                "resolved_by": user.user_id,
+            }},
+        )
+        await _raw_collection("billing_events").insert_one({
+            "event_id": new_id("billevt"),
+            "organization_id": user.organization_id,
+            "type": "subscription_plan_changed",
+            "provider": "mercadopago",
+            "provider_resource_id": str(provider_id),
+            "plan_code": payload.plan_code,
+            "actor_user_id": user.user_id,
+            "actor_email": user.email,
+            "created_at": now_iso(),
+        })
+        return {
+            "checkout_url": None,
+            "status": update["provider_status"],
+            "plan_updated": True,
+        }
+
+    if current_provider_id and current_provider_status == "authorized":
+        if current_provider_plan == payload.plan_code:
+            return {"checkout_url": None, "status": "authorized", "plan_updated": False}
+        return await change_active_plan(str(current_provider_id))
+    if current_provider_id and current_provider_status == "paused":
+        return await change_active_plan(str(current_provider_id), reactivate=True)
+    if current_provider_id and current_provider_status == "pending":
+        try:
+            existing = await _mercadopago_request("GET", f"/preapproval/{current_provider_id}")
+            existing_status = str(existing.get("status") or "").lower()
+            if existing_status == "authorized":
+                await _apply_mercadopago_preapproval(existing)
+                if current_provider_plan == payload.plan_code:
+                    return {"checkout_url": None, "status": "authorized", "plan_updated": False}
+                return await change_active_plan(str(current_provider_id))
+            if existing_status == "pending" and current_provider_plan == payload.plan_code and existing.get("init_point"):
+                return {
+                    "checkout_url": existing["init_point"],
+                    "status": existing.get("status"),
+                    "reused": True,
+                }
+            await _mercadopago_request(
+                "PUT", f"/preapproval/{current_provider_id}", payload={"status": "canceled"}
+            )
+        except MercadoPagoAPIError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    provider_payload = {
+        "reason": f"Latus CRM - Plan {plan['name']}",
+        "external_reference": _mercadopago_external_reference(
+            user.organization_id, payload.plan_code
+        ),
+        "payer_email": billing_email,
+        "auto_recurring": {
+            "frequency": 1,
+            "frequency_type": "months",
+            "transaction_amount": plan["monthly_price_ars"],
+            "currency_id": "ARS",
+        },
+        "back_url": f"{APP_BASE_URL}/suscripcion?checkout=retorno",
+        "status": "pending",
+    }
+    try:
+        preapproval = await _mercadopago_request(
+            "POST", "/preapproval", payload=provider_payload
+        )
+    except MercadoPagoAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if not preapproval.get("id") or not preapproval.get("init_point"):
+        raise HTTPException(status_code=502, detail="Mercado Pago no devolvió el enlace de pago")
+    update = {
+        "billing_email": billing_email,
+        "requested_plan_code": payload.plan_code,
+        "billing_request_status": "checkout_created",
+        "provider_preapproval_id": str(preapproval["id"]),
+        "provider_subscription_id": str(preapproval["id"]),
+        "provider_plan_code": payload.plan_code,
+        "provider_status": str(preapproval.get("status") or "pending").lower(),
+        "provider_checkout_created_at": now_iso(),
+        "provider_last_synced_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await _raw_collection("organizations").update_one(
+        {"organization_id": user.organization_id}, {"$set": update}
+    )
+    await _raw_collection("billing_events").insert_one({
+        "event_id": new_id("billevt"),
+        "organization_id": user.organization_id,
+        "type": "checkout_created",
+        "provider": "mercadopago",
+        "provider_resource_id": str(preapproval["id"]),
+        "plan_code": payload.plan_code,
+        "actor_user_id": user.user_id,
+        "actor_email": user.email,
+        "created_at": now_iso(),
+    })
+    return {
+        "checkout_url": preapproval["init_point"],
+        "status": preapproval.get("status"),
+        "reused": False,
+    }
+
+
+@api_router.post("/billing/reconcile")
+async def reconcile_billing_subscription(
+    user: User = Depends(require_perm("settings_admin")),
+):
+    organization = await _raw_collection("organizations").find_one(
+        {"organization_id": user.organization_id}, {"_id": 0}
+    )
+    provider_id = organization.get("provider_preapproval_id") if organization else None
+    if not provider_id:
+        raise HTTPException(status_code=400, detail="Todavía no hay una suscripción para actualizar")
+    try:
+        preapproval = await _mercadopago_request("GET", f"/preapproval/{provider_id}")
+    except MercadoPagoAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    await _apply_mercadopago_preapproval(preapproval)
+    await _raw_collection("billing_events").insert_one({
+        "event_id": new_id("billevt"),
+        "organization_id": user.organization_id,
+        "type": "subscription_reconciled",
+        "provider": "mercadopago",
+        "provider_resource_id": str(provider_id),
+        "actor_user_id": user.user_id,
+        "created_at": now_iso(),
+    })
+    return await _subscription_payload(user.organization_id)
+
+
+@api_router.post("/billing/cancel")
+async def cancel_billing_subscription(
+    user: User = Depends(require_perm("settings_admin")),
+):
+    organization = await _raw_collection("organizations").find_one(
+        {"organization_id": user.organization_id}, {"_id": 0}
+    )
+    provider_id = organization.get("provider_preapproval_id") if organization else None
+    if not provider_id:
+        raise HTTPException(status_code=400, detail="No hay una suscripción para cancelar")
+    if str(organization.get("provider_status") or "").lower() == "canceled":
+        return await _subscription_payload(user.organization_id)
+    try:
+        provider_result = await _mercadopago_request(
+            "PUT", f"/preapproval/{provider_id}", payload={"status": "canceled"}
+        )
+    except MercadoPagoAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    provider_result.setdefault("id", str(provider_id))
+    provider_result.setdefault("status", "canceled")
+    if str(provider_result.get("status") or "").lower() != "canceled":
+        raise HTTPException(
+            status_code=409,
+            detail="Mercado Pago todavía no confirmó la cancelación",
+        )
+    await _apply_mercadopago_preapproval(provider_result)
+    await _raw_collection("billing_events").insert_one({
+        "event_id": new_id("billevt"),
+        "organization_id": user.organization_id,
+        "type": "subscription_canceled_by_customer",
+        "provider": "mercadopago",
+        "provider_resource_id": str(provider_id),
+        "actor_user_id": user.user_id,
+        "actor_email": user.email,
+        "created_at": now_iso(),
+    })
+    return await _subscription_payload(user.organization_id)
+
+
+@api_router.post("/webhooks/mercadopago")
+async def mercadopago_webhook(request: Request):
+    settings = _mercadopago_settings()
+    if not settings["webhook_ready"]:
+        raise HTTPException(status_code=503, detail="Webhook de Mercado Pago no configurado")
+    raw_body = await request.body()
+    try:
+        body = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="Notificación inválida")
+    query_data_id = request.query_params.get("data.id")
+    request_id = request.headers.get("x-request-id")
+    if not _mercadopago_signature_is_valid(
+        request.headers.get("x-signature"),
+        request_id,
+        query_data_id,
+        settings["webhook_secret"],
+    ):
+        raise HTTPException(status_code=401, detail="Firma de Mercado Pago inválida")
+    event_type = str(request.query_params.get("type") or body.get("type") or "")
+    body_data = body.get("data") if isinstance(body.get("data"), dict) else {}
+    data_id = str(query_data_id or body_data.get("id") or "")
+    if not data_id:
+        raise HTTPException(status_code=400, detail="La notificación no incluye un recurso")
+    event_key = request_id or hashlib.sha256(
+        request.headers.get("x-signature", "").encode("utf-8") + raw_body
+    ).hexdigest()
+    existing = await _raw_collection("billing_events").find_one(
+        {"provider_event_id": event_key}, {"_id": 0}
+    )
+    if existing:
+        return {"ok": True, "duplicate": True}
+
+    try:
+        organization_id: Optional[str] = None
+        if event_type == "subscription_preapproval":
+            resource = await _mercadopago_request("GET", f"/preapproval/{data_id}")
+            organization_id = await _apply_mercadopago_preapproval(resource)
+        elif event_type == "subscription_authorized_payment":
+            resource = await _mercadopago_request("GET", f"/authorized_payments/{data_id}")
+            preapproval_id = resource.get("preapproval_id")
+            if preapproval_id:
+                preapproval = await _mercadopago_request(
+                    "GET", f"/preapproval/{preapproval_id}"
+                )
+                organization_id = await _apply_mercadopago_preapproval(preapproval)
+            organization_id = await _apply_mercadopago_payment(resource) or organization_id
+        elif event_type == "payment":
+            resource = await _mercadopago_request("GET", f"/v1/payments/{data_id}")
+            transaction_data = (
+                resource.get("point_of_interaction", {}).get("transaction_data", {})
+                if isinstance(resource.get("point_of_interaction"), dict)
+                else {}
+            )
+            preapproval_id = transaction_data.get("subscription_id")
+            if preapproval_id:
+                resource["preapproval_id"] = preapproval_id
+            organization_id = await _apply_mercadopago_payment(resource)
+        else:
+            return {"ok": True, "ignored": True}
+    except MercadoPagoAPIError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    try:
+        await _raw_collection("billing_events").insert_one({
+            "event_id": new_id("billevt"),
+            "organization_id": organization_id,
+            "type": "provider_webhook_processed",
+            "provider": "mercadopago",
+            "provider_event_id": event_key,
+            "provider_event_type": event_type,
+            "provider_resource_id": data_id,
+            "created_at": now_iso(),
+        })
+    except DuplicateKeyError:
+        return {"ok": True, "duplicate": True}
+    return {"ok": True, "matched": bool(organization_id)}
 
 
 @api_router.get("/platform/organizations")
@@ -1366,6 +1966,16 @@ async def platform_update_subscription(
     if update.get("subscription_status") == "active":
         update["billing_request_status"] = "approved"
         update["requested_plan_code"] = None
+    if (
+        update.get("subscription_status") == "suspended"
+        or update.get("license_status") in {"suspended", "expired"}
+    ):
+        update["billing_manual_override"] = True
+    elif (
+        update.get("subscription_status") == "active"
+        and update.get("license_status") == "active"
+    ):
+        update["billing_manual_override"] = False
     update.update({
         "updated_at": now_iso(),
         "billing_updated_by": platform_admin.user_id,
@@ -6005,7 +6615,7 @@ async def _migrate_promote_first_google_admin() -> None:
 
 
 async def _ensure_indexes() -> None:
-    """Idempotently create indexes needed by WhatsApp idempotency."""
+    """Idempotently create indexes needed by integrations and tenancy."""
     try:
         # Replace legacy global uniqueness with tenant-local uniqueness.
         for collection_name, index_name in (
@@ -6037,6 +6647,14 @@ async def _ensure_indexes() -> None:
         await _raw_collection("billing_events").create_index(
             [("organization_id", 1), ("created_at", -1)],
             name="ix_billing_events_org_created",
+        )
+        await _raw_collection("billing_events").create_index(
+            "provider_event_id", unique=True, sparse=True,
+            name="ux_billing_provider_event",
+        )
+        await _raw_collection("organizations").create_index(
+            "provider_preapproval_id", unique=True, sparse=True,
+            name="ux_organizations_provider_preapproval",
         )
         await _raw_collection("user_sessions").create_index(
             [("user_id", 1), ("organization_id", 1)], name="ix_sessions_user_org",
@@ -6484,6 +7102,7 @@ _WRITE_EXEMPT_PATHS = {
     "/api/auth/password/change",  # users (incl. viewer) can change own password
     "/api/auth/password/forgot", "/api/auth/password/reset",
     "/api/webhooks/whatsapp",     # external, no logged user
+    "/api/webhooks/mercadopago",  # external, HMAC-authenticated
 }
 
 

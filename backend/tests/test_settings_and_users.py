@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import importlib
 import os
 import sys
@@ -385,6 +387,164 @@ class TestBillingFoundation:
         assert billing_still_available.status_code == 200
         assert "internal_notes" not in billing_still_available.json()["organization"]
         assert "internal_notes" not in client.get("/api/organizations/current", headers=_h()).json()
+
+    def test_mercadopago_checkout_creates_pending_preapproval(self, srv, monkeypatch):
+        server, fake, client = srv
+        monkeypatch.setenv("MERCADOPAGO_ACCESS_TOKEN", "TEST-token")
+        monkeypatch.setenv("MERCADOPAGO_WEBHOOK_SECRET", "TEST-secret")
+        monkeypatch.setattr(server, "APP_BASE_URL", "https://crm.example.com")
+        calls = []
+
+        async def provider_request(method, path, *, payload=None):
+            calls.append((method, path, payload))
+            return {
+                "id": "mp-sub-1",
+                "status": "pending",
+                "init_point": "https://mercadopago.example/checkout/mp-sub-1",
+            }
+
+        monkeypatch.setattr(server, "_mercadopago_request", provider_request)
+        response = client.post(
+            "/api/billing/checkout",
+            headers=_h(),
+            json={"plan_code": "growth", "billing_email": "pagos@empresa.com"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["checkout_url"].startswith("https://mercadopago.example/")
+        assert calls[0][0:2] == ("POST", "/preapproval")
+        assert calls[0][2]["status"] == "pending"
+        assert calls[0][2]["auto_recurring"]["currency_id"] == "ARS"
+        organization = fake.organizations.docs[0]
+        assert organization["provider_preapproval_id"] == "mp-sub-1"
+        assert organization["provider_plan_code"] == "growth"
+
+    def test_mercadopago_webhook_validates_and_activates_license(self, srv, monkeypatch):
+        server, fake, client = srv
+        secret = "webhook-secret"
+        monkeypatch.setenv("MERCADOPAGO_ACCESS_TOKEN", "TEST-token")
+        monkeypatch.setenv("MERCADOPAGO_WEBHOOK_SECRET", secret)
+
+        current = client.get("/api/organizations/current", headers=_h()).json()
+        _run(fake.organizations.update_one(
+            {"organization_id": current["organization_id"]},
+            {"$set": {
+                "provider_preapproval_id": "mp-sub-1",
+                "provider_plan_code": "growth",
+                "provider_status": "pending",
+            }},
+        ))
+        provider_calls = []
+
+        async def provider_request(method, path, *, payload=None):
+            provider_calls.append((method, path))
+            return {
+                "id": "mp-sub-1",
+                "status": "authorized",
+                "external_reference": f"latus:{current['organization_id']}:growth",
+                "next_payment_date": "2099-02-01T00:00:00Z",
+            }
+
+        monkeypatch.setattr(server, "_mercadopago_request", provider_request)
+        request_id = "request-1"
+        timestamp = "1704908010"
+        manifest = f"id:mp-sub-1;request-id:{request_id};ts:{timestamp};"
+        digest = hmac.new(
+            secret.encode(), manifest.encode(), hashlib.sha256
+        ).hexdigest()
+        headers = {
+            "x-request-id": request_id,
+            "x-signature": f"ts={timestamp},v1={digest}",
+        }
+        url = "/api/webhooks/mercadopago?type=subscription_preapproval&data.id=mp-sub-1"
+        first = client.post(url, headers=headers, json={
+            "type": "subscription_preapproval", "data": {"id": "mp-sub-1"},
+        })
+        assert first.status_code == 200, first.text
+        organization = fake.organizations.docs[0]
+        assert organization["subscription_status"] == "active"
+        assert organization["license_status"] == "active"
+        assert organization["plan_code"] == "growth"
+
+        duplicate = client.post(url, headers=headers, json={
+            "type": "subscription_preapproval", "data": {"id": "mp-sub-1"},
+        })
+        assert duplicate.status_code == 200
+        assert duplicate.json()["duplicate"] is True
+        assert provider_calls == [("GET", "/preapproval/mp-sub-1")]
+
+    def test_active_subscription_changes_plan_without_duplicate_checkout(self, srv, monkeypatch):
+        server, fake, client = srv
+        monkeypatch.setenv("MERCADOPAGO_ACCESS_TOKEN", "TEST-token")
+        monkeypatch.setenv("MERCADOPAGO_WEBHOOK_SECRET", "TEST-secret")
+        monkeypatch.setattr(server, "APP_BASE_URL", "https://crm.example.com")
+        current = client.get("/api/organizations/current", headers=_h()).json()
+        _run(fake.organizations.update_one(
+            {"organization_id": current["organization_id"]},
+            {"$set": {
+                "provider_preapproval_id": "mp-active-1",
+                "provider_plan_code": "starter",
+                "provider_status": "authorized",
+                "subscription_status": "active",
+                "license_status": "active",
+            }},
+        ))
+        calls = []
+
+        async def provider_request(method, path, *, payload=None):
+            calls.append((method, path, payload))
+            return {"id": "mp-active-1", "status": "authorized"}
+
+        monkeypatch.setattr(server, "_mercadopago_request", provider_request)
+        response = client.post(
+            "/api/billing/checkout", headers=_h(),
+            json={"plan_code": "scale", "billing_email": "pagos@empresa.com"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["checkout_url"] is None
+        assert response.json()["plan_updated"] is True
+        assert len(calls) == 1
+        assert calls[0][0:2] == ("PUT", "/preapproval/mp-active-1")
+        assert calls[0][2]["auto_recurring"]["transaction_amount"] == 185000
+        assert fake.organizations.docs[0]["plan_code"] == "scale"
+
+    def test_mercadopago_webhook_rejects_invalid_signature(self, srv, monkeypatch):
+        server, _, client = srv
+        monkeypatch.setenv("MERCADOPAGO_ACCESS_TOKEN", "TEST-token")
+        monkeypatch.setenv("MERCADOPAGO_WEBHOOK_SECRET", "webhook-secret")
+        response = client.post(
+            "/api/webhooks/mercadopago?type=subscription_preapproval&data.id=mp-sub-1",
+            headers={"x-request-id": "bad", "x-signature": "ts=1,v1=invalid"},
+            json={"type": "subscription_preapproval", "data": {"id": "mp-sub-1"}},
+        )
+        assert response.status_code == 401
+
+    def test_customer_can_cancel_automatic_renewal(self, srv, monkeypatch):
+        server, fake, client = srv
+        monkeypatch.setenv("MERCADOPAGO_ACCESS_TOKEN", "TEST-token")
+        current = client.get("/api/organizations/current", headers=_h()).json()
+        _run(fake.organizations.update_one(
+            {"organization_id": current["organization_id"]},
+            {"$set": {
+                "provider_preapproval_id": "mp-active-1",
+                "provider_plan_code": "starter",
+                "provider_status": "authorized",
+                "subscription_status": "active",
+                "license_status": "active",
+                "current_period_end": "2099-02-01T00:00:00+00:00",
+            }},
+        ))
+
+        async def provider_request(method, path, *, payload=None):
+            assert (method, path, payload) == (
+                "PUT", "/preapproval/mp-active-1", {"status": "canceled"}
+            )
+            return {"id": "mp-active-1", "status": "canceled"}
+
+        monkeypatch.setattr(server, "_mercadopago_request", provider_request)
+        response = client.post("/api/billing/cancel", headers=_h())
+        assert response.status_code == 200, response.text
+        assert response.json()["organization"]["subscription_status"] == "canceled"
+        assert response.json()["access"]["allowed"] is True
 
 
 # ====================================================================

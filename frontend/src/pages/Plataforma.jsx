@@ -19,6 +19,10 @@ const LICENSE_LABELS = {
   not_configured: "Sin configurar", active: "Activa", grace_period: "Período de gracia",
   suspended: "Suspendida", expired: "Vencida",
 };
+const PROVIDER_LABELS = {
+  pending: "Esperando adhesión", authorized: "Cobro autorizado",
+  paused: "Pausada", canceled: "Cancelada",
+};
 
 const inputClass = "mt-1.5 h-10 w-full rounded-lg border border-latus-warm-border bg-white px-3 text-sm text-latus-ink outline-none focus:border-latus-blue focus:ring-2 focus:ring-latus-blue/10";
 
@@ -138,14 +142,15 @@ export default function Plataforma() {
             <div className="grid min-h-[260px] place-items-center"><div className="h-9 w-9 animate-spin rounded-full border-2 border-latus-blue border-t-transparent" /></div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] text-left">
-                <thead className="bg-latus-cream text-[11px] font-extrabold uppercase tracking-[0.12em] text-latus-muted"><tr><th className="px-5 py-3.5">Empresa</th><th className="px-4 py-3.5">Plan</th><th className="px-4 py-3.5">Suscripción</th><th className="px-4 py-3.5">Licencia</th><th className="px-4 py-3.5">Uso</th><th className="px-4 py-3.5">Acceso</th><th className="px-5 py-3.5 text-right">Acciones</th></tr></thead>
+              <table className="w-full min-w-[1120px] text-left">
+                <thead className="bg-latus-cream text-[11px] font-extrabold uppercase tracking-[0.12em] text-latus-muted"><tr><th className="px-5 py-3.5">Empresa</th><th className="px-4 py-3.5">Plan</th><th className="px-4 py-3.5">Suscripción</th><th className="px-4 py-3.5">Mercado Pago</th><th className="px-4 py-3.5">Licencia</th><th className="px-4 py-3.5">Uso</th><th className="px-4 py-3.5">Acceso</th><th className="px-5 py-3.5 text-right">Acciones</th></tr></thead>
                 <tbody className="divide-y divide-latus-warm-border">
                   {filtered.map((organization) => (
                     <tr key={organization.organization_id} className="hover:bg-latus-cream/50">
                       <td className="px-5 py-4"><p className="font-extrabold text-latus-ink">{organization.name}</p><p className="mt-1 font-mono text-[11px] text-latus-muted">{organization.organization_id}</p>{organization.latest_request?.status === "pending" && <p className="mt-2 text-xs font-bold text-amber-700">Solicitó {PLAN_NAMES[organization.latest_request.plan_code]}</p>}</td>
                       <td className="px-4 py-4 text-sm font-bold text-latus-ink">{PLAN_NAMES[organization.plan_code] || organization.plan_code}</td>
                       <td className="px-4 py-4 text-sm text-latus-muted">{SUBSCRIPTION_LABELS[organization.subscription_status] || organization.subscription_status}</td>
+                      <td className="px-4 py-4 text-sm text-latus-muted">{PROVIDER_LABELS[organization.provider_status] || (organization.provider_status ? organization.provider_status : "Sin vincular")}</td>
                       <td className="px-4 py-4 text-sm text-latus-muted">{LICENSE_LABELS[organization.license_status] || organization.license_status}</td>
                       <td className="px-4 py-4"><p className="flex items-center gap-1.5 text-sm font-bold text-latus-ink"><Users className="h-3.5 w-3.5 text-latus-blue" />{organization.active_users} usuarios</p><p className="mt-1 text-xs text-latus-muted">{organization.contacts} clientes</p></td>
                       <td className="px-4 py-4"><span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-extrabold ${statusTone(organization.access?.allowed)}`}>{organization.access?.allowed ? "Habilitado" : "Bloqueado"}</span></td>

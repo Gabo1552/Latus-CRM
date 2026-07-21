@@ -48,10 +48,27 @@ Recomendamos **Railway** para el backend porque maneja procesos de larga duraci�
    | `LATUS_SEED_DEMO` | `true` (Ponelo en `true` solo en el primer despliegue para precargar leads y pipeline demo. Luego cambialo a `false` o eliminalo). |
    | `LATUS_LLM_KEY` | Clave del sistema universal o clave API de tu proveedor (OpenAI, Anthropic). |
    | `PLATFORM_ADMIN_EMAILS` | Emails, separados por coma, que podrán administrar planes y licencias de todas las empresas. |
+   | `APP_BASE_URL` | URL pública del frontend en Vercel, sin barra final. Se usa para volver al CRM luego de pagar. |
+   | `PUBLIC_BASE_URL` | URL pública del backend en Railway, sin barra final. |
+   | `MERCADOPAGO_ACCESS_TOKEN` | Credencial privada de producción de la aplicación de Mercado Pago. Nunca debe cargarse en Vercel. |
+   | `MERCADOPAGO_WEBHOOK_SECRET` | Firma secreta generada al configurar Webhooks en Mercado Pago. |
+   | `BILLING_GRACE_DAYS` | Días de acceso de gracia tras un cobro rechazado. Valor recomendado: `7`. |
 
 5. **Generar el Dominio Público**:
    - Ve a **Settings** > **Domains** > **Generate Domain** (o asocia tu propio dominio).
    - Copia la URL generada (ej. `https://latus-crm-production.up.railway.app`). Esta URL será tu `REACT_APP_BACKEND_URL` en el frontend.
+
+### Configurar Mercado Pago para suscripciones
+
+1. En **Mercado Pago Developers > Tus integraciones**, crea o abre la aplicación de Latus CRM.
+2. Copia el **Access Token de producción** a `MERCADOPAGO_ACCESS_TOKEN` en Railway.
+3. En **Webhooks**, configura como URL de producción:
+   `https://TU-BACKEND.up.railway.app/api/webhooks/mercadopago`
+4. Activa los eventos **Pagos**, **Suscripciones vinculadas** (`subscription_preapproval`) y **Pagos autorizados de suscripciones** (`subscription_authorized_payment`).
+5. Guarda la configuración y copia la firma secreta generada a `MERCADOPAGO_WEBHOOK_SECRET` en Railway.
+6. Reinicia el servicio y verifica en **Suscripción** que se muestre “Mercado Pago conectado”.
+
+El CRM nunca recibe ni almacena los datos de tarjeta. El comprador completa la adhesión en Mercado Pago y el backend consulta el recurso oficial antes de habilitar o suspender la licencia.
 
 ---
 
