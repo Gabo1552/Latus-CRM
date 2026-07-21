@@ -182,6 +182,61 @@ def _h(token="T-ADMIN"):
 
 
 # ====================================================================
+# Environment isolation
+# ====================================================================
+class TestEnvironmentGuardrails:
+    @staticmethod
+    def _configure_staging(monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "staging")
+        monkeypatch.setenv("MONGO_URL", "mongodb://example.test")
+        monkeypatch.setenv("DB_NAME", "latus-crm-staging")
+        monkeypatch.setenv("APP_BASE_URL", "https://crm-staging.example.com")
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://api-staging.example.com")
+        monkeypatch.setenv("CORS_ORIGINS", "https://crm-staging.example.com")
+        monkeypatch.setenv("MERCADOPAGO_ACCESS_TOKEN", "APP_USR-test-seller")
+        monkeypatch.setenv("MERCADOPAGO_MODE", "test")
+
+    def test_valid_staging_configuration_is_accepted(self, srv, monkeypatch):
+        server, _, _ = srv
+        self._configure_staging(monkeypatch)
+        server.validate_environment_guardrails()
+
+    def test_production_rejects_test_payment_credentials(self, srv, monkeypatch):
+        server, _, _ = srv
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("MONGO_URL", "mongodb://example.test")
+        monkeypatch.setenv("DB_NAME", "latus-crm-production")
+        monkeypatch.setenv("APP_BASE_URL", "https://crm.example.com")
+        monkeypatch.setenv("PUBLIC_BASE_URL", "https://api.example.com")
+        monkeypatch.setenv("CORS_ORIGINS", "https://crm.example.com")
+        monkeypatch.setenv("MERCADOPAGO_ACCESS_TOKEN", "TEST-secret")
+        monkeypatch.setenv("MERCADOPAGO_MODE", "production")
+        with pytest.raises(RuntimeError, match="credenciales de prueba"):
+            server.validate_environment_guardrails()
+
+    def test_staging_rejects_production_database(self, srv, monkeypatch):
+        server, _, _ = srv
+        self._configure_staging(monkeypatch)
+        monkeypatch.setenv("DB_NAME", "latus-crm-production")
+        with pytest.raises(RuntimeError, match="base de datos de producción"):
+            server.validate_environment_guardrails()
+
+    def test_deployed_environment_rejects_wildcard_cors(self, srv, monkeypatch):
+        server, _, _ = srv
+        self._configure_staging(monkeypatch)
+        monkeypatch.setenv("CORS_ORIGINS", "*")
+        with pytest.raises(RuntimeError, match="HTTPS|CORS_ORIGINS"):
+            server.validate_environment_guardrails()
+
+    def test_frontend_url_must_be_explicitly_allowed(self, srv, monkeypatch):
+        server, _, _ = srv
+        self._configure_staging(monkeypatch)
+        monkeypatch.setenv("CORS_ORIGINS", "https://otro.example.com")
+        with pytest.raises(RuntimeError, match="APP_BASE_URL"):
+            server.validate_environment_guardrails()
+
+
+# ====================================================================
 # Users CRUD
 # ====================================================================
 class TestUsersCRUD:
@@ -411,9 +466,10 @@ class TestBillingFoundation:
         )
         assert response.status_code == 200, response.text
         assert response.json()["checkout_url"].startswith("https://mercadopago.example/")
-        assert calls[0][0:2] == ("POST", "/preapproval")
-        assert calls[0][2]["status"] == "pending"
-        assert calls[0][2]["auto_recurring"]["currency_id"] == "ARS"
+        preapproval_call = next(call for call in calls if call[1] == "/preapproval")
+        assert preapproval_call[0] == "POST"
+        assert preapproval_call[2]["status"] == "pending"
+        assert preapproval_call[2]["auto_recurring"]["currency_id"] == "ARS"
         organization = fake.organizations.docs[0]
         assert organization["provider_preapproval_id"] == "mp-sub-1"
         assert organization["provider_plan_code"] == "growth"

@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Literal, Any
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
+from urllib.parse import urlparse
 
 from utils.tenancy import (
     COMPOSITE_ID_COLLECTIONS,
@@ -61,19 +62,97 @@ load_dotenv(ROOT_DIR / '.env')
 # Instead we expose lazy proxies that resolve the env on first ``await`` and
 # fail with a clear, loggable error — but never block ``import server``.
 
-def validate_environment_guardrails():
-    """
-    Validates environment configuration to prevent cross-contamination between Staging & Production.
-    - ENVIRONMENT: 'development', 'staging', or 'production'
-    - Production Guardrails:
-        1. ENVIRONMENT=production requires MERCADOPAGO_ACCESS_TOKEN NOT starting with 'TEST-'
-        2. ENVIRONMENT=production requires DB_NAME NOT containing 'staging' or 'test'
-    - Staging Guardrails:
-        1. ENVIRONMENT=staging warns/prevents production DB names from being used
-    """
-    env = (os.environ.get("ENVIRONMENT") or os.environ.get("NODE_ENV") or "development").strip().lower()
+VALID_ENVIRONMENTS = {"development", "staging", "production"}
+
+
+def _environment_name() -> str:
+    return (
+        os.environ.get("ENVIRONMENT")
+        or os.environ.get("NODE_ENV")
+        or "development"
+    ).strip().lower()
+
+
+def _split_cors_origins(raw_value: Optional[str] = None) -> list[str]:
+    raw = os.environ.get("CORS_ORIGINS", "") if raw_value is None else raw_value
+    return list(dict.fromkeys(
+        origin.strip().rstrip("/")
+        for origin in raw.split(",")
+        if origin.strip()
+    ))
+
+
+def _is_secure_public_origin(value: str) -> bool:
+    parsed = urlparse(value)
+    return bool(
+        parsed.scheme == "https"
+        and parsed.netloc
+        and not parsed.username
+        and not parsed.password
+        and parsed.path in {"", "/"}
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+        and "*" not in parsed.netloc
+    )
+
+
+def validate_environment_guardrails() -> None:
+    """Fail fast when staging and production configuration can overlap."""
+    env = _environment_name()
     db_name = (os.environ.get("DB_NAME") or "").strip().lower()
     mp_token = (os.environ.get("MERCADOPAGO_ACCESS_TOKEN") or "").strip()
+    mp_mode = (os.environ.get("MERCADOPAGO_MODE") or "").strip().lower()
+    app_base_url = (os.environ.get("APP_BASE_URL") or "").strip().rstrip("/")
+    public_base_url = (os.environ.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    cors_origins = _split_cors_origins()
+
+    if env not in VALID_ENVIRONMENTS:
+        raise RuntimeError(
+            "ENVIRONMENT debe ser development, staging o production"
+        )
+
+    if env == "development":
+        return
+
+    missing = [
+        name for name, value in {
+            "MONGO_URL": (os.environ.get("MONGO_URL") or "").strip(),
+            "DB_NAME": db_name,
+            "APP_BASE_URL": app_base_url,
+            "PUBLIC_BASE_URL": public_base_url,
+            "CORS_ORIGINS": ",".join(cors_origins),
+        }.items() if not value
+    ]
+    if missing:
+        raise RuntimeError(
+            "[GUARDRAIL DE SEGURIDAD] Faltan variables obligatorias para "
+            f"{env}: {', '.join(missing)}"
+        )
+
+    if any("*" in origin for origin in cors_origins):
+        raise RuntimeError(
+            "[GUARDRAIL DE SEGURIDAD] CORS_ORIGINS no puede contener comodines fuera de desarrollo"
+        )
+
+    urls = {
+        "APP_BASE_URL": app_base_url,
+        "PUBLIC_BASE_URL": public_base_url,
+        **{f"CORS_ORIGINS[{index}]": origin for index, origin in enumerate(cors_origins)},
+    }
+    invalid_urls = [
+        name for name, value in urls.items()
+        if not _is_secure_public_origin(value)
+    ]
+    if invalid_urls:
+        raise RuntimeError(
+            "[GUARDRAIL DE SEGURIDAD] Staging y producción requieren HTTPS en: "
+            + ", ".join(invalid_urls)
+        )
+    if app_base_url not in cors_origins:
+        raise RuntimeError(
+            "[GUARDRAIL DE SEGURIDAD] APP_BASE_URL debe estar incluido exactamente en CORS_ORIGINS"
+        )
 
     if env == "production":
         if "staging" in db_name or "test" in db_name:
@@ -86,11 +165,23 @@ def validate_environment_guardrails():
                 "[GUARDRAIL DE SEGURIDAD] Producción no puede iniciarse usando credenciales de prueba de Mercado Pago ('TEST-...'). "
                 "Definí tu MERCADOPAGO_ACCESS_TOKEN de producción ('APP_USR-...') en las variables de Railway de Producción."
             )
+        if mp_token and mp_mode != "production":
+            raise RuntimeError(
+                "[GUARDRAIL DE SEGURIDAD] Producción requiere MERCADOPAGO_MODE=production"
+            )
+        if "staging" in app_base_url or "staging" in public_base_url:
+            raise RuntimeError(
+                "[GUARDRAIL DE SEGURIDAD] Producción no puede usar URLs de Staging"
+            )
     elif env == "staging":
         if db_name and "production" in db_name:
             raise RuntimeError(
                 f"[GUARDRAIL DE SEGURIDAD] Staging no puede iniciarse usando la base de datos de producción '{db_name}'. "
                 "Definí DB_NAME=latus-crm-staging en las variables de Railway de Staging."
+            )
+        if mp_token and mp_mode != "test":
+            raise RuntimeError(
+                "[GUARDRAIL DE SEGURIDAD] Staging requiere MERCADOPAGO_MODE=test"
             )
 
 
@@ -6647,12 +6738,13 @@ async def _bootstrap_tenant_data() -> None:
 
 @app.on_event("startup")
 async def on_startup():
-    """Best-effort, non-blocking startup.
+    """Validate safety synchronously, then start background initialization.
 
-    NEVER crash the process, NEVER block the event loop for more than a few
-    milliseconds. Heavy / DB-touching work is scheduled as background tasks
-    so ``/api/health`` is responsive immediately for K8s liveness probes.
+    Environment guardrails intentionally stop an unsafe deployment. Heavy
+    DB-touching work remains non-blocking after validation succeeds.
     """
+    validate_environment_guardrails()
+
     async def _bg_step(step_name: str, coro):
         try:
             await coro
@@ -6680,7 +6772,12 @@ APP_VERSION = os.environ.get("APP_VERSION", "dev")
 @api_router.get("/health")
 async def health():
     """Cheap liveness probe. Always 200; no auth; no DB query."""
-    return {"ok": True, "version": APP_VERSION, "app": "latus-crm"}
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "app": "latus-crm",
+        "environment": _environment_name(),
+    }
 
 
 @api_router.get("/health/ready")
@@ -7285,22 +7382,22 @@ async def block_viewer_on_writes(request: Request, call_next):
     return await call_next(request)
 
 
-origins = [
+development_origins = [
     "http://localhost:3000",
     "http://localhost:5173",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:5173"
 ]
-raw_origins = os.environ.get('CORS_ORIGINS', '')
-if raw_origins:
-    extra = [o.strip().rstrip('/') for o in raw_origins.split(',') if o.strip()]
-    origins.extend(extra)
+configured_origins = _split_cors_origins()
+origins = list(dict.fromkeys(
+    (development_origins if _environment_name() == "development" else [])
+    + configured_origins
+))
 
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
     allow_origins=origins,
-    allow_origin_regex=r"https://.*\.vercel\.app|https://.*\.somoslatus\.com|https://somoslatus\.com",
     allow_methods=["*"],
     allow_headers=["*"],
 )
