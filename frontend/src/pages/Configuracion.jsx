@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Navigate } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -1418,6 +1418,11 @@ function AIAutoTab() {
   });
   const [draft, setDraft] = useState(null);
   const [pendingKeys, setPendingKeys] = useState({});
+  const catalogQ = useQuery({
+    queryKey: ["platform-ai-models", draft?.provider],
+    queryFn: () => api.get(`/platform/ai-models/${draft.provider}`).then((r) => r.data),
+    enabled: !!draft?.provider,
+  });
   useEffect(() => {
     if (q.data && draft === null) {
       setDraft({ ...q.data });
@@ -1446,13 +1451,49 @@ function AIAutoTab() {
     onError: (e) => toast.error(e?.response?.data?.detail || "Error al probar la conexión"),
   });
 
+  const syncModels = useMutation({
+    mutationFn: async () => {
+      const pendingKey = pendingKeys[draft.provider];
+      let settings = null;
+      if (typeof pendingKey === "string" && pendingKey.trim()) {
+        settings = (await api.put("/platform/ai-settings", {
+          api_keys: { [draft.provider]: pendingKey.trim() },
+        })).data;
+      }
+      const catalog = await api.post(`/platform/ai-models/${draft.provider}/sync`, {
+        base_url: draft.base_url || "",
+      }).then((r) => r.data);
+      return { catalog, settings };
+    },
+    onSuccess: ({ settings }) => {
+      if (settings?.keys_status) {
+        setDraft((current) => ({ ...current, keys_status: settings.keys_status }));
+      }
+      setPendingKeys((current) => {
+        const next = { ...current };
+        delete next[draft.provider];
+        return next;
+      });
+      qc.invalidateQueries({ queryKey: ["platform-ai-models", draft.provider] });
+      qc.invalidateQueries({ queryKey: ["ai-pricing"] });
+      qc.invalidateQueries({ queryKey: ["platform-ai-settings"] });
+      toast.success("Catálogo de modelos actualizado");
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "No se pudo actualizar el catálogo"),
+  });
+
   if (q.isPending || !draft) return <div className="text-[#888888]">Cargando…</div>;
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const providers = draft.supported_providers || Object.keys(PROVIDER_LABELS);
   const needsKey = draft.provider !== "built_in";
   const needsBaseUrl = draft.provider === "custom_openai";
-  const suggestionsList = (draft.model_suggestions || {})[draft.provider] || [];
+  const catalogModels = catalogQ.data?.models || [];
+  const suggestionsList = catalogModels.length > 0
+    ? catalogModels.map((item) => item.id)
+    : ((draft.model_suggestions || {})[draft.provider] || []);
+  const selectedModel = catalogModels.find((item) => item.id === draft.model);
+  const selectedModelPriced = !!selectedModel?.pricing_configured;
   const temp = Number(draft.temperature ?? 0.2);
   const maxTok = Number(draft.max_tokens ?? 900);
   const minConf = Number(draft.min_confidence_for_auto_reply ?? 0.7);
@@ -1466,6 +1507,9 @@ function AIAutoTab() {
     if (minConfBad){ toast.error("El umbral de confianza debe estar entre 0 y 1"); return; }
     if (needsBaseUrl && !(draft.base_url || "").trim()) {
       toast.error("Para 'Otro (compatible OpenAI)' la URL base es obligatoria"); return;
+    }
+    if (draft.ai_enabled && !selectedModelPriced) {
+      toast.error("Configurá el precio del modelo en Consumo de IA antes de activarlo"); return;
     }
     
     // Check if key is configured for the active provider
@@ -1559,10 +1603,16 @@ function AIAutoTab() {
 
           {/* Model */}
           <div className="p-3 border border-[#E9E6DC] rounded-sm">
-            <Label className="text-sm font-bold text-[#0B1B26]">Modelo</Label>
-            <p className="text-xs text-[#888888] mt-0.5 mb-2">
-              Seleccioná un modelo o ingresá uno personalizado.
-            </p>
+            <div className="flex items-start justify-between gap-3">
+              <div><Label className="text-sm font-bold text-[#0B1B26]">Modelo</Label>
+                <p className="text-xs text-[#888888] mt-0.5 mb-2">Seleccioná un modelo disponible en tu proveedor.</p>
+              </div>
+              <Button type="button" variant="outline" size="sm"
+                onClick={() => syncModels.mutate()} disabled={syncModels.isPending || (needsKey && !(draft.keys_status?.[draft.provider]?.configured || pendingKeys[draft.provider]))}
+                className="h-8 shrink-0 rounded-sm text-xs">
+                <RefreshCw className={`mr-1 h-3.5 w-3.5 ${syncModels.isPending ? "animate-spin" : ""}`} />Actualizar
+              </Button>
+            </div>
             {suggestionsList.length > 0 ? (
               <div className="space-y-2">
                 <Select
@@ -2889,6 +2939,14 @@ export default function Configuracion() {
                 </div>
               </div>
             )}
+            <div className={`mt-3 rounded-sm border px-3 py-2 text-xs ${selectedModelPriced ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+              {selectedModelPriced ? (
+                <p><CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />Costo configurado: entrada USD {Number(selectedModel.input_per_million || 0).toFixed(4)} · salida USD {Number(selectedModel.output_per_million || 0).toFixed(4)} por 1M tokens.</p>
+              ) : (
+                <p><AlertTriangle className="mr-1 inline h-3.5 w-3.5" />Este modelo no se puede activar hasta definir su costo en <Link to="/consumo-ia" className="font-extrabold underline">Consumo de IA</Link>.</p>
+              )}
+              <p className="mt-1 opacity-75">{catalogQ.data?.synced_at ? `Actualizado ${new Date(catalogQ.data.synced_at).toLocaleString("es-AR")}` : "Usando catálogo inicial; actualizalo para ver la disponibilidad vigente."}</p>
+            </div>
           </div>
         </div>
         {activeTab === "users" && <UsersTab me={user} />}

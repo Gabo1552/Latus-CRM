@@ -24,6 +24,9 @@ const STATUS = {
 const money = new Intl.NumberFormat("es-AR", {
   style: "currency", currency: "ARS", maximumFractionDigits: 0,
 });
+const usd = new Intl.NumberFormat("es-AR", {
+  style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4,
+});
 
 function formatDate(value) {
   if (!value) return "Sin fecha definida";
@@ -181,11 +184,20 @@ export default function Suscripcion() {
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <UsageBar icon={Users} label="Usuarios del equipo" value={data?.usage?.users || 0} limit={limits.users} />
             <UsageBar icon={UserRoundCheck} label="Clientes registrados" value={data?.usage?.contacts || 0} limit={limits.contacts} />
-            <div className="rounded-2xl border border-latus-warm-border bg-white p-5 shadow-sm">
-              <div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-violet-50 text-violet-700"><BadgeDollarSign className="h-5 w-5" /></span><div><p className="text-sm font-extrabold text-latus-ink">Consumo variable de IA</p><p className="mt-0.5 text-xs text-latus-muted">Costo del proveedor + fee de servicio</p></div></div>
-              <p className="mt-5 text-3xl font-black tracking-tight text-latus-ink">{Number(data?.ai_billing?.fee_percent || 0).toFixed(1)}%</p>
-              <p className="mt-1 text-xs leading-relaxed text-latus-muted">El porcentaje queda registrado con cada uso y no cambia retroactivamente.</p>
-            </div>
+            <UsageBar icon={Sparkles} label="Tokens de IA este mes" value={data?.ai_billing?.this_month?.tokens || 0} limit={limits.monthly_ai_tokens} />
+          </div>
+          <p className="mt-3 text-xs font-semibold text-latus-muted">Al alcanzar el cupo mensual incluido, el bot pausa nuevas llamadas de IA para evitar consumos no cubiertos por el plan.</p>
+        </section>
+
+        <section className="overflow-hidden rounded-[24px] border border-latus-warm-border bg-white shadow-sm">
+          <div className="flex flex-col gap-3 border-b border-latus-warm-border bg-latus-cream/35 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+            <div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-violet-50 text-violet-700"><BadgeDollarSign className="h-5 w-5" /></span><div><p className="font-extrabold text-latus-ink">Consumo variable de IA del mes</p><p className="mt-0.5 text-xs text-latus-muted">Separado del valor fijo de tu plan y calculado uso por uso.</p></div></div>
+            <p className="text-xs font-bold text-latus-muted">{Number(data?.ai_billing?.this_month?.calls || 0).toLocaleString("es-AR")} llamadas · {Number(data?.ai_billing?.this_month?.tokens || 0).toLocaleString("es-AR")} tokens</p>
+          </div>
+          <div className="grid gap-px bg-latus-warm-border md:grid-cols-3">
+            <div className="bg-white p-5"><p className="text-[11px] font-extrabold uppercase tracking-wider text-latus-muted">Costo del proveedor</p><p className="mt-2 text-2xl font-black text-latus-ink">{usd.format(Number(data?.ai_billing?.this_month?.base_cost_usd || 0))}</p><p className="mt-1 text-xs text-latus-muted">Costo base registrado al realizar cada llamada.</p></div>
+            <div className="bg-white p-5"><p className="text-[11px] font-extrabold uppercase tracking-wider text-latus-muted">Fee de Latus · {Number(data?.ai_billing?.fee_percent || 0).toFixed(1)}%</p><p className="mt-2 text-2xl font-black text-latus-ink">{usd.format(Number(data?.ai_billing?.this_month?.ai_fee_usd || 0))}</p><p className="mt-1 text-xs text-latus-muted">El porcentaje histórico queda congelado con cada uso.</p></div>
+            <div className="bg-latus-ink p-5 text-white"><p className="text-[11px] font-extrabold uppercase tracking-wider text-white/55">Total facturable de IA</p><p className="mt-2 text-3xl font-black text-white">{usd.format(Number(data?.ai_billing?.this_month?.billable_cost_usd || 0))}</p><p className="mt-1 text-xs text-white/55">Proveedor + fee acumulados durante el mes actual.</p></div>
           </div>
         </section>
 

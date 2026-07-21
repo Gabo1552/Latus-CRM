@@ -23,6 +23,8 @@ from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from urllib.parse import urlparse
 
+from ai.usage import PLAN_MONTHLY_AI_TOKENS
+
 from utils.tenancy import (
     COMPOSITE_ID_COLLECTIONS,
     TENANT_SCOPED_COLLECTIONS,
@@ -455,21 +457,21 @@ PLAN_CATALOG: dict[str, dict[str, Any]] = {
     "base": {
         "code": "base", "name": "Base heredado", "monthly_price_ars": 0,
         "description": "Acceso conservado para empresas creadas antes de habilitar la facturación.",
-        "limits": {"users": 5, "contacts": 5000, "monthly_ai_tokens": 500000},
+        "limits": {"users": 5, "contacts": 5000, "monthly_ai_tokens": PLAN_MONTHLY_AI_TOKENS["base"]},
         "features": ["CRM completo", "Agenda", "Catálogo", "Bandeja y automatizaciones"],
         "is_public": False,
     },
     "starter": {
         "code": "starter", "name": "Inicial", "monthly_price_ars": 45000,
         "description": "Para equipos pequeños que empiezan a ordenar ventas y atención.",
-        "limits": {"users": 3, "contacts": 1500, "monthly_ai_tokens": 250000},
+        "limits": {"users": 3, "contacts": 1500, "monthly_ai_tokens": PLAN_MONTHLY_AI_TOKENS["starter"]},
         "features": ["CRM y pipeline", "Agenda y recordatorios", "Catálogo", "1 canal de WhatsApp"],
         "is_public": True,
     },
     "growth": {
         "code": "growth", "name": "Crecimiento", "monthly_price_ars": 95000,
         "description": "Para negocios con varios agentes, más automatización y seguimiento.",
-        "limits": {"users": 10, "contacts": 10000, "monthly_ai_tokens": 1500000},
+        "limits": {"users": 10, "contacts": 10000, "monthly_ai_tokens": PLAN_MONTHLY_AI_TOKENS["growth"]},
         "features": ["Todo Inicial", "Roles personalizados", "Consumo de IA ampliado", "Hasta 2 canales"],
         "is_public": True,
         "highlighted": True,
@@ -477,7 +479,7 @@ PLAN_CATALOG: dict[str, dict[str, Any]] = {
     "scale": {
         "code": "scale", "name": "Escala", "monthly_price_ars": 185000,
         "description": "Para operaciones con múltiples equipos y necesidades avanzadas.",
-        "limits": {"users": 30, "contacts": 50000, "monthly_ai_tokens": 5000000},
+        "limits": {"users": 30, "contacts": 50000, "monthly_ai_tokens": PLAN_MONTHLY_AI_TOKENS["scale"]},
         "features": ["Todo Crecimiento", "Soporte prioritario", "Mayor capacidad", "Hasta 5 canales"],
         "is_public": True,
     },
@@ -1723,6 +1725,27 @@ def _public_plan_catalog(*, include_internal: bool = False) -> list[dict]:
     ]
 
 
+async def _organization_ai_month_usage(organization_id: str) -> dict:
+    from ai import usage as ai_usage
+    now = datetime.now(timezone.utc)
+    month_start = datetime.combine(now.date().replace(day=1), datetime.min.time(),
+                                   tzinfo=timezone.utc)
+    logs = await _raw_collection("ai_usage_logs").find(
+        {"organization_id": organization_id, "created_at": {"$gte": month_start.isoformat()}},
+        {"_id": 0},
+    ).to_list(100_000)
+    total = {"calls": 0, "tokens": 0, "base_cost_usd": 0.0,
+             "ai_fee_usd": 0.0, "billable_cost_usd": 0.0,
+             "period_start": month_start.isoformat(), "period_end": now.isoformat()}
+    for log in logs:
+        billing = ai_usage.billing_breakdown(log)
+        total["calls"] += 1
+        total["tokens"] += int(log.get("total_tokens") or 0)
+        for field in ("base_cost_usd", "ai_fee_usd", "billable_cost_usd"):
+            total[field] = round(total[field] + float(billing[field]), 6)
+    return total
+
+
 async def _subscription_payload(organization_id: str, *, include_internal: bool = False) -> dict:
     from ai import usage as ai_usage
     organization = await _raw_collection("organizations").find_one(
@@ -1750,6 +1773,7 @@ async def _subscription_payload(organization_id: str, *, include_internal: bool 
         "ai_billing": {
             "fee_percent": await ai_usage.effective_fee_percent(db, organization_id),
             "has_custom_fee": organization.get("ai_fee_percent") is not None,
+            "this_month": await _organization_ai_month_usage(organization_id),
         },
         "latest_request": latest_request,
         "payment_provider": {
@@ -5251,6 +5275,7 @@ async def platform_get_ai_settings(platform_admin: User = Depends(require_platfo
 async def admin_put_ai_provider(payload: dict = Body(...),
                                 admin: User = Depends(require_platform_admin)):
     from ai import providers as ai_providers
+    from ai import usage as ai_usage
     current = await ai_providers.load_settings(db)
     try:
         clean = ai_providers.validate_patch(payload, current)
@@ -5269,6 +5294,14 @@ async def admin_put_ai_provider(payload: dict = Body(...),
                 detail="APP_ENCRYPTION_KEY no configurado; no se pueden guardar credenciales de IA",
             )
     next_provider = clean.get("provider", current.get("provider", "built_in"))
+    next_model = clean.get("model", current.get("model", ""))
+    next_ai_enabled = clean.get("ai_enabled", current.get("ai_enabled", True))
+    if next_ai_enabled and not await ai_usage.pricing_is_configured(db, next_model):
+        raise HTTPException(
+            400,
+            "Configurá el precio de entrada y salida del modelo antes de activarlo. "
+            "Así evitás registrar consumo con costo cero.",
+        )
     if next_provider in ai_providers.KEY_REQUIRED_PROVIDERS:
         pending_key = api_keys.get(next_provider) if next_provider in api_keys else None
         explicitly_cleared = (
@@ -5300,6 +5333,37 @@ async def admin_test_ai_provider(admin: User = Depends(require_platform_admin)):
 @api_router.post("/platform/ai-settings/test")
 async def platform_test_ai_settings(platform_admin: User = Depends(require_platform_admin)):
     return await admin_test_ai_provider(platform_admin)
+
+
+@api_router.get("/platform/ai-models/{provider}")
+async def platform_get_ai_models(
+    provider: str, platform_admin: User = Depends(require_platform_admin),
+):
+    from ai import model_catalog, providers as ai_providers
+    if provider not in ai_providers.SUPPORTED_PROVIDERS:
+        raise HTTPException(400, "Proveedor no soportado")
+    return await model_catalog.catalog_with_pricing(db, provider)
+
+
+@api_router.post("/platform/ai-models/{provider}/sync")
+async def platform_sync_ai_models(
+    provider: str, payload: dict = Body(default={}),
+    platform_admin: User = Depends(require_platform_admin),
+):
+    from ai import model_catalog, providers as ai_providers
+    if provider not in ai_providers.SUPPORTED_PROVIDERS:
+        raise HTTPException(400, "Proveedor no soportado")
+    settings = await ai_providers.load_settings(db)
+    base_url = str(payload.get("base_url") or settings.get("base_url") or "").strip()
+    try:
+        await model_catalog.sync_catalog(
+            db, provider, base_url=base_url, user_id=platform_admin.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"No se pudo consultar el catálogo del proveedor: {exc}") from exc
+    return await model_catalog.catalog_with_pricing(db, provider)
 
 
 # ---------------------------------------------------------------------------
@@ -5541,7 +5605,8 @@ async def admin_ai_usage_provider_report(
 async def admin_ai_pricing_get(admin: User = Depends(require_perm("ai_view"))):
     from ai import usage as ai_usage
     pricing = await ai_usage.load_pricing(db)
-    return {"models": pricing, "defaults": ai_usage.DEFAULT_PRICING}
+    return {"models": pricing, "defaults": ai_usage.DEFAULT_PRICING,
+            "metadata": await ai_usage.load_pricing_metadata(db)}
 
 
 class AIPriceItem(BaseModel):

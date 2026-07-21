@@ -112,6 +112,11 @@ class TenantCollection:
     def find(self, filter_: dict[str, Any] | None = None, *args: Any, **kwargs: Any):
         return self._collection.find(self._filter(filter_), *args, **kwargs)
 
+    def aggregate(self, pipeline: list[dict[str, Any]], *args: Any, **kwargs: Any):
+        """Run a tenant-scoped aggregation by forcing organization matching first."""
+        scoped_pipeline = [{"$match": {"organization_id": self._org()}}, *list(pipeline or [])]
+        return self._collection.aggregate(scoped_pipeline, *args, **kwargs)
+
     async def find_one(self, filter_: dict[str, Any] | None = None, *args: Any, **kwargs: Any):
         return await self._collection.find_one(self._filter(filter_), *args, **kwargs)
 

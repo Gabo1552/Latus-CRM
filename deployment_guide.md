@@ -158,6 +158,11 @@ El backend de Latus CRM incluye verificaciones de seguridad automáticas al inic
 - En **Plataforma > Administrar licencia** puede definirse un fee diferente para una empresa; si queda vacío, utiliza el global.
 - Cada llamada conserva el costo base, el porcentaje, el fee y el total facturable vigentes en ese momento. Cambiar el fee no modifica registros históricos.
 - Cuando el proveedor devuelve el costo exacto se usa ese importe. En los demás casos se calcula con los tokens reportados y la tabla de precios por modelo, identificado como estimado.
+- En **Configuración > IA y automatización**, usar **Actualizar** para consultar los modelos disponibles con la credencial del proveedor. La clave nunca se envía al navegador.
+- OpenRouter publica precios en su catálogo y el CRM los importa en USD por millón de tokens. Para OpenAI, Anthropic, Gemini y endpoints compatibles se actualiza la disponibilidad, pero el precio debe cargarse en **Consumo de IA** antes de poder activar el modelo.
+- El backend bloquea la activación de cualquier modelo sin precio conocido y rechaza precios manuales de cero. Los modelos gratuitos solo se aceptan cuando el propio proveedor los identifica así.
+- La pantalla **Suscripción** muestra el cupo mensual de tokens y separa costo del proveedor, fee de Latus y total facturable acumulado del mes.
+- Antes de cada llamada se reserva una estimación conservadora de tokens. Si la empresa alcanzó el cupo mensual de su plan, la llamada se bloquea y el bot deriva de forma segura sin generar costo adicional.
 
 ---
 

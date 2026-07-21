@@ -163,6 +163,34 @@ class TestUsageLogging:
         assert log["ai_fee_usd"] == pytest.approx(0.00001875)
         assert log["billable_cost_usd"] == pytest.approx(0.00016875)
 
+    def test_plan_token_quota_blocks_provider_call(self, srv, monkeypatch):
+        _, fake, _ = srv
+        from ai import providers, usage
+        from utils.tenancy import reset_organization_id, set_organization_id
+        from datetime import datetime, timezone
+
+        _run(fake.organizations.insert_one({
+            "organization_id": "org_quota", "name": "Empresa Cupo", "plan_code": "starter",
+        }))
+        _run(fake.ai_usage_logs.insert_one({
+            "organization_id": "org_quota", "created_at": datetime.now(timezone.utc).isoformat(),
+            "total_tokens": 250_000,
+        }))
+        calls = {"count": 0}
+        async def fake_chat(self, **kwargs):
+            calls["count"] += 1
+            raise AssertionError("No debe llamar al proveedor")
+        monkeypatch.setattr(providers.OpenAIProvider, "chat", fake_chat)
+
+        context_token = set_organization_id("org_quota")
+        try:
+            provider = providers.OpenAIProvider(model="gpt-4o-mini", api_key="x")
+            with pytest.raises(providers.LLMUnavailable, match="cupo mensual"):
+                _run(usage.call_with_logging(fake, provider, system_prompt="s", user_block="u"))
+        finally:
+            reset_organization_id(context_token)
+        assert calls["count"] == 0
+
     def test_error_call_creates_error_log(self, srv, monkeypatch):
         _, fake, client = srv
         from ai import providers, usage
@@ -324,6 +352,24 @@ class TestUsageEndpoints:
         assert r.status_code == 400
         assert "negativos" in r.text
 
+    def test_manual_zero_pricing_is_rejected(self, srv):
+        _, _, client = srv
+        r = client.put("/api/admin/ai-pricing", headers=_h("T-ADMIN"),
+                       json={"model": "modelo-sin-costo", "input_per_million": 0,
+                             "output_per_million": 0})
+        assert r.status_code == 400
+        assert "mayor a cero" in r.text
+
+    def test_reset_keeps_custom_model_pricing(self, srv):
+        _, _, client = srv
+        saved = client.put("/api/admin/ai-pricing", headers=_h("T-ADMIN"),
+                           json={"model": "modelo-personalizado", "input_per_million": 2,
+                                 "output_per_million": 8})
+        assert saved.status_code == 200
+        reset = client.post("/api/admin/ai-pricing/reset", headers=_h("T-ADMIN"))
+        assert reset.status_code == 200
+        assert reset.json()["models"]["modelo-personalizado"] == {"input": 2.0, "output": 8.0}
+
     def test_platform_fee_policy_and_organization_override(self, srv):
         server, fake, client = srv
         current = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
@@ -347,9 +393,9 @@ class TestUsageEndpoints:
             headers=_h("T-ADMIN"), json={"ai_fee_percent": 12.5},
         )
         assert override.status_code == 200
-        assert override.json()["ai_billing"] == {
-            "fee_percent": 12.5, "has_custom_fee": True,
-        }
+        assert override.json()["ai_billing"]["fee_percent"] == 12.5
+        assert override.json()["ai_billing"]["has_custom_fee"] is True
+        assert "this_month" in override.json()["ai_billing"]
         assert client.patch(
             f"/api/platform/organizations/{current['organization_id']}/subscription",
             headers=_h("T-ADMIN"), json={"ai_fee_percent": 501},

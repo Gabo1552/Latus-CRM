@@ -698,9 +698,12 @@ function AIFeeEditor({ policy, onSaved }) {
 
 function PricingEditor({ pricing, onSaved, canAdmin }) {
   const [drafts, setDrafts] = useState({}); // { model: {input, output} }
+  const [newModel, setNewModel] = useState("");
+  const [newInput, setNewInput] = useState("");
+  const [newOutput, setNewOutput] = useState("");
   const save = useMutation({
     mutationFn: (payload) => api.put("/admin/ai-pricing", payload),
-    onSuccess: () => { toast.success("Precio guardado"); setDrafts({}); onSaved && onSaved(); },
+    onSuccess: () => { toast.success("Precio guardado"); setDrafts({}); setNewModel(""); setNewInput(""); setNewOutput(""); onSaved && onSaved(); },
     onError: (e) => toast.error(e?.response?.data?.detail || "No se pudo guardar el precio"),
   });
   const reset = useMutation({
@@ -731,6 +734,23 @@ function PricingEditor({ pricing, onSaved, canAdmin }) {
           <RotateCcw className="h-3.5 w-3.5 mr-1" /> Restaurar valores por defecto
         </Button>
       </div>
+      {canAdmin && (
+        <div className="grid gap-3 border-b border-[#E9E6DC] bg-sky-50/50 p-4 md:grid-cols-[1fr_170px_170px_auto] md:items-end">
+          <label className="text-xs font-bold text-latus-ink">Nuevo modelo
+            <Input value={newModel} onChange={(e) => setNewModel(e.target.value)} placeholder="Identificador exacto del proveedor" className="mt-1 h-9 rounded-sm bg-white font-mono text-xs" />
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Entrada USD / 1M
+            <Input type="number" min="0" step="0.001" value={newInput} onChange={(e) => setNewInput(e.target.value)} className="mt-1 h-9 rounded-sm bg-white text-right" />
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Salida USD / 1M
+            <Input type="number" min="0" step="0.001" value={newOutput} onChange={(e) => setNewOutput(e.target.value)} className="mt-1 h-9 rounded-sm bg-white text-right" />
+          </label>
+          <Button type="button" disabled={save.isPending || !newModel.trim() || Number(newInput) < 0 || Number(newOutput) < 0 || (Number(newInput) === 0 && Number(newOutput) === 0)}
+            onClick={() => save.mutate({ model: newModel.trim(), input_per_million: Number(newInput), output_per_million: Number(newOutput) })}
+            className="h-9 rounded-sm bg-latus-blue text-white hover:bg-latus-blue/90">Agregar precio</Button>
+          <p className="text-[11px] text-latus-muted md:col-span-4">Copiá el identificador desde Configuración → IA. El modelo recién podrá activarse después de guardar un costo válido.</p>
+        </div>
+      )}
       <table className="w-full text-sm">
         <thead className="bg-latus-cream text-[10px] uppercase tracking-wider text-[#888888]">
           <tr>
@@ -744,7 +764,7 @@ function PricingEditor({ pricing, onSaved, canAdmin }) {
           {sortedKeys.map((m) => {
             const cur = drafts[m] || allModels[m];
             const dirty = drafts[m] !== undefined;
-            const bad = (cur.input < 0) || (cur.output < 0);
+            const bad = (cur.input < 0) || (cur.output < 0) || (cur.input === 0 && cur.output === 0);
             return (
               <tr key={m} className="border-t border-[#E9E6DC]">
                 <td className="px-3 py-2 font-mono text-xs">{m}</td>

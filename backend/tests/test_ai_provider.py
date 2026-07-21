@@ -189,6 +189,77 @@ class TestAIProviderConfig:
         assert legacy_bot_route.status_code == 403
         assert "Plataforma" in legacy_bot_route.text
 
+    def test_unpriced_model_cannot_be_activated(self, srv):
+        _, _, client = srv
+        response = client.put(
+            "/api/platform/ai-settings", headers=_h("T-ADMIN"),
+            json={"provider": "openai", "api_key": "sk-test", "model": "gpt-modelo-nuevo"},
+        )
+        assert response.status_code == 400
+        assert "precio" in response.text.lower()
+
+        priced = client.put(
+            "/api/admin/ai-pricing", headers=_h("T-ADMIN"),
+            json={"model": "gpt-modelo-nuevo", "input_per_million": 1.2,
+                  "output_per_million": 4.8},
+        )
+        assert priced.status_code == 200
+        activated = client.put(
+            "/api/platform/ai-settings", headers=_h("T-ADMIN"),
+            json={"provider": "openai", "api_key": "sk-test", "model": "gpt-modelo-nuevo"},
+        )
+        assert activated.status_code == 200
+
+    def test_unpriced_existing_model_can_be_disabled(self, srv):
+        _, fake, client = srv
+        _run(fake.platform_secrets.update_one(
+            {"_id": "ai_provider"},
+            {"$set": {"provider": "built_in", "model": "modelo-antiguo-sin-precio",
+                      "ai_enabled": True}}, upsert=True,
+        ))
+        response = client.put(
+            "/api/platform/ai-settings", headers=_h("T-ADMIN"), json={"ai_enabled": False},
+        )
+        assert response.status_code == 200
+        assert response.json()["ai_enabled"] is False
+
+    def test_openrouter_catalog_imports_provider_prices(self, srv, monkeypatch):
+        _, _, client = srv
+        client.put("/api/admin/ai-provider", headers=_h("T-ADMIN"),
+                   json={"api_keys": {"openrouter": "sk-or-test"}})
+
+        class _FakeResp:
+            status_code = 200
+            def json(self):
+                return {"data": [{
+                    "id": "vendor/model-new", "name": "Modelo nuevo", "context_length": 32000,
+                    "pricing": {"prompt": "0.0000015", "completion": "0.000006"},
+                }]}
+
+        class _FakeClient:
+            def __init__(self, *a, **k): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def request(self, *a, **k): return _FakeResp()
+
+        from ai import model_catalog
+        monkeypatch.setattr(model_catalog.httpx, "AsyncClient", _FakeClient)
+        response = client.post(
+            "/api/platform/ai-models/openrouter/sync", headers=_h("T-ADMIN"), json={},
+        )
+        assert response.status_code == 200, response.text
+        model = response.json()["models"][0]
+        assert model["id"] == "vendor/model-new"
+        assert model["pricing_configured"] is True
+        assert model["input_per_million"] == pytest.approx(1.5)
+        assert model["output_per_million"] == pytest.approx(6.0)
+
+    def test_model_catalog_is_platform_only(self, srv):
+        _, _, client = srv
+        assert client.get(
+            "/api/platform/ai-models/openai", headers=_h("T-TENANT-ADMIN")
+        ).status_code == 403
+
 
 # ============================================================================
 # Provider test endpoint (httpx mocked)
