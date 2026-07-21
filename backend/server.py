@@ -1698,6 +1698,57 @@ async def create_billing_checkout(
                     "status": existing.get("status"),
                     "reused": True,
                 }
+            if existing_status == "pending":
+                pending_update = {
+                    "reason": f"Latus CRM - Plan {plan['name']}",
+                    "external_reference": _mercadopago_external_reference(
+                        user.organization_id, payload.plan_code
+                    ),
+                    "back_url": f"{APP_BASE_URL}/suscripcion?checkout=retorno",
+                    "auto_recurring": {
+                        "transaction_amount": plan["monthly_price_ars"],
+                        "currency_id": "ARS",
+                    },
+                    "status": "pending",
+                }
+                updated_pending = await _mercadopago_request(
+                    "PUT", f"/preapproval/{current_provider_id}", payload=pending_update
+                )
+                checkout_url = updated_pending.get("init_point") or existing.get("init_point")
+                if not checkout_url:
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Mercado Pago no devolvió el enlace de pago actualizado",
+                    )
+                update = {
+                    "billing_email": billing_email,
+                    "requested_plan_code": payload.plan_code,
+                    "billing_request_status": "checkout_created",
+                    "provider_plan_code": payload.plan_code,
+                    "provider_status": "pending",
+                    "provider_last_synced_at": now_iso(),
+                    "updated_at": now_iso(),
+                }
+                await _raw_collection("organizations").update_one(
+                    {"organization_id": user.organization_id}, {"$set": update}
+                )
+                await _raw_collection("billing_events").insert_one({
+                    "event_id": new_id("billevt"),
+                    "organization_id": user.organization_id,
+                    "type": "checkout_plan_changed",
+                    "provider": "mercadopago",
+                    "provider_resource_id": str(current_provider_id),
+                    "plan_code": payload.plan_code,
+                    "actor_user_id": user.user_id,
+                    "actor_email": user.email,
+                    "created_at": now_iso(),
+                })
+                return {
+                    "checkout_url": checkout_url,
+                    "status": "pending",
+                    "reused": True,
+                    "plan_updated": True,
+                }
             await _mercadopago_request(
                 "PUT", f"/preapproval/{current_provider_id}", payload={"status": "canceled"}
             )

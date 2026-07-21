@@ -418,6 +418,48 @@ class TestBillingFoundation:
         assert organization["provider_preapproval_id"] == "mp-sub-1"
         assert organization["provider_plan_code"] == "growth"
 
+    def test_pending_checkout_changes_plan_without_canceling_preapproval(self, srv, monkeypatch):
+        server, fake, client = srv
+        monkeypatch.setenv("MERCADOPAGO_ACCESS_TOKEN", "TEST-token")
+        monkeypatch.setenv("MERCADOPAGO_WEBHOOK_SECRET", "TEST-secret")
+        monkeypatch.setattr(server, "APP_BASE_URL", "https://crm.example.com")
+        current = client.get("/api/organizations/current", headers=_h()).json()
+        _run(fake.organizations.update_one(
+            {"organization_id": current["organization_id"]},
+            {"$set": {
+                "provider_preapproval_id": "mp-pending-1",
+                "provider_plan_code": "scale",
+                "provider_status": "pending",
+            }},
+        ))
+        calls = []
+
+        async def provider_request(method, path, *, payload=None):
+            calls.append((method, path, payload))
+            return {
+                "id": "mp-pending-1",
+                "status": "pending",
+                "init_point": "https://mercadopago.example/checkout/mp-pending-1",
+            }
+
+        monkeypatch.setattr(server, "_mercadopago_request", provider_request)
+        response = client.post(
+            "/api/billing/checkout", headers=_h(),
+            json={"plan_code": "starter", "billing_email": "pagos@empresa.com"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["checkout_url"].endswith("mp-pending-1")
+        assert response.json()["plan_updated"] is True
+        assert [call[0:2] for call in calls] == [
+            ("GET", "/preapproval/mp-pending-1"),
+            ("PUT", "/preapproval/mp-pending-1"),
+        ]
+        assert calls[1][2]["status"] == "pending"
+        assert calls[1][2]["auto_recurring"]["transaction_amount"] == 45000
+        organization = fake.organizations.docs[0]
+        assert organization["provider_plan_code"] == "starter"
+        assert organization["provider_status"] == "pending"
+
     def test_mercadopago_webhook_validates_and_activates_license(self, srv, monkeypatch):
         server, fake, client = srv
         secret = "webhook-secret"
