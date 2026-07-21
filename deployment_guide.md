@@ -33,11 +33,11 @@ Esta guía detalla la arquitectura, configuración y el paso a paso exacto para 
 | `MERCADOPAGO_WEBHOOK_SECRET` | Secret del webhook de prueba | Secret del webhook productivo | Firma secreta para validar eventos de MP. |
 | `MERCADOPAGO_MODE` | `test` | `production` | Declaración explícita del tipo de cuenta configurada. |
 | `APP_ENCRYPTION_KEY` | Clave exclusiva de Staging | Clave exclusiva de Producción | Protege secretos guardados desde el CRM. No reutilizarla ni cambiarla luego. |
-| `PLATFORM_ADMIN_EMAILS` | Administradores de prueba | Administradores reales | Emails con acceso a la administración multiempresa. |
+| `PLATFORM_ADMIN_EMAILS` | Administradores de prueba | Administradores reales | Emails con acceso a licencias y a la configuración global de proveedores, modelos y credenciales de IA. |
 | `BILLING_GRACE_DAYS` | `7` | `7` | Días de gracia ante un cobro rechazado. |
 | `LATUS_SEED_DEMO` | `true` solo cuando se necesite regenerar la demo | `false` | Nunca sembrar datos demo en Producción. |
 | `LATUS_CONFIRM_PRODUCTION_MIGRATION` | No requerida | `true` solo para la primera migración | Confirma que existe un backup verificado antes de migrar la base activa. |
-| `LATUS_LLM_KEY` | Clave API de prueba o compartida | Clave API de producción | Clave del proveedor de LLM / IA. |
+| `LATUS_LLM_KEY` | Clave API de prueba | Clave API de producción | Clave global de respaldo del motor incorporado; nunca pertenece a una empresa cliente. |
 | `RESEND_API_KEY` | Clave Resend | Clave Resend | Clave de envío de e-mails transaccionales. |
 | `RESEND_FROM_EMAIL` | `notificaciones@somoslatus.com` | `notificaciones@somoslatus.com` | Remitente de e-mails. |
 | `RESEND_FROM_NAME` | `Latus CRM (Staging)` | `Latus CRM` | Nombre visible del remitente. |

@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Building2, CheckCircle2, KeyRound, Pencil, Search, ShieldAlert,
-  Users, X,
+  Sparkles, Users, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import AppLayout from "@/components/AppLayout";
@@ -131,6 +132,14 @@ export default function Plataforma() {
           ].map(({ label, value, icon: Icon, tone }) => (
             <article key={label} className="flex items-center gap-4 rounded-2xl border border-latus-warm-border bg-white p-5 shadow-sm"><span className={`grid h-12 w-12 place-items-center rounded-2xl ${tone}`}><Icon className="h-5 w-5" /></span><div><p className="text-3xl font-black tracking-tight text-latus-ink">{value}</p><p className="text-xs font-bold uppercase tracking-wider text-latus-muted">{label}</p></div></article>
           ))}
+        </section>
+
+        <section className="flex flex-col gap-4 rounded-2xl border border-sky-200 bg-gradient-to-r from-sky-50 to-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-latus-blue text-white"><Sparkles className="h-5 w-5" /></span>
+            <div><h2 className="font-extrabold text-latus-ink">IA global de la plataforma</h2><p className="mt-1 text-sm text-latus-muted">Administrá el proveedor, los modelos y las credenciales que usan las empresas licenciadas.</p></div>
+          </div>
+          <Button asChild className="shrink-0 bg-latus-blue text-white hover:bg-latus-blue/90"><Link to="/configuracion?tab=ai"><KeyRound className="h-4 w-4" />Configurar IA global</Link></Button>
         </section>
 
         <section className="overflow-hidden rounded-[24px] border border-latus-warm-border bg-white shadow-sm">

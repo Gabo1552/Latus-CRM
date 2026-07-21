@@ -86,7 +86,9 @@ def mask_key(value: str) -> str:
 
 
 async def _reporting_doc(db) -> dict:
-    return await db.app_secrets.find_one({"_id": "ai_usage_reporting"}, {"_id": 0}) or {}
+    return await db.platform_secrets.find_one(
+        {"_id": "ai_usage_reporting"}, {"_id": 0}
+    ) or {}
 
 
 async def save_reporting_key(db, provider: str, value: str | None, user_id: str | None) -> None:
@@ -101,7 +103,9 @@ async def save_reporting_key(db, provider: str, value: str | None, user_id: str 
         if not clean:
             raise ValueError("Ingresá una clave válida")
         update = {"$set": {field: crypto.encrypt(clean), "updated_at": _now_iso(), "updated_by": user_id}}
-    await db.app_secrets.update_one({"_id": "ai_usage_reporting"}, update, upsert=True)
+    await db.platform_secrets.update_one(
+        {"_id": "ai_usage_reporting"}, update, upsert=True
+    )
 
 
 async def _resolve_reporting_key(db, provider: str) -> str:
@@ -117,7 +121,7 @@ async def _resolve_reporting_key(db, provider: str) -> str:
         return ""
 
 
-async def reporting_status(db) -> dict:
+async def reporting_status(db, *, include_credentials: bool = False) -> dict:
     settings = await providers.load_settings(db)
     doc = await _reporting_doc(db)
     items = []
@@ -135,7 +139,12 @@ async def reporting_status(db) -> dict:
         elif provider == "openrouter":
             raw = await providers._resolve_api_key(db, provider)
             configured, masked = bool(raw), mask_key(raw)
-        items.append({"provider": provider, **cap, "configured": configured, "masked": masked})
+        items.append({
+            "provider": provider,
+            **cap,
+            "configured": configured if include_credentials else False,
+            "masked": masked if include_credentials else "",
+        })
     return {"active_provider": settings.get("provider", "built_in"), "providers": items}
 
 

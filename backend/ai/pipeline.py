@@ -319,8 +319,10 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                                  appointment_context=appointment_context if appointment_context else None)
         parsed: dict = {}
         raw = ""
-        bot_provider = settings.get("provider", "built_in")
-        bot_model = settings.get("model", "gpt-4o-mini")
+        # Provider and model are platform-owned. Tenant bot settings only
+        # control behaviour and business context.
+        bot_provider = ai_cfg.get("provider", "built_in")
+        bot_model = ai_cfg.get("model", "gpt-4o-mini")
         try:
             parsed, raw = await call_llm_json(db=db, system_prompt=sp,
                                               user_messages_block=block or "(sin mensajes)",

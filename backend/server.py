@@ -4958,12 +4958,6 @@ class BotSettingsUpdate(BaseModel):
     appointment_rescheduling_enabled: Optional[bool] = None
 
 
-_ALLOWED_BOT_MODELS = {
-    "gpt-4o-mini", "gpt-4o", "claude-3-5-sonnet-20241022",
-    "gemini-2.0-flash", "gemini-1.5-flash", "claude-sonnet-4-6"
-}
-
-
 async def _log_system_message(db, conv_id: str, text: str):
     import uuid
     from datetime import datetime, timezone
@@ -4988,24 +4982,29 @@ async def admin_get_bot_settings(admin: User = Depends(require_any_perm("ai_view
     from ai.pipeline import DEFAULT_BOT_SETTINGS
     from ai import providers as ai_providers
     doc = await db.bot_settings.find_one({"_id": "default"}, {"_id": 0}) or {}
-    # Build keys_status for the bot's keys
-    keys_status = {}
-    for prov in ai_providers.KEY_REQUIRED_PROVIDERS:
-        raw = await ai_providers._resolve_bot_api_key(db, prov)
-        keys_status[prov] = {
-            "configured": bool(raw),
-            "masked": ai_providers.mask_key(raw)
-        }
+    platform_ai = await ai_providers.load_settings(db)
     return {
         **DEFAULT_BOT_SETTINGS,
         **doc,
-        "keys_status": keys_status
+        "provider": platform_ai.get("provider", "built_in"),
+        "model": platform_ai.get("model", "gpt-4o-mini"),
+        "provider_managed_by_platform": True,
     }
 
 
 @api_router.patch("/admin/bot-settings")
 async def admin_patch_bot_settings(payload: BotSettingsUpdate,
                                    admin: User = Depends(get_current_user)):
+    platform_only_fields = {"provider", "model", "api_keys"}
+    requested_platform_fields = platform_only_fields.intersection(payload.model_fields_set)
+    if requested_platform_fields:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Proveedor, modelo y credenciales de IA son administrados "
+                "exclusivamente desde Plataforma"
+            ),
+        )
     update = {k: v for k, v in payload.model_dump().items() if v is not None}
     appointment_fields = {
         "appointment_scheduling_enabled", "appointment_available_days",
@@ -5030,23 +5029,6 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
         if not (3 <= v <= 50):
             raise HTTPException(400, "recent_messages_context_max debe estar entre 3 y 50")
         update["recent_messages_context_max"] = v
-    if "provider" in update:
-        from ai.providers import SUPPORTED_PROVIDERS
-        if update["provider"] not in SUPPORTED_PROVIDERS:
-            raise HTTPException(400, "Proveedor no soportado")
-    if "model" in update:
-        prov = update.get("provider")
-        if prov is None:
-            doc = await db.bot_settings.find_one({"_id": "default"}) or {}
-            prov = doc.get("provider", "built_in")
-        if prov == "built_in" and update["model"] not in _ALLOWED_BOT_MODELS:
-            raise HTTPException(400, f"model debe ser uno de {sorted(_ALLOWED_BOT_MODELS)} para el proveedor incorporado")
-        m = (update["model"] or "").strip()
-        if not m:
-            raise HTTPException(400, "El modelo no puede estar vacío")
-        if len(m) > 200:
-            raise HTTPException(400, "Nombre de modelo demasiado largo")
-        update["model"] = m
     if "bot_name" in update:
         bn = (update["bot_name"] or "").strip()
         if not bn:
@@ -5163,16 +5145,6 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
                     status_code=400,
                     detail="Agregá al menos un servicio activo antes de habilitar las citas en el local",
                 )
-    if "api_keys" in update:
-        api_keys = update.pop("api_keys")
-        if isinstance(api_keys, dict):
-            from ai import providers as ai_providers
-            clean_keys = {}
-            for k, v in api_keys.items():
-                if k in ai_providers.KEY_REQUIRED_PROVIDERS:
-                    clean_keys[k] = str(v) if v is not None else None
-            if clean_keys:
-                await ai_providers.save_bot_api_keys(db, clean_keys, user_id=admin.user_id)
     update["updated_at"] = now_iso()
     update["updated_by"] = admin.user_id
     await db.bot_settings.update_one({"_id": "default"},
@@ -5185,49 +5157,98 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
 # ---------------------------------------------------------------------------
 
 
-@api_router.get("/admin/ai-provider")
-async def admin_get_ai_provider(admin: User = Depends(require_perm("ai_view"))):
+async def _ai_provider_payload(*, include_secret_status: bool) -> dict:
     from ai import providers as ai_providers
     s = await ai_providers.load_settings(db)
-    # Build keys_status for all key-required providers
     keys_status = {}
     for prov in ai_providers.KEY_REQUIRED_PROVIDERS:
         raw = await ai_providers._resolve_api_key(db, prov)
         keys_status[prov] = {
-            "configured": bool(raw),
-            "masked": ai_providers.mask_key(raw)
+            "configured": bool(raw) if include_secret_status else False,
+            "masked": ai_providers.mask_key(raw) if include_secret_status else "",
         }
     provider = s.get("provider", "built_in")
     masked = keys_status.get(provider, {}).get("masked", "")
     return {
         **{k: s[k] for k in ai_providers.DEFAULTS.keys()},
-        "api_key_configured": s.get("api_key_configured", False),
+        "api_key_configured": (
+            s.get("api_key_configured", False) if include_secret_status else False
+        ),
         "api_key_masked": masked,
         "keys_status": keys_status,
         "model_suggestions": ai_providers.MODEL_SUGGESTIONS,
         "supported_providers": list(ai_providers.SUPPORTED_PROVIDERS),
         "updated_at": s.get("updated_at"),
         "updated_by": s.get("updated_by"),
+        "managed_by_platform": True,
+        "can_manage": include_secret_status,
+        "encryption_available": crypto_available(),
     }
+
+
+@api_router.get("/admin/ai-provider")
+async def admin_get_ai_provider(admin: User = Depends(require_perm("ai_view"))):
+    return await _ai_provider_payload(include_secret_status=admin.is_platform_admin)
+
+
+@api_router.get("/platform/ai-settings")
+async def platform_get_ai_settings(platform_admin: User = Depends(require_platform_admin)):
+    return await _ai_provider_payload(include_secret_status=True)
 
 
 @api_router.put("/admin/ai-provider")
 async def admin_put_ai_provider(payload: dict = Body(...),
-                                admin: User = Depends(require_perm("ai_admin"))):
+                                admin: User = Depends(require_platform_admin)):
     from ai import providers as ai_providers
     current = await ai_providers.load_settings(db)
     try:
         clean = ai_providers.validate_patch(payload, current)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    api_keys = clean.get("api_keys") or {}
+    single_key_present = "api_key" in clean
+    single_key = clean.get("api_key")
+    has_any_new_key = (
+        isinstance(single_key, str) and bool(single_key.strip())
+    ) or any(isinstance(value, str) and value.strip() for value in api_keys.values())
+    if has_any_new_key:
+        if not crypto_available():
+            raise HTTPException(
+                status_code=503,
+                detail="APP_ENCRYPTION_KEY no configurado; no se pueden guardar credenciales de IA",
+            )
+    next_provider = clean.get("provider", current.get("provider", "built_in"))
+    if next_provider in ai_providers.KEY_REQUIRED_PROVIDERS:
+        pending_key = api_keys.get(next_provider) if next_provider in api_keys else None
+        explicitly_cleared = (
+            (single_key_present and single_key is None)
+            or (next_provider in api_keys and pending_key is None)
+        )
+        has_new_key = (
+            isinstance(single_key, str) and bool(single_key.strip())
+        ) or (isinstance(pending_key, str) and bool(pending_key.strip()))
+        has_existing_key = bool(await ai_providers._resolve_api_key(db, next_provider))
+        if explicitly_cleared or (not has_new_key and not has_existing_key):
+            raise HTTPException(400, "API Key requerida para el proveedor activo")
     await ai_providers.save_settings(db, clean, user_id=admin.user_id)
-    return await admin_get_ai_provider(admin)
+    return await _ai_provider_payload(include_secret_status=True)
+
+
+@api_router.put("/platform/ai-settings")
+async def platform_put_ai_settings(payload: dict = Body(...),
+                                   platform_admin: User = Depends(require_platform_admin)):
+    return await admin_put_ai_provider(payload, platform_admin)
 
 
 @api_router.post("/admin/ai-provider/test")
-async def admin_test_ai_provider(admin: User = Depends(require_perm("ai_admin"))):
+async def admin_test_ai_provider(admin: User = Depends(require_platform_admin)):
     from ai import providers as ai_providers
     return await ai_providers.test_provider_connectivity(db)
+
+
+@api_router.post("/platform/ai-settings/test")
+async def platform_test_ai_settings(platform_admin: User = Depends(require_platform_admin)):
+    return await admin_test_ai_provider(platform_admin)
 
 
 # ---------------------------------------------------------------------------
@@ -5401,21 +5422,23 @@ async def admin_ai_usage_provider_reporting(
     admin: User = Depends(require_perm("ai_view")),
 ):
     from ai import provider_usage
-    return await provider_usage.reporting_status(db)
+    return await provider_usage.reporting_status(
+        db, include_credentials=admin.is_platform_admin
+    )
 
 
 @api_router.put("/admin/ai-usage/provider-reporting/{provider}")
 async def admin_ai_usage_provider_reporting_put(
     provider: str,
     payload: AIUsageReportingKeyBody,
-    admin: User = Depends(require_perm("ai_admin")),
+    admin: User = Depends(require_platform_admin),
 ):
     from ai import provider_usage
     try:
         await provider_usage.save_reporting_key(db, provider, payload.key, admin.user_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    return await provider_usage.reporting_status(db)
+    return await provider_usage.reporting_status(db, include_credentials=True)
 
 
 @api_router.post("/admin/ai-usage/provider-report")
@@ -5423,7 +5446,7 @@ async def admin_ai_usage_provider_report(
     provider: str,
     from_: str = Query(..., alias="from"),
     to: str = Query(...),
-    admin: User = Depends(require_perm("ai_admin")),
+    admin: User = Depends(require_platform_admin),
 ):
     from ai import provider_usage
     try:
@@ -5447,7 +5470,7 @@ class AIPriceItem(BaseModel):
 
 @api_router.put("/admin/ai-pricing")
 async def admin_ai_pricing_put(item: AIPriceItem,
-                               admin: User = Depends(require_perm("ai_admin"))):
+                               admin: User = Depends(require_platform_admin)):
     from ai import usage as ai_usage
     try:
         result = await ai_usage.save_pricing(db, item.model, item.input_per_million,
@@ -5459,7 +5482,7 @@ async def admin_ai_pricing_put(item: AIPriceItem,
 
 
 @api_router.post("/admin/ai-pricing/reset")
-async def admin_ai_pricing_reset(admin: User = Depends(require_perm("ai_admin"))):
+async def admin_ai_pricing_reset(admin: User = Depends(require_platform_admin)):
     from ai import usage as ai_usage
     result = await ai_usage.reset_pricing(db, user_id=admin.user_id)
     return {"models": result, "defaults": ai_usage.DEFAULT_PRICING}
@@ -6874,11 +6897,68 @@ async def _run_legacy_multiempresa_migration() -> str:
     return organization_id
 
 
+async def _migrate_legacy_ai_credentials_to_platform(organization_id: str) -> None:
+    """Copy legacy tenant AI secrets into platform-owned storage once.
+
+    Source documents are intentionally preserved for rollback. ``$setOnInsert``
+    prevents a later restart or another tenant from overwriting credentials
+    already managed by the platform owner.
+    """
+    platform_secrets = _raw_collection("platform_secrets")
+    existing = await platform_secrets.find_one({"_id": "ai_provider"}, {"_id": 1})
+    if not existing:
+        provider_doc = await db.app_secrets.find_one({"_id": "ai_provider"}) or {}
+        bot_doc = await db.app_secrets.find_one({"_id": "bot_provider"}) or {}
+        migrated = {
+            key: value for key, value in provider_doc.items()
+            if key not in {
+                "_id", "organization_id", "multiempresa_shadowed_at",
+                "multiempresa_shadow_id",
+            }
+        }
+        # The bot-specific key had precedence in the previous implementation.
+        for key, value in bot_doc.items():
+            if key.startswith("api_key_") and key.endswith("_enc"):
+                migrated[key] = value
+        if migrated:
+            migrated.update({
+                "migrated_from_organization_id": organization_id,
+                "migrated_at": now_iso(),
+            })
+            await platform_secrets.update_one(
+                {"_id": "ai_provider"}, {"$setOnInsert": migrated}, upsert=True
+            )
+
+    reporting_exists = await platform_secrets.find_one(
+        {"_id": "ai_usage_reporting"}, {"_id": 1}
+    )
+    if not reporting_exists:
+        reporting_doc = await db.app_secrets.find_one({"_id": "ai_usage_reporting"}) or {}
+        migrated_reporting = {
+            key: value for key, value in reporting_doc.items()
+            if key not in {
+                "_id", "organization_id", "multiempresa_shadowed_at",
+                "multiempresa_shadow_id",
+            }
+        }
+        if migrated_reporting:
+            migrated_reporting.update({
+                "migrated_from_organization_id": organization_id,
+                "migrated_at": now_iso(),
+            })
+            await platform_secrets.update_one(
+                {"_id": "ai_usage_reporting"},
+                {"$setOnInsert": migrated_reporting},
+                upsert=True,
+            )
+
+
 async def _bootstrap_tenant_data() -> None:
     """Run tenant migration and existing seeds in a safe, ordered context."""
     organization_id = await _run_legacy_multiempresa_migration()
     token = set_organization_id(organization_id)
     try:
+        await _migrate_legacy_ai_credentials_to_platform(organization_id)
         await _seed_roles()
         await _seed(force=False)
         # Demo seed can create global user identities; attach those too.

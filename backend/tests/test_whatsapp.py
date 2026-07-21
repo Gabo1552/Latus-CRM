@@ -153,6 +153,7 @@ class _FakeDB:
         self.memberships = _Collection()
         self.whatsapp_routes = _Collection()
         self.app_secrets = _Collection()
+        self.platform_secrets = _Collection()
         self.products = _Collection()
         self.ai_usage_logs = _Collection()
         self.pricing_config = _Collection()

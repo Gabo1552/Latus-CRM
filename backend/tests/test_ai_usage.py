@@ -24,6 +24,7 @@ from test_simulate_inbound import _FakeDB, _run  # type: ignore
 
 @pytest.fixture
 def srv(monkeypatch):
+    monkeypatch.setenv("PLATFORM_ADMIN_EMAILS", "admin@latus.test")
     for mod in list(sys.modules):
         if mod == "server" or mod.startswith(("whatsapp", "utils", "ai")):
             sys.modules.pop(mod, None)
@@ -300,7 +301,7 @@ class TestUsageEndpoints:
         item = next(x for x in saved.json()["providers"] if x["provider"] == "openai")
         assert item["configured"] is True
         assert item["masked"].endswith("1234")
-        raw_doc = fake.app_secrets.docs[-1]
+        raw_doc = fake.platform_secrets.docs[-1]
         assert "sk-admin-secret1234" not in str(raw_doc)
 
     def test_reporting_key_rejects_unsupported_provider(self, srv):

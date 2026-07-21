@@ -69,6 +69,7 @@ class _FakeDB:
         self.conversations = _Coll()
         self.messages = _Coll()
         self.app_secrets = _Coll()
+        self.platform_secrets = _Coll()
         self.tasks = _Coll()
         self.organizations = _Coll()
         self.memberships = _Coll()

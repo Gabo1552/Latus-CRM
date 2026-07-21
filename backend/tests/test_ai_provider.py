@@ -34,6 +34,7 @@ from test_simulate_inbound import _FakeDB, _run  # type: ignore
 
 @pytest.fixture
 def srv(monkeypatch):
+    monkeypatch.setenv("PLATFORM_ADMIN_EMAILS", "admin@latus.test")
     for mod in list(sys.modules):
         if mod == "server" or mod.startswith(("whatsapp", "utils", "ai")):
             sys.modules.pop(mod, None)
@@ -54,6 +55,16 @@ def srv(monkeypatch):
             "expires_at": "2099-01-01T00:00:00+00:00",
             "created_at": "2025-01-01T00:00:00+00:00",
         }))
+    _run(fake.users.insert_one({
+        "user_id": "u_tenant_admin", "email": "tenant-admin@latus.test",
+        "name": "Tenant Admin", "role": "admin", "active": True,
+        "auth_provider": "google", "created_at": "2025-01-01T00:00:00+00:00",
+    }))
+    _run(fake.user_sessions.insert_one({
+        "user_id": "u_tenant_admin", "session_token": "T-TENANT-ADMIN",
+        "expires_at": "2099-01-01T00:00:00+00:00",
+        "created_at": "2025-01-01T00:00:00+00:00",
+    }))
     return server, fake, TestClient(server.app)
 
 
@@ -95,7 +106,7 @@ class TestAIProviderConfig:
         assert d["api_key_masked"] == "••••1234"
         assert "api_key" not in d
         # The plain key is NOT stored — only the encrypted blob
-        doc = next((x for x in fake.app_secrets.docs if x.get("_id") == "ai_provider"), None)
+        doc = next((x for x in fake.platform_secrets.docs if x.get("_id") == "ai_provider"), None)
         assert doc and "api_key_enc" in doc
         assert "sk-very-secret-1234" not in json.dumps(doc)
 
@@ -144,8 +155,39 @@ class TestAIProviderConfig:
         assert client.put("/api/admin/ai-provider", headers=_h("T-AGENT"),
                           json={"provider": "built_in"}).status_code == 403
         # El nivel visualizar permite consultar, pero no modificar.
-        assert client.get("/api/admin/ai-provider",
-                          headers=_h("T-VIEWER")).status_code == 200
+        viewer = client.get("/api/admin/ai-provider", headers=_h("T-VIEWER"))
+        assert viewer.status_code == 200
+        assert viewer.json()["can_manage"] is False
+        assert all(not item["configured"] and not item["masked"]
+                   for item in viewer.json()["keys_status"].values())
+
+    def test_tenant_admin_cannot_manage_platform_provider(self, srv):
+        _, _, client = srv
+        configured = client.put(
+            "/api/platform/ai-settings", headers=_h("T-ADMIN"),
+            json={"provider": "openai", "api_key": "sk-platform-secret"},
+        )
+        assert configured.status_code == 200
+        response = client.put(
+            "/api/admin/ai-provider", headers=_h("T-TENANT-ADMIN"),
+            json={"provider": "built_in"},
+        )
+        assert response.status_code == 403
+        visible = client.get(
+            "/api/admin/ai-provider", headers=_h("T-TENANT-ADMIN")
+        )
+        assert visible.status_code == 200
+        assert visible.json()["can_manage"] is False
+        assert visible.json()["api_key_configured"] is False
+        assert all(not item["configured"] and not item["masked"]
+                   for item in visible.json()["keys_status"].values())
+
+        legacy_bot_route = client.patch(
+            "/api/admin/bot-settings", headers=_h("T-TENANT-ADMIN"),
+            json={"provider": "openai", "model": "gpt-4o-mini"},
+        )
+        assert legacy_bot_route.status_code == 403
+        assert "Plataforma" in legacy_bot_route.text
 
 
 # ============================================================================
@@ -287,37 +329,26 @@ class TestPipelineGlobalFlags:
         assert conv.get("detected_intent") == "precios"
         assert conv.get("summary") == "Cliente preguntó por precios"
 
-    def test_provider_api_key_separation(self, srv):
+    def test_provider_key_is_global_and_tenant_secret_is_ignored(self, srv):
         server, fake, client = srv
         from ai import providers as ai_providers
         from utils import crypto
         
-        # 1. Configure assistant key
-        _run(fake.app_secrets.update_one(
+        # The platform-owned key is used consistently by every AI call.
+        _run(fake.platform_secrets.update_one(
             {"_id": "ai_provider"},
-            {"$set": {"api_key_openai_enc": crypto.encrypt("assistant_key")}},
+            {"$set": {"api_key_openai_enc": crypto.encrypt("platform_key")}},
             upsert=True
         ))
-        
-        # 2. Get provider for assistant (for_bot=False) -> should resolve to assistant_key
-        prov_asst = _run(ai_providers.get_provider(fake, override_provider="openai", for_bot=False))
-        assert prov_asst.api_key == "assistant_key"
-        
-        # 3. Get provider for bot (for_bot=True) with fallback -> should resolve to assistant_key since no bot key exists
-        prov_bot_fallback = _run(ai_providers.get_provider(fake, override_provider="openai", for_bot=True))
-        assert prov_bot_fallback.api_key == "assistant_key"
-        
-        # 4. Configure bot-specific key
+
+        # A legacy tenant bot key must no longer override the platform key.
         _run(fake.app_secrets.update_one(
             {"_id": "bot_provider"},
-            {"$set": {"api_key_openai_enc": crypto.encrypt("bot_key")}},
+            {"$set": {"api_key_openai_enc": crypto.encrypt("tenant_key")}},
             upsert=True
         ))
-        
-        # 5. Get provider for bot (for_bot=True) -> should resolve to bot_key
+
+        prov_asst = _run(ai_providers.get_provider(fake, override_provider="openai", for_bot=False))
         prov_bot = _run(ai_providers.get_provider(fake, override_provider="openai", for_bot=True))
-        assert prov_bot.api_key == "bot_key"
-        
-        # 6. Get provider for assistant (for_bot=False) -> should still resolve to assistant_key
-        prov_asst_sep = _run(ai_providers.get_provider(fake, override_provider="openai", for_bot=False))
-        assert prov_asst_sep.api_key == "assistant_key"
+        assert prov_asst.api_key == "platform_key"
+        assert prov_bot.api_key == "platform_key"

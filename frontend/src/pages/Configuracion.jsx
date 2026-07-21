@@ -995,11 +995,9 @@ function BotIATab({ setTab }) {
   });
 
   const [draft, setDraft] = useState(null);
-  const [pendingKeys, setPendingKeys] = useState({});
   useEffect(() => {
     if (q.data && draft === null) {
       setDraft({ ...q.data });
-      setPendingKeys({});
     }
   }, [q.data, draft]);
 
@@ -1007,7 +1005,6 @@ function BotIATab({ setTab }) {
     mutationFn: (payload) => api.patch("/admin/bot-settings", payload),
     onSuccess: (r) => {
       setDraft({ ...r.data });
-      setPendingKeys({});
       qc.invalidateQueries({ queryKey: ["admin-bot-settings"] });
       toast.success("Cambios guardados");
     },
@@ -1022,9 +1019,7 @@ function BotIATab({ setTab }) {
   const ctxMax = Number(draft.recent_messages_context_max ?? 12);
   const threshInvalid = !(thresh >= 0 && thresh <= 1);
   const ctxInvalid = !(ctxMax >= 3 && ctxMax <= 50);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(q.data) || Object.keys(pendingKeys).length > 0;
-  const providers = aiProviderQ.data?.supported_providers || Object.keys(PROVIDER_LABELS);
-  const suggestionsList = (aiProviderQ.data?.model_suggestions || {})[draft.provider || "built_in"] || [];
+  const dirty = JSON.stringify(draft) !== JSON.stringify(q.data);
 
   const onSave = () => {
     if (threshInvalid) {
@@ -1049,8 +1044,6 @@ function BotIATab({ setTab }) {
       catalog_reading_enabled: draft.catalog_reading_enabled !== undefined ? !!draft.catalog_reading_enabled : true,
       handoff_rules: draft.handoff_rules || "",
       tone: draft.tone || "",
-      provider: draft.provider || "built_in",
-      model: draft.model || "gpt-4o-mini",
       bot_name: (draft.bot_name || "").trim(),
       include_client_info: !!draft.include_client_info,
       default_handoff_user_id: draft.default_handoff_user_id || null,
@@ -1065,17 +1058,6 @@ function BotIATab({ setTab }) {
       appointment_timezone: draft.appointment_timezone || "America/Argentina/Buenos_Aires",
       appointment_services: Array.isArray(draft.appointment_services) ? draft.appointment_services : [],
     };
-    
-    // Construct api_keys dictionary to patch
-    const apiKeysPayload = {};
-    Object.entries(pendingKeys).forEach(([prov, val]) => {
-      if (val === null) apiKeysPayload[prov] = null;
-      else if (val.trim()) apiKeysPayload[prov] = val.trim();
-    });
-    if (Object.keys(apiKeysPayload).length > 0) {
-      payload.api_keys = apiKeysPayload;
-    }
-    
     save.mutate(payload);
   };
 
@@ -1107,78 +1089,15 @@ function BotIATab({ setTab }) {
             />
           </div>
 
-          {/* Provider */}
           <div className="p-3 border border-[#E9E6DC] rounded-sm">
-            <Label className="text-sm font-bold text-[#0B1B26]">Proveedor</Label>
-            <p className="text-xs text-[#888888] mt-0.5 mb-2">
-              Elegí el proveedor de IA para el bot de autorespuestas.
+            <Label className="text-sm font-bold text-[#0B1B26]">Motor de IA administrado por Latus</Label>
+            <p className="text-xs text-[#888888] mt-0.5">
+              El proveedor, el modelo y sus credenciales forman parte de la licencia y los administra exclusivamente la plataforma.
             </p>
-            <Select value={draft.provider || "built_in"} onValueChange={(v) => {
-              const newSuggestions = (aiProviderQ.data?.model_suggestions || {})[v] || [];
-              const defaultModel = newSuggestions[0] || "";
-              set({ provider: v, model: defaultModel });
-            }}>
-              <SelectTrigger data-testid="bot-setting-provider" className="rounded-sm h-9 text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {providers.map((p) => (
-                  <SelectItem key={p} value={p}>{PROVIDER_LABELS[p] || p}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Model */}
-          <div className="p-3 border border-[#E9E6DC] rounded-sm">
-            <Label className="text-sm font-bold text-[#0B1B26]">Modelo</Label>
-            <p className="text-xs text-[#888888] mt-0.5 mb-2">
-              Seleccioná un modelo o ingresá uno personalizado para el bot.
-            </p>
-            {suggestionsList.length > 0 ? (
-              <div className="space-y-2">
-                <Select
-                  value={suggestionsList.includes(draft.model) ? draft.model : "custom"}
-                  onValueChange={(v) => {
-                    if (v === "custom") {
-                      if (suggestionsList.includes(draft.model)) {
-                        set({ model: "" });
-                      }
-                    } else {
-                      set({ model: v });
-                    }
-                  }}
-                >
-                  <SelectTrigger data-testid="bot-setting-model" className="rounded-sm h-9 text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {suggestionsList.map((m) => (
-                      <SelectItem key={m} value={m}>{m}</SelectItem>
-                    ))}
-                    <SelectItem value="custom">Otro modelo (personalizado)</SelectItem>
-                  </SelectContent>
-                </Select>
-
-                {(!suggestionsList.includes(draft.model) || draft.model === "") && (
-                  <Input
-                    data-testid="bot-setting-model-custom"
-                    value={draft.model || ""}
-                    onChange={(e) => set({ model: e.target.value })}
-                    className="rounded-sm h-9 mt-2 font-mono"
-                    placeholder="Escribí el identificador del modelo..."
-                  />
-                )}
-              </div>
-            ) : (
-              <Input
-                data-testid="bot-setting-model"
-                value={draft.model || ""}
-                onChange={(e) => set({ model: e.target.value })}
-                className="rounded-sm h-9 font-mono"
-                placeholder="Identificador del modelo"
-              />
-            )}
+            <div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold text-[#0B1B26]">
+              <span className="rounded-full bg-[#EAF5FC] px-2.5 py-1">{PROVIDER_LABELS[aiProviderQ.data?.provider] || aiProviderQ.data?.provider || "Sistema"}</span>
+              <span className="rounded-full bg-[#F4F2EC] px-2.5 py-1 font-mono">{aiProviderQ.data?.model || "Modelo administrado"}</span>
+            </div>
           </div>
 
           {/* Nombre del Bot */}
@@ -1382,113 +1301,6 @@ function BotIATab({ setTab }) {
             />
           </div>
 
-          {/* API Keys del Bot (Opcional) */}
-          <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
-            <details className="group">
-              <summary className="cursor-pointer text-sm font-bold text-[#0B1B26] flex items-center justify-between list-none">
-                <span className="flex items-center gap-2">
-                  <KeyRound className="h-4 w-4 text-[#0E8DDB]" />
-                  API Keys del Bot (Opcional)
-                </span>
-                <span className="text-xs text-[#888888] font-normal group-open:hidden">
-                  Ver/Configurar llaves dedicadas
-                </span>
-                <span className="text-xs text-[#888888] font-normal hidden group-open:inline">
-                  Ocultar
-                </span>
-              </summary>
-              
-              <div className="mt-3 pt-3 border-t border-[#E9E6DC] space-y-3">
-                <p className="text-xs text-[#888888]">
-                  Por defecto, el bot de atención utilizará las API Keys configuradas en el <strong>Asistente de IA</strong>. Si deseás que el bot de WhatsApp use claves distintas, podés configurarlas aquí.
-                </p>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                  {KEY_REQUIRED_PROVIDERS.map((prov) => {
-                    const status = draft.keys_status?.[prov] || { configured: false, masked: "" };
-                    const isConfigured = status.configured;
-                    const maskedKey = status.masked;
-                    
-                    const isCleared = pendingKeys[prov] === null;
-                    const hasPendingValue = typeof pendingKeys[prov] === "string";
-                    const displayConfigured = isConfigured && !isCleared;
-                    
-                    return (
-                      <div key={prov} className="p-3 border border-[#E9E6DC] rounded-sm bg-[#FBFBFA] space-y-2 flex flex-col justify-between">
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-bold text-[#0B1B26] uppercase tracking-wide">
-                              {PROVIDER_LABELS[prov] || prov}
-                            </span>
-                            <span className="text-[10px]">
-                              {displayConfigured ? (
-                                <span className="font-mono text-[#16A34A] bg-[#E8F8EE] px-1.5 py-0.5 rounded-sm font-semibold">{maskedKey || "configurada"}</span>
-                              ) : (
-                                <span className="font-mono text-[#888888] bg-[#F1F0EA] px-1.5 py-0.5 rounded-sm font-semibold">heredada del asistente</span>
-                              )}
-                            </span>
-                          </div>
-                        </div>
-                        
-                        <div className="space-y-1">
-                          <div className="flex gap-2">
-                            <Input
-                              type="password"
-                              placeholder={isConfigured && !isCleared ? "Dejar igual o reemplazar…" : "Pegá la API key dedicada aquí"}
-                              value={hasPendingValue ? pendingKeys[prov] : ""}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setPendingKeys((prev) => ({ ...prev, [prov]: val }));
-                              }}
-                              className="rounded-sm h-8 text-xs flex-1 font-mono bg-white"
-                            />
-                            {isConfigured && !isCleared && (
-                              <Button
-                                variant="outline"
-                                onClick={() => {
-                                  setPendingKeys((prev) => ({ ...prev, [prov]: null }));
-                                }}
-                                className="rounded-sm h-8 px-2 text-xs border border-[#E9E6DC]"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
-                            )}
-                            {isCleared && (
-                              <Button
-                                variant="outline"
-                                onClick={() => {
-                                  setPendingKeys((prev) => {
-                                    const copy = { ...prev };
-                                    delete copy[prov];
-                                    return copy;
-                                  });
-                                }}
-                                className="rounded-sm h-8 px-2 text-xs border border-[#E9E6DC] text-[#0E8DDB]"
-                              >
-                                Deshacer
-                              </Button>
-                            )}
-                          </div>
-                          
-                          {isCleared && (
-                            <p className="text-[10px] text-[#DC2626]">
-                              Al guardar se borrará la API Key dedicada actual y volverá a heredar la del asistente.
-                            </p>
-                          )}
-                          {hasPendingValue && pendingKeys[prov] !== null && pendingKeys[prov].trim() !== "" && (
-                            <p className="text-[10px] text-[#0E8DDB]">
-                              Nueva API Key dedicada ingresada (sin guardar).
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </details>
-          </div>
-
           {/* FAQs */}
           <div className="p-3 border border-[#E9E6DC] rounded-sm md:col-span-2">
             <div className="flex items-center justify-between mb-1">
@@ -1601,8 +1413,8 @@ const KEY_REQUIRED_PROVIDERS = ["openai", "anthropic", "gemini", "openrouter", "
 function AIAutoTab() {
   const qc = useQueryClient();
   const q = useQuery({
-    queryKey: ["admin-ai-provider"],
-    queryFn: () => api.get("/admin/ai-provider").then((r) => r.data),
+    queryKey: ["platform-ai-settings"],
+    queryFn: () => api.get("/platform/ai-settings").then((r) => r.data),
   });
   const [draft, setDraft] = useState(null);
   const [pendingKeys, setPendingKeys] = useState({});
@@ -1614,10 +1426,11 @@ function AIAutoTab() {
   }, [q.data, draft]);
 
   const save = useMutation({
-    mutationFn: (payload) => api.put("/admin/ai-provider", payload),
+    mutationFn: (payload) => api.put("/platform/ai-settings", payload),
     onSuccess: (r) => {
       setDraft({ ...r.data });
       setPendingKeys({});
+      qc.invalidateQueries({ queryKey: ["platform-ai-settings"] });
       qc.invalidateQueries({ queryKey: ["admin-ai-provider"] });
       toast.success("Cambios guardados");
     },
@@ -1625,7 +1438,7 @@ function AIAutoTab() {
   });
 
   const test = useMutation({
-    mutationFn: () => api.post("/admin/ai-provider/test").then((r) => r.data),
+    mutationFn: () => api.post("/platform/ai-settings/test").then((r) => r.data),
     onSuccess: (d) => {
       if (d.ok) toast.success(`Conexión OK · ${d.latency_ms}ms`);
       else toast.error(`No funcionó: ${d.error}`);
@@ -1698,11 +1511,11 @@ function AIAutoTab() {
       <div className="bg-white border border-[#E9E6DC] rounded-sm p-5">
         <div className="flex items-center gap-2 mb-1">
           <Sparkles className="h-5 w-5 text-[#0E8DDB]" />
-          <h2 className="text-xl font-bold tracking-tight text-[#0B1B26]">IA y automatización</h2>
+          <h2 className="text-xl font-bold tracking-tight text-[#0B1B26]">IA global de la plataforma</h2>
         </div>
         <p className="text-sm text-[#888888] mb-5">
-          Elegí qué proveedor de IA usa el asistente, ajustá costos/calidad y controlá
-          la automatización en WhatsApp.
+          Configuración exclusiva del administrador de Latus. El proveedor, los modelos y
+          las credenciales se aplican a las empresas habilitadas por sus licencias.
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -1732,7 +1545,6 @@ function AIAutoTab() {
               const newSuggestions = (draft.model_suggestions || {})[v] || [];
               const defaultModel = newSuggestions[0] || "";
               set({ provider: v, model: defaultModel });
-              setKeyAction("keep");
             }}>
               <SelectTrigger data-testid="ai-setting-provider" className="rounded-sm h-9 text-sm">
                 <SelectValue />
@@ -3037,7 +2849,7 @@ export default function Configuracion() {
   if (hasPerm("whatsapp_admin")) tabs.push({ key: "whatsapp", label: "WhatsApp", description: "Conexión, credenciales y webhook", icon: MessageSquareText, testid: "tab-whatsapp" });
   if (hasPerm("calendar_admin")) tabs.push({ key: "agenda", label: "Agenda", description: "Horarios, personas, servicios y cupos", icon: CalendarClock, testid: "tab-agenda" });
   if (hasPerm("ai_admin")) tabs.push({ key: "bot", label: "Bot IA", description: "Comportamiento y respuestas del asistente", icon: Bot, testid: "tab-bot-ia" });
-  if (hasPerm("ai_admin")) tabs.push({ key: "ai", label: "IA y automatización", description: "Proveedores, modelos y automatizaciones", icon: Sparkles, testid: "tab-ai-auto" });
+  if (user.is_platform_admin) tabs.push({ key: "ai", label: "IA global", description: "Proveedor, modelos y credenciales de la plataforma", icon: Sparkles, testid: "tab-ai-auto" });
   if (hasPerm("users_admin")) tabs.push({ key: "roles", label: "Roles y accesos", description: "Permisos disponibles para cada rol", icon: Shield, testid: "tab-roles" });
   if (hasPerm("users_admin")) tabs.push({ key: "work-areas", label: "Áreas de trabajo", description: "Organización y distribución del equipo", icon: Building2, testid: "tab-work-areas" });
   if (hasPerm("settings_admin")) tabs.push({ key: "crm", label: "Tareas y catálogo", description: "Estados, categorías y opciones del CRM", icon: Package, testid: "tab-crm-config" });

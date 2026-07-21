@@ -1,9 +1,9 @@
 """Multi-provider LLM client for Latus CRM.
 
 Abstraction over Built-In, OpenAI, Anthropic, Gemini, OpenRouter, and any
-OpenAI-compatible REST proxy. Reads provider config from the ``app_secrets``
-collection (``_id="ai_provider"``); api_key is Fernet-encrypted at rest via
-``utils.crypto`` (same mechanism as WhatsApp creds). Never logs the api_key.
+OpenAI-compatible REST proxy. Provider credentials are platform-owned and live
+in the unscoped ``platform_secrets`` collection. Tenant administrators can
+configure bot behaviour, but never read or mutate these credentials.
 """
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ SUPPORTED_PROVIDERS = (
     "built_in", "openai", "anthropic", "gemini", "openrouter", "custom_openai",
 )
 KEY_REQUIRED_PROVIDERS = ("openai", "anthropic", "gemini", "openrouter", "custom_openai")
+PLATFORM_AI_SETTINGS_ID = "ai_provider"
 
 # Default suggestions per provider (UI uses these for the datalist; backend
 # accepts any string so admins can paste a fresh model name without a release).
@@ -69,7 +70,9 @@ _HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=45.0, write=10.0, pool=10.0)
 
 async def load_settings(db) -> dict:
     """Read the ai_provider config doc, deep-merged onto :data:`DEFAULTS`."""
-    doc = await db.app_secrets.find_one({"_id": "ai_provider"}, {"_id": 0}) or {}
+    doc = await db.platform_secrets.find_one(
+        {"_id": PLATFORM_AI_SETTINGS_ID}, {"_id": 0}
+    ) or {}
     merged = {**DEFAULTS, **{k: v for k, v in doc.items() if k in DEFAULTS}}
     if merged.get("provider") == base64.b64decode(b'ZW1lcmdlbnQ=').decode('utf-8'):
         merged["provider"] = "built_in"
@@ -116,12 +119,16 @@ async def save_settings(db, patch: dict, user_id: str | None) -> dict:
     if unset_fields:
         update["$unset"] = unset_fields
     if update:
-        await db.app_secrets.update_one({"_id": "ai_provider"}, update, upsert=True)
+        await db.platform_secrets.update_one(
+            {"_id": PLATFORM_AI_SETTINGS_ID}, update, upsert=True
+        )
     return await load_settings(db)
 
 
 async def _resolve_api_key(db, provider: str) -> str:
-    doc = await db.app_secrets.find_one({"_id": "ai_provider"}, {"_id": 0}) or {}
+    doc = await db.platform_secrets.find_one(
+        {"_id": PLATFORM_AI_SETTINGS_ID}, {"_id": 0}
+    ) or {}
     enc = doc.get(f"api_key_{provider}_enc") or doc.get("api_key_enc")
     if not enc:
         return ""
@@ -133,18 +140,15 @@ async def _resolve_api_key(db, provider: str) -> str:
 
 
 async def _resolve_bot_api_key(db, provider: str) -> str:
-    doc = await db.app_secrets.find_one({"_id": "bot_provider"}, {"_id": 0}) or {}
-    enc = doc.get(f"api_key_{provider}_enc") or doc.get("api_key_enc")
-    if not enc:
-        return ""
-    try:
-        return crypto.decrypt(enc)
-    except Exception:
-        logger.error("bot_provider: cannot decrypt api_key for provider %s", provider)
-        return ""
+    """Compatibility alias: bot and assistant use the platform credential."""
+    return await _resolve_api_key(db, provider)
 
 
 async def save_bot_api_keys(db, api_keys: dict[str, str | None], user_id: str | None) -> None:
+    """Compatibility helper for platform-only callers.
+
+    Bot-specific tenant keys are intentionally no longer stored.
+    """
     set_fields = {}
     unset_fields = {}
     for prov, val in api_keys.items():
@@ -158,7 +162,9 @@ async def save_bot_api_keys(db, api_keys: dict[str, str | None], user_id: str | 
     if unset_fields:
         update["$unset"] = unset_fields
     if update:
-        await db.app_secrets.update_one({"_id": "bot_provider"}, update, upsert=True)
+        await db.platform_secrets.update_one(
+            {"_id": PLATFORM_AI_SETTINGS_ID}, update, upsert=True
+        )
 
 
 # ----------------------------------------------------------------------------
@@ -532,10 +538,7 @@ async def get_provider(db, *, override_provider: str | None = None, override_mod
     cls = _PROVIDER_CLASSES.get(active_provider, BuiltInProvider)
     key = ""
     if active_provider in KEY_REQUIRED_PROVIDERS:
-        if for_bot:
-            key = await _resolve_bot_api_key(db, active_provider)
-        if not key:
-            key = await _resolve_api_key(db, active_provider)
+        key = await _resolve_api_key(db, active_provider)
         if not key:
             raise LLMUnavailable(f"API Key del proveedor '{active_provider}' no configurada")
     return cls(

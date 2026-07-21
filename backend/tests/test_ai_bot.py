@@ -89,6 +89,7 @@ class _DB:
         for n in ("users", "contacts", "leads", "conversations", "messages",
                   "notifications", "bot_events", "bot_settings", "settings",
                   "user_sessions", "wa_status", "whatsapp_events", "app_secrets",
+                  "platform_secrets",
                   "work_areas", "appointments", "products"):
             setattr(self, n, _Coll())
         for n in ("organizations", "memberships", "whatsapp_routes"):
@@ -172,7 +173,7 @@ class TestPipeline:
 
     def test_01b_reply_with_bot_degraded_when_auto_reply_disabled(self, pipeline_mod, monkeypatch):
         db = _DB()
-        _run(db.app_secrets.insert_one({"_id": "ai_provider", "whatsapp_auto_reply_enabled": False}))
+        _run(db.platform_secrets.insert_one({"_id": "ai_provider", "whatsapp_auto_reply_enabled": False}))
         cv = _seed_conv(db)
         sent = []
         async def wa_send(conv, text): sent.append(text); return {"ok": True}
@@ -289,13 +290,25 @@ class TestPipeline:
         bots = [m for m in db.messages.docs if m["sender_type"] == "bot"]
         assert bots == []  # bot did NOT reply
 
-    def test_10_settings_validation_via_pipeline_constants(self, pipeline_mod):
-        # Validation happens in the FastAPI endpoint (server.py). Here we
-        # assert the allowed-models guard / threshold range are enforced by
-        # the model constants the endpoint imports.
-        from server import _ALLOWED_BOT_MODELS
-        assert "gpt-4o-mini" in _ALLOWED_BOT_MODELS
-        assert "gpt-3.5-turbo" not in _ALLOWED_BOT_MODELS
+    def test_10_pipeline_ignores_legacy_tenant_provider(self, pipeline_mod, monkeypatch):
+        db = _DB()
+        cv = _seed_conv(db)
+        _run(db.bot_settings.insert_one({
+            "_id": "default", "provider": "anthropic", "model": "tenant-model",
+        }))
+        _run(db.platform_secrets.insert_one({
+            "_id": "ai_provider", "provider": "built_in", "model": "gpt-4o-mini",
+        }))
+        seen = {}
+
+        async def fake_llm(**kwargs):
+            seen.update(kwargs)
+            return ({"decision": "no_action", "confidence": 1, "reply": ""}, "{}")
+
+        monkeypatch.setattr(pipeline_mod, "call_llm_json", fake_llm)
+        _run(pipeline_mod.process_inbound(db, cv, "wamid.IN1", wa_send=None))
+        assert seen["provider"] == "built_in"
+        assert seen["model"] == "gpt-4o-mini"
 
     def test_11_catalog_reading_enabled(self, pipeline_mod, monkeypatch):
         db = _DB()

@@ -166,7 +166,7 @@ class _FakeDB:
     def __init__(self):
         for name in ("users", "user_sessions", "contacts", "leads", "conversations",
                      "messages", "notifications", "settings", "wa_status",
-                     "whatsapp_events", "app_secrets", "tasks", "notes", "bot_events",
+                     "whatsapp_events", "app_secrets", "platform_secrets", "tasks", "notes", "bot_events",
                      "password_reset_tokens", "appointments", "bot_settings", "products",
                      "roles", "tags", "work_areas", "ai_usage_logs"):
             setattr(self, name, _Coll())
@@ -268,6 +268,32 @@ class TestEnvironmentGuardrails:
 # Legacy -> multiempresa migration
 # ====================================================================
 class TestLegacyMultiempresaMigration:
+    def test_legacy_ai_credentials_are_copied_once_to_platform_storage(self, srv):
+        server, fake, _ = srv
+        _run(fake.app_secrets.insert_one({
+            "_id": "ai_provider", "provider": "openai",
+            "api_key_openai_enc": "provider-encrypted",
+        }))
+        _run(fake.app_secrets.insert_one({
+            "_id": "bot_provider", "api_key_openai_enc": "bot-encrypted",
+        }))
+        _run(fake.app_secrets.insert_one({
+            "_id": "ai_usage_reporting", "openai_key_enc": "report-encrypted",
+        }))
+
+        _run(server._migrate_legacy_ai_credentials_to_platform("org_legacy"))
+        provider = next(d for d in fake.platform_secrets.docs if d["_id"] == "ai_provider")
+        reporting = next(d for d in fake.platform_secrets.docs if d["_id"] == "ai_usage_reporting")
+        assert provider["provider"] == "openai"
+        assert provider["api_key_openai_enc"] == "bot-encrypted"
+        assert provider["migrated_from_organization_id"] == "org_legacy"
+        assert reporting["openai_key_enc"] == "report-encrypted"
+
+        provider["provider"] = "anthropic"
+        _run(server._migrate_legacy_ai_credentials_to_platform("org_other"))
+        assert provider["provider"] == "anthropic"
+        assert len(fake.platform_secrets.docs) == 2
+
     def test_migration_is_idempotent_grandfathers_access_and_keeps_rollback_shadow(
         self, srv, monkeypatch
     ):

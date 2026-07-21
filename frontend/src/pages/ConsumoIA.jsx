@@ -47,7 +47,7 @@ function monthStart()  { const d = new Date(); d.setDate(1); return d.toISOStrin
 export default function ConsumoIA() {
   const { user } = useAuth();
   const canView = hasPermission(user, "ai_view");
-  const canAdmin = hasPermission(user, "ai_admin");
+  const canManagePlatformAI = !!user?.is_platform_admin;
 
   const [filters, setFilters] = useState({
     from: monthStart(),
@@ -160,7 +160,7 @@ export default function ConsumoIA() {
         </div>
 
         <ProviderVerificationPanel
-          canAdmin={canAdmin}
+          canAdmin={canManagePlatformAI}
           status={reportingQ.data}
           loading={reportingQ.isPending}
           from={filters.from}
@@ -263,7 +263,7 @@ export default function ConsumoIA() {
         />
 
         {/* Pricing editor */}
-        <PricingEditor canAdmin={canAdmin} pricing={pricingQ.data} onSaved={() => qc.invalidateQueries({ queryKey: ["ai-pricing"] })} />
+        <PricingEditor canAdmin={canManagePlatformAI} pricing={pricingQ.data} onSaved={() => qc.invalidateQueries({ queryKey: ["ai-pricing"] })} />
       </div>
     </AppLayout>
   );
