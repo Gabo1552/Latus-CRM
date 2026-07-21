@@ -284,7 +284,7 @@ _INTERNAL_ORGANIZATION_FIELDS = {
     "provider_plan_code", "provider_status", "provider_last_synced_at",
     "provider_last_payment_status", "provider_last_payment_at",
     "provider_last_invoice_modified", "provider_checkout_created_at",
-    "billing_manual_override",
+    "billing_manual_override", "migration_origin",
 }
 
 
@@ -1192,6 +1192,119 @@ async def require_platform_admin(user: User = Depends(get_current_user)) -> User
     return user
 
 
+LEGACY_MULTIEMPRESA_MIGRATION_ID = "legacy_single_tenant_to_multiempresa_v1"
+LEGACY_DEFAULT_ORGANIZATION_ID = "org_legacy_default"
+LEGACY_DEFAULT_ORGANIZATION_MONGO_ID = "migration:legacy_default_organization"
+
+
+async def _get_or_create_legacy_default_organization() -> dict:
+    """Return one stable organization for all records from the legacy app.
+
+    The deterministic Mongo ``_id`` makes concurrent first starts converge on
+    the same document. Existing organizations always win so reruns never move
+    an already-migrated installation to a different tenant.
+    """
+    organizations = _raw_collection("organizations")
+    existing = await organizations.find_one(
+        {"status": "active"}, {"_id": 0}, sort=[("created_at", 1)]
+    )
+    if existing:
+        return existing
+
+    legacy = Organization(
+        organization_id=LEGACY_DEFAULT_ORGANIZATION_ID,
+        name=(os.environ.get("DEFAULT_ORGANIZATION_NAME") or "Latus CRM").strip(),
+        plan_code="base",
+        subscription_status="not_configured",
+        license_status="not_configured",
+        trial_started_at=None,
+        trial_ends_at=None,
+    ).model_dump()
+    legacy.update({
+        "_id": LEGACY_DEFAULT_ORGANIZATION_MONGO_ID,
+        "migration_origin": "legacy_single_tenant",
+    })
+    try:
+        await organizations.update_one(
+            {"_id": LEGACY_DEFAULT_ORGANIZATION_MONGO_ID},
+            {"$setOnInsert": legacy},
+            upsert=True,
+        )
+    except DuplicateKeyError:
+        # Another worker won the deterministic upsert.
+        pass
+    organization = await organizations.find_one(
+        {"_id": LEGACY_DEFAULT_ORGANIZATION_MONGO_ID}, {"_id": 0}
+    )
+    if organization and not organization.get("organization_id") and not isinstance(db, _DBProxy):
+        # Some old adapters upsert only the filter and silently ignore
+        # ``$setOnInsert``. Complete that partial document in place.
+        await organizations.update_one(
+            {"_id": LEGACY_DEFAULT_ORGANIZATION_MONGO_ID},
+            {"$set": {key: value for key, value in legacy.items() if key != "_id"}},
+        )
+        organization = await organizations.find_one(
+            {"_id": LEGACY_DEFAULT_ORGANIZATION_MONGO_ID}, {"_id": 0}
+        )
+    if not organization:
+        organization = await organizations.find_one(
+            {"status": "active"}, {"_id": 0}, sort=[("created_at", 1)]
+        )
+    if not organization and not isinstance(db, _DBProxy):
+        # Compatibility for the lightweight in-memory adapters used by old
+        # tests, which do not implement Mongo's ``$setOnInsert`` semantics.
+        await organizations.insert_one(dict(legacy))
+        organization = await organizations.find_one(
+            {"organization_id": LEGACY_DEFAULT_ORGANIZATION_ID}, {"_id": 0}
+        ) or legacy
+    if not organization:
+        raise RuntimeError("No se pudo crear la empresa heredada de forma atómica")
+    return organization
+
+
+async def _ensure_legacy_membership(organization_id: str, user_doc: dict) -> dict:
+    memberships = _raw_collection("memberships")
+    existing = await memberships.find_one({"user_id": user_doc["user_id"]}, {"_id": 0})
+    if existing:
+        return existing
+    membership_id = f"migration:{organization_id}:{user_doc['user_id']}"
+    membership = {
+        "_id": membership_id,
+        "organization_id": organization_id,
+        "user_id": user_doc["user_id"],
+        "role": _normalize_role(user_doc.get("role")),
+        "status": "active" if user_doc.get("active", True) else "inactive",
+        "work_areas": user_doc.get("work_areas") or [],
+        "calendar_settings": user_doc.get("calendar_settings"),
+        "display_name": user_doc.get("name"),
+        "created_at": user_doc.get("created_at") or now_iso(),
+        "migrated_from_legacy": True,
+    }
+    try:
+        await memberships.update_one(
+            {"_id": membership_id}, {"$setOnInsert": membership}, upsert=True
+        )
+    except DuplicateKeyError:
+        pass
+    result = await memberships.find_one({"_id": membership_id}, {"_id": 0})
+    if result and not result.get("user_id") and not isinstance(db, _DBProxy):
+        await memberships.update_one(
+            {"_id": membership_id},
+            {"$set": {key: value for key, value in membership.items() if key != "_id"}},
+        )
+        result = await memberships.find_one({"_id": membership_id}, {"_id": 0})
+    if not result:
+        result = await memberships.find_one({"user_id": user_doc["user_id"]}, {"_id": 0})
+    if not result and not isinstance(db, _DBProxy):
+        # See the adapter compatibility note in the organization helper.
+        await memberships.insert_one(dict(membership))
+        result = await memberships.find_one({"user_id": user_doc["user_id"]}, {"_id": 0}) \
+            or membership
+    if not result:
+        raise RuntimeError(f"No se pudo crear la membresía heredada de {user_doc['user_id']}")
+    return result
+
+
 async def _create_owner_organization(user_id: str, user_name: str) -> str:
     organization = Organization(name=f"Empresa de {user_name.strip() or 'nuevo usuario'}").model_dump()
     await _raw_collection("organizations").insert_one(organization)
@@ -1246,24 +1359,9 @@ async def _ensure_existing_user_organization(user_doc: dict) -> str:
     if membership:
         await _backfill_legacy_adapter_memberships(membership["organization_id"])
         return membership["organization_id"]
-    organization = await _raw_collection("organizations").find_one(
-        {"status": "active"}, {"_id": 0}
-    )
-    if not organization:
-        organization = Organization(
-            name=(os.environ.get("DEFAULT_ORGANIZATION_NAME") or "Latus CRM").strip()
-        ).model_dump()
-        await _raw_collection("organizations").insert_one(organization)
+    organization = await _get_or_create_legacy_default_organization()
     organization_id = organization["organization_id"]
-    await _raw_collection("memberships").insert_one({
-        "organization_id": organization_id,
-        "user_id": user_doc["user_id"],
-        "role": _normalize_role(user_doc.get("role")),
-        "status": "active",
-        "work_areas": user_doc.get("work_areas") or [],
-        "display_name": user_doc.get("name"),
-        "created_at": now_iso(),
-    })
+    await _ensure_legacy_membership(organization_id, user_doc)
     await _raw_collection("users").update_one(
         {"user_id": user_doc["user_id"]},
         {"$set": {"default_organization_id": organization_id}},
@@ -6641,14 +6739,7 @@ async def _ensure_default_organization() -> str:
     """Idempotently attach legacy data and users to the first organization."""
     organizations = _raw_collection("organizations")
     memberships = _raw_collection("memberships")
-    organization = await organizations.find_one(
-        {"status": "active"}, {"_id": 0}, sort=[("created_at", 1)]
-    )
-    if not organization:
-        organization = Organization(
-            name=(os.environ.get("DEFAULT_ORGANIZATION_NAME") or "Latus CRM").strip()
-        ).model_dump()
-        await organizations.insert_one(organization)
+    organization = await _get_or_create_legacy_default_organization()
     organization_id = organization["organization_id"]
     await organizations.update_one(
         {"organization_id": organization_id},
@@ -6664,21 +6755,11 @@ async def _ensure_default_organization() -> str:
         user_id = user_doc.get("user_id")
         if not user_id:
             continue
-        existing = await memberships.find_one({"user_id": user_id})
-        if not existing:
-            await memberships.insert_one({
-                "organization_id": organization_id,
-                "user_id": user_id,
-                "role": _normalize_role(user_doc.get("role")),
-                "status": "active" if user_doc.get("active", True) else "inactive",
-                "work_areas": user_doc.get("work_areas") or [],
-                "display_name": user_doc.get("name"),
-                "created_at": user_doc.get("created_at") or now_iso(),
-                "migrated_from_legacy": True,
-            })
+        existing = await _ensure_legacy_membership(organization_id, user_doc)
+        user_organization_id = existing.get("organization_id") or organization_id
         await users.update_one(
             {"user_id": user_id, "default_organization_id": {"$exists": False}},
-            {"$set": {"default_organization_id": organization_id}},
+            {"$set": {"default_organization_id": user_organization_id}},
         )
 
     sessions = _raw_collection("user_sessions")
@@ -6710,19 +6791,92 @@ async def _ensure_default_organization() -> str:
             ]
         }).to_list(1000)
         for legacy in legacy_docs:
+            if legacy.get("multiempresa_shadowed_at"):
+                continue
             old_id = str(legacy.get("_id", "default"))
             public_id = old_id.split(":", 1)[-1] if ":" in old_id else old_id
             new_id_value = f"{organization_id}:{public_id}"
             replacement = {**legacy, "_id": new_id_value, "organization_id": organization_id}
+            replacement.pop("multiempresa_shadowed_at", None)
             await collection.replace_one({"_id": new_id_value}, replacement, upsert=True)
             if old_id != new_id_value:
-                await collection.delete_one({"_id": legacy["_id"]})
+                # Keep the legacy document as a rollback shadow. The old
+                # single-tenant release still reads `_id=default` while the
+                # new release reads the organization-prefixed copy.
+                await collection.update_one(
+                    {"_id": legacy["_id"]},
+                    {"$set": {
+                        "multiempresa_shadowed_at": now_iso(),
+                        "multiempresa_shadow_id": new_id_value,
+                    }},
+                )
+    return organization_id
+
+
+async def _run_legacy_multiempresa_migration() -> str:
+    """Run the legacy migration synchronously and persist its recovery state."""
+    migrations = _raw_collection("system_migrations")
+    previous = await migrations.find_one(
+        {"_id": LEGACY_MULTIEMPRESA_MIGRATION_ID}, {"_id": 0}
+    )
+    if previous and previous.get("status") == "completed" and previous.get("organization_id"):
+        return previous["organization_id"]
+
+    confirmed = (os.environ.get("LATUS_CONFIRM_PRODUCTION_MIGRATION") or "").strip().lower()
+    if _environment_name() == "production" and confirmed not in {"1", "true", "yes", "on"}:
+        raise RuntimeError(
+            "[MIGRACIÓN BLOQUEADA] Realizá un backup de MongoDB y definí "
+            "LATUS_CONFIRM_PRODUCTION_MIGRATION=true para autorizar la primera migración multiempresa"
+        )
+
+    run_id = new_id("migration")
+    started_at = now_iso()
+    await migrations.update_one(
+        {"_id": LEGACY_MULTIEMPRESA_MIGRATION_ID},
+        {"$set": {
+            "status": "running",
+            "run_id": run_id,
+            "started_at": started_at,
+            "updated_at": started_at,
+            "last_error": None,
+        }, "$setOnInsert": {"created_at": started_at}},
+        upsert=True,
+    )
+    try:
+        organization_id = await _ensure_default_organization()
+    except Exception as exc:
+        await migrations.update_one(
+            {"_id": LEGACY_MULTIEMPRESA_MIGRATION_ID},
+            {"$set": {
+                "status": "failed",
+                "run_id": run_id,
+                "failed_at": now_iso(),
+                "updated_at": now_iso(),
+                "last_error": f"{type(exc).__name__}: {str(exc)[:500]}",
+            }},
+            upsert=True,
+        )
+        raise
+    completed_at = now_iso()
+    await migrations.update_one(
+        {"_id": LEGACY_MULTIEMPRESA_MIGRATION_ID},
+        {"$set": {
+            "status": "completed",
+            "run_id": run_id,
+            "organization_id": organization_id,
+            "completed_at": completed_at,
+            "updated_at": completed_at,
+            "last_error": None,
+            "rollback_shadows_preserved": True,
+        }},
+        upsert=True,
+    )
     return organization_id
 
 
 async def _bootstrap_tenant_data() -> None:
     """Run tenant migration and existing seeds in a safe, ordered context."""
-    organization_id = await _ensure_default_organization()
+    organization_id = await _run_legacy_multiempresa_migration()
     token = set_organization_id(organization_id)
     try:
         await _seed_roles()
@@ -6738,28 +6892,23 @@ async def _bootstrap_tenant_data() -> None:
 
 @app.on_event("startup")
 async def on_startup():
-    """Validate safety synchronously, then start background initialization.
+    """Validate and migrate synchronously before accepting traffic.
 
-    Environment guardrails intentionally stop an unsafe deployment. Heavy
-    DB-touching work remains non-blocking after validation succeeds.
+    Environment guardrails or migration failures intentionally stop an unsafe
+    deployment instead of exposing a partially migrated application.
     """
     validate_environment_guardrails()
 
-    async def _bg_step(step_name: str, coro):
-        try:
-            await coro
-        except Exception:  # pragma: no cover - logged for ops
-            logger.exception("background startup step '%s' failed", step_name)
-
-    # Ordered because every seed/index operation must run inside one tenant.
-    asyncio.create_task(_bg_step("_bootstrap_tenant_data", _bootstrap_tenant_data()))
+    # Finish migration and indexes before accepting sessions. Any failure is
+    # intentional and keeps the unsafe release out of service.
+    await _bootstrap_tenant_data()
 
     # Scheduler is sync and doesn't touch DB — fine to start in foreground.
     try:
         _start_scheduler()
     except Exception:  # pragma: no cover
         logger.exception("startup step '_start_scheduler' failed (continuing)")
-    logger.info("Latus CRM started (background init tasks scheduled)")
+    logger.info("Latus CRM started (multiempresa migration ready)")
 
 
 # ---------------------------------------------------------------------------
@@ -6785,15 +6934,24 @@ async def health_ready():
     """Readiness probe. Pings Mongo with a short timeout; never raises."""
     db_ok = True
     db_error = None
+    migration_status = "not_required" if _environment_name() == "development" else "unknown"
     try:
         # If MONGO_URL is missing, ``db.command`` will trigger _DBProxy init
         # which raises a clean RuntimeError — captured below.
         await asyncio.wait_for(db.command("ping"), timeout=3.0)
+        if _environment_name() != "development":
+            migration = await _raw_collection("system_migrations").find_one(
+                {"_id": LEGACY_MULTIEMPRESA_MIGRATION_ID}, {"_id": 0, "status": 1}
+            )
+            migration_status = (migration or {}).get("status") or "missing"
+            if migration_status != "completed":
+                db_ok = False
+                db_error = f"migración multiempresa: {migration_status}"
     except Exception as e:  # pragma: no cover - exercised in deploy
         db_ok = False
         db_error = f"{type(e).__name__}: {str(e)[:160]}"
     return {"ok": db_ok, "db": "up" if db_ok else f"down ({db_error})",
-            "version": APP_VERSION}
+            "version": APP_VERSION, "migration": migration_status}
 
 
 async def _migrate_promote_first_google_admin() -> None:

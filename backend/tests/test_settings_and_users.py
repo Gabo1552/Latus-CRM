@@ -80,6 +80,16 @@ class _Cursor:
     async def to_list(self, n=None):
         return list(self._docs if n is None else self._docs[:n])
 
+    def __aiter__(self):
+        self._iterator = iter(self._docs)
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._iterator)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
 
 class _Coll:
     def __init__(self):
@@ -112,12 +122,29 @@ class _Coll:
                 return
         if upsert:
             new = {k: v for k, v in (query or {}).items() if not isinstance(v, dict)}
+            if "$setOnInsert" in update:
+                new.update(update["$setOnInsert"])
             if "$set" in update:
                 new.update(update["$set"])
             self.docs.append(new)
 
-    async def update_many(self, *_a, **_k):
-        pass
+    async def update_many(self, query, update, **_kwargs):
+        for d in self.docs:
+            if not _query_matches(d, query):
+                continue
+            if "$set" in update:
+                d.update(update["$set"])
+            if "$unset" in update:
+                for k in update["$unset"]:
+                    d.pop(k, None)
+
+    async def replace_one(self, query, replacement, upsert=False):
+        for index, doc in enumerate(self.docs):
+            if _query_matches(doc, query):
+                self.docs[index] = dict(replacement)
+                return
+        if upsert:
+            self.docs.append(dict(replacement))
 
     async def delete_one(self, query):
         for i, d in enumerate(self.docs):
@@ -140,9 +167,10 @@ class _FakeDB:
         for name in ("users", "user_sessions", "contacts", "leads", "conversations",
                      "messages", "notifications", "settings", "wa_status",
                      "whatsapp_events", "app_secrets", "tasks", "notes", "bot_events",
-                     "password_reset_tokens"):
+                     "password_reset_tokens", "appointments", "bot_settings", "products",
+                     "roles", "tags", "work_areas", "ai_usage_logs"):
             setattr(self, name, _Coll())
-        for name in ("organizations", "memberships", "whatsapp_routes"):
+        for name in ("organizations", "memberships", "whatsapp_routes", "system_migrations"):
             setattr(self, name, _Coll())
         for name in ("billing_requests", "billing_events"):
             setattr(self, name, _Coll())
@@ -234,6 +262,98 @@ class TestEnvironmentGuardrails:
         monkeypatch.setenv("CORS_ORIGINS", "https://otro.example.com")
         with pytest.raises(RuntimeError, match="APP_BASE_URL"):
             server.validate_environment_guardrails()
+
+
+# ====================================================================
+# Legacy -> multiempresa migration
+# ====================================================================
+class TestLegacyMultiempresaMigration:
+    def test_migration_is_idempotent_grandfathers_access_and_keeps_rollback_shadow(
+        self, srv, monkeypatch
+    ):
+        server, fake, _ = srv
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        _run(fake.users.insert_one({
+            "user_id": "legacy_admin", "email": "legacy@example.com",
+            "name": "Admin anterior", "role": "admin", "active": True,
+            "created_at": "2025-01-01T00:00:00+00:00",
+        }))
+        _run(fake.user_sessions.insert_one({
+            "session_token": "legacy-session", "user_id": "legacy_admin",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+        }))
+        _run(fake.contacts.insert_one({"id": "contact_legacy", "name": "Cliente anterior"}))
+        _run(fake.app_secrets.insert_one({"_id": "ai_provider", "ciphertext": "encrypted"}))
+
+        organization_id = _run(server._run_legacy_multiempresa_migration())
+        assert organization_id == server.LEGACY_DEFAULT_ORGANIZATION_ID
+        assert len(fake.organizations.docs) == 1
+        organization = fake.organizations.docs[0]
+        assert organization["plan_code"] == "base"
+        assert organization["subscription_status"] == "not_configured"
+        assert organization["license_status"] == "not_configured"
+        assert organization["trial_ends_at"] is None
+        assert server.subscription_access_state(organization)["allowed"] is True
+
+        assert len([m for m in fake.memberships.docs if m["user_id"] == "legacy_admin"]) == 1
+        assert fake.contacts.docs[0]["organization_id"] == organization_id
+        assert fake.user_sessions.docs[1]["organization_id"] == organization_id
+        assert next(u for u in fake.users.docs if u["user_id"] == "legacy_admin")[
+            "default_organization_id"
+        ] == organization_id
+
+        legacy_secret = next(d for d in fake.app_secrets.docs if d["_id"] == "ai_provider")
+        tenant_secret = next(
+            d for d in fake.app_secrets.docs if d["_id"] == f"{organization_id}:ai_provider"
+        )
+        assert legacy_secret["multiempresa_shadow_id"] == tenant_secret["_id"]
+        assert tenant_secret["organization_id"] == organization_id
+
+        second_run = _run(server._run_legacy_multiempresa_migration())
+        _run(server._ensure_default_organization())
+        assert second_run == organization_id
+        assert len(fake.organizations.docs) == 1
+        assert len([m for m in fake.memberships.docs if m["user_id"] == "legacy_admin"]) == 1
+        marker = fake.system_migrations.docs[0]
+        assert marker["status"] == "completed"
+        assert marker["rollback_shadows_preserved"] is True
+
+    def test_production_migration_requires_explicit_backup_confirmation(
+        self, srv, monkeypatch
+    ):
+        server, fake, _ = srv
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.delenv("LATUS_CONFIRM_PRODUCTION_MIGRATION", raising=False)
+        with pytest.raises(RuntimeError, match="backup de MongoDB"):
+            _run(server._run_legacy_multiempresa_migration())
+        assert fake.organizations.docs == []
+
+    def test_failed_migration_is_recorded_and_can_be_retried(self, srv, monkeypatch):
+        server, fake, _ = srv
+        monkeypatch.setenv("ENVIRONMENT", "development")
+
+        async def fail_once():
+            raise RuntimeError("fallo controlado")
+
+        monkeypatch.setattr(server, "_ensure_default_organization", fail_once)
+        with pytest.raises(RuntimeError, match="fallo controlado"):
+            _run(server._run_legacy_multiempresa_migration())
+        marker = fake.system_migrations.docs[0]
+        assert marker["status"] == "failed"
+        assert "fallo controlado" in marker["last_error"]
+
+    def test_startup_waits_for_migration_before_starting_scheduler(self, srv, monkeypatch):
+        server, _, _ = srv
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        order = []
+
+        async def migrate():
+            order.append("migration")
+
+        monkeypatch.setattr(server, "_bootstrap_tenant_data", migrate)
+        monkeypatch.setattr(server, "_start_scheduler", lambda: order.append("scheduler"))
+        _run(server.on_startup())
+        assert order == ["migration", "scheduler"]
 
 
 # ====================================================================

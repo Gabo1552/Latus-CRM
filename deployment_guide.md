@@ -36,6 +36,7 @@ Esta guía detalla la arquitectura, configuración y el paso a paso exacto para 
 | `PLATFORM_ADMIN_EMAILS` | Administradores de prueba | Administradores reales | Emails con acceso a la administración multiempresa. |
 | `BILLING_GRACE_DAYS` | `7` | `7` | Días de gracia ante un cobro rechazado. |
 | `LATUS_SEED_DEMO` | `true` solo cuando se necesite regenerar la demo | `false` | Nunca sembrar datos demo en Producción. |
+| `LATUS_CONFIRM_PRODUCTION_MIGRATION` | No requerida | `true` solo para la primera migración | Confirma que existe un backup verificado antes de migrar la base activa. |
 | `LATUS_LLM_KEY` | Clave API de prueba o compartida | Clave API de producción | Clave del proveedor de LLM / IA. |
 | `RESEND_API_KEY` | Clave Resend | Clave Resend | Clave de envío de e-mails transaccionales. |
 | `RESEND_FROM_EMAIL` | `notificaciones@somoslatus.com` | `notificaciones@somoslatus.com` | Remitente de e-mails. |
@@ -79,6 +80,20 @@ Esta guía detalla la arquitectura, configuración y el paso a paso exacto para 
    - `https://TU-BACKEND/api/health` responde `environment: production`.
    - `https://TU-BACKEND/api/health/ready` responde `ok: true`.
 7. Si alguna protección rechaza el arranque, corrige las variables; no desactives la validación.
+
+### Primera migración de la instalación actual
+
+1. Detén temporalmente nuevos accesos y despliegues.
+2. Genera un snapshot de Atlas o un `mongodump` de la base productiva actual.
+3. Verifica que el respaldo contenga al menos `users`, `contacts`, `conversations`, `messages`, `settings`, `bot_settings` y `app_secrets`.
+4. Conserva el `DB_NAME` actual: cambiarlo por otro nombre mostraría una base vacía.
+5. Configura `DEFAULT_ORGANIZATION_NAME` con el nombre que debe recibir la empresa existente.
+6. Agrega `LATUS_CONFIRM_PRODUCTION_MIGRATION=true` y despliega.
+7. El backend terminará la migración antes de aceptar sesiones. Revisa que `/api/health/ready` responda `ok: true` y `migration: completed`, y prueba el acceso con un administrador.
+8. Confirma que contactos, conversaciones, agenda, catálogo y configuración continúan presentes.
+9. Retira `LATUS_CONFIRM_PRODUCTION_MIGRATION` después de comprobar que la migración quedó registrada como completada.
+
+Para permitir un rollback de código, la migración conserva copias heredadas de `bot_settings` y `app_secrets`. No habilites la creación de nuevas empresas hasta cerrar la validación productiva; un rollback a la versión monolítica no es seguro después de comenzar a operar con más de una empresa.
 
 ## ▲ Paso a Paso: Crear el Frontend de Producción en Vercel
 
@@ -150,6 +165,7 @@ El backend de Latus CRM incluye verificaciones de seguridad automáticas al inic
 - [ ] `PUBLIC_BASE_URL` apunta al Railway correspondiente en cada entorno.
 - [ ] `APP_ENCRYPTION_KEY` es distinta y está guardada de forma segura en cada entorno.
 - [ ] `LATUS_SEED_DEMO=false` en Producción.
+- [ ] Backup productivo creado y verificado antes de activar `LATUS_CONFIRM_PRODUCTION_MIGRATION=true`.
 - [ ] Webhook de Staging apunta a `https://latus-crm-staging.up.railway.app/api/webhooks/mercadopago`.
 - [ ] Webhook de Producción apunta a `https://latus-crm-production.up.railway.app/api/webhooks/mercadopago`.
 - [ ] `CORS_ORIGINS` en Backend Staging únicamente permite `https://latus-crm-staging.vercel.app`.
