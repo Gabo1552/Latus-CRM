@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Building2, CheckCircle2, KeyRound, Pencil, Search, ShieldAlert,
+  BadgeDollarSign, Building2, CheckCircle2, KeyRound, Pencil, Search, ShieldAlert,
   Sparkles, Users, X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -45,6 +45,7 @@ function ManageModal({ organization, onClose, onSave, saving }) {
     grace_ends_at: dateInput(organization.grace_ends_at),
     billing_email: organization.billing_email || "",
     internal_notes: organization.internal_notes || "",
+    ai_fee_percent: organization.ai_fee_percent ?? "",
   }));
   const set = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
 
@@ -86,10 +87,17 @@ function ManageModal({ organization, onClose, onSave, saving }) {
           <label className="text-xs font-bold text-latus-ink sm:col-span-2">Notas internas
             <textarea className={`${inputClass} min-h-[90px] resize-y py-3`} value={draft.internal_notes} onChange={(event) => set("internal_notes", event.target.value)} placeholder="Acuerdos comerciales, contacto o seguimiento..." />
           </label>
+          <label className="text-xs font-bold text-latus-ink sm:col-span-2">Fee de IA específico
+            <div className="relative">
+              <Input className={`${inputClass} pr-9`} type="number" min="0" max="500" step="0.1" value={draft.ai_fee_percent} onChange={(event) => set("ai_fee_percent", event.target.value)} placeholder={`Global: ${organization.ai_billing?.fee_percent ?? 20}%`} />
+              <span className="absolute bottom-2.5 right-3 text-sm text-latus-muted">%</span>
+            </div>
+            <span className="mt-1 block font-normal text-latus-muted">Dejalo vacío para usar el fee global de la plataforma.</span>
+          </label>
         </div>
         <div className="flex justify-end gap-3 border-t border-latus-warm-border bg-white px-6 py-4">
           <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button type="button" disabled={saving} onClick={() => onSave(draft)} className="bg-latus-blue text-white hover:bg-latus-blue/90">{saving ? "Guardando..." : "Guardar licencia"}</Button>
+          <Button type="button" disabled={saving} onClick={() => onSave({ ...draft, ai_fee_percent: draft.ai_fee_percent === "" ? null : Number(draft.ai_fee_percent) })} className="bg-latus-blue text-white hover:bg-latus-blue/90">{saving ? "Guardando..." : "Guardar licencia"}</Button>
         </div>
       </div>
     </div>
@@ -120,15 +128,17 @@ export default function Plataforma() {
   }, [organizations, search]);
   const active = organizations.filter((item) => item.access?.allowed).length;
   const pending = organizations.filter((item) => item.latest_request?.status === "pending").length;
+  const aiBillable = organizations.reduce((total, item) => total + Number(item.ai_billing?.this_month?.billable_cost_usd || 0), 0);
 
   return (
     <AppLayout title="Plataforma">
       <div className="mx-auto w-full max-w-[1500px] space-y-6 p-4 sm:p-6 lg:p-8" data-testid="platform-page">
-        <section className="grid gap-4 md:grid-cols-3">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {[
             { label: "Empresas registradas", value: organizations.length, icon: Building2, tone: "bg-sky-50 text-sky-700" },
             { label: "Licencias habilitadas", value: active, icon: CheckCircle2, tone: "bg-emerald-50 text-emerald-700" },
             { label: "Solicitudes pendientes", value: pending, icon: ShieldAlert, tone: "bg-amber-50 text-amber-800" },
+            { label: "IA facturable este mes", value: `USD ${aiBillable.toFixed(2)}`, icon: BadgeDollarSign, tone: "bg-violet-50 text-violet-700" },
           ].map(({ label, value, icon: Icon, tone }) => (
             <article key={label} className="flex items-center gap-4 rounded-2xl border border-latus-warm-border bg-white p-5 shadow-sm"><span className={`grid h-12 w-12 place-items-center rounded-2xl ${tone}`}><Icon className="h-5 w-5" /></span><div><p className="text-3xl font-black tracking-tight text-latus-ink">{value}</p><p className="text-xs font-bold uppercase tracking-wider text-latus-muted">{label}</p></div></article>
           ))}
@@ -151,8 +161,8 @@ export default function Plataforma() {
             <div className="grid min-h-[260px] place-items-center"><div className="h-9 w-9 animate-spin rounded-full border-2 border-latus-blue border-t-transparent" /></div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1120px] text-left">
-                <thead className="bg-latus-cream text-[11px] font-extrabold uppercase tracking-[0.12em] text-latus-muted"><tr><th className="px-5 py-3.5">Empresa</th><th className="px-4 py-3.5">Plan</th><th className="px-4 py-3.5">Suscripción</th><th className="px-4 py-3.5">Mercado Pago</th><th className="px-4 py-3.5">Licencia</th><th className="px-4 py-3.5">Uso</th><th className="px-4 py-3.5">Acceso</th><th className="px-5 py-3.5 text-right">Acciones</th></tr></thead>
+              <table className="w-full min-w-[1280px] text-left">
+                <thead className="bg-latus-cream text-[11px] font-extrabold uppercase tracking-[0.12em] text-latus-muted"><tr><th className="px-5 py-3.5">Empresa</th><th className="px-4 py-3.5">Plan</th><th className="px-4 py-3.5">Suscripción</th><th className="px-4 py-3.5">Mercado Pago</th><th className="px-4 py-3.5">Licencia</th><th className="px-4 py-3.5">Uso</th><th className="px-4 py-3.5">IA este mes</th><th className="px-4 py-3.5">Acceso</th><th className="px-5 py-3.5 text-right">Acciones</th></tr></thead>
                 <tbody className="divide-y divide-latus-warm-border">
                   {filtered.map((organization) => (
                     <tr key={organization.organization_id} className="hover:bg-latus-cream/50">
@@ -162,6 +172,7 @@ export default function Plataforma() {
                       <td className="px-4 py-4 text-sm text-latus-muted">{PROVIDER_LABELS[organization.provider_status] || (organization.provider_status ? organization.provider_status : "Sin vincular")}</td>
                       <td className="px-4 py-4 text-sm text-latus-muted">{LICENSE_LABELS[organization.license_status] || organization.license_status}</td>
                       <td className="px-4 py-4"><p className="flex items-center gap-1.5 text-sm font-bold text-latus-ink"><Users className="h-3.5 w-3.5 text-latus-blue" />{organization.active_users} usuarios</p><p className="mt-1 text-xs text-latus-muted">{organization.contacts} clientes</p></td>
+                      <td className="px-4 py-4"><p className="text-sm font-extrabold text-latus-ink">USD {Number(organization.ai_billing?.this_month?.billable_cost_usd || 0).toFixed(2)}</p><p className="mt-1 text-xs text-latus-muted">Base USD {Number(organization.ai_billing?.this_month?.base_cost_usd || 0).toFixed(2)} · fee {organization.ai_billing?.fee_percent ?? 0}%</p></td>
                       <td className="px-4 py-4"><span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-extrabold ${statusTone(organization.access?.allowed)}`}>{organization.access?.allowed ? "Habilitado" : "Bloqueado"}</span></td>
                       <td className="px-5 py-4 text-right"><Button type="button" variant="outline" size="sm" onClick={() => setSelected(organization)} className="rounded-lg border-latus-warm-border"><Pencil className="h-3.5 w-3.5" />Administrar</Button></td>
                     </tr>

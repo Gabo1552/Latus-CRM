@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowRight, Building2, Check, CheckCircle2, Clock3, CreditCard, RefreshCw,
+  ArrowRight, BadgeDollarSign, Building2, Check, CheckCircle2, Clock3, CreditCard, RefreshCw,
   ShieldCheck, Sparkles, Users, UserRoundCheck, XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -178,9 +178,14 @@ export default function Suscripcion() {
             <div><p className="text-xs font-extrabold uppercase tracking-[0.15em] text-latus-blue">Capacidad</p><h3 className="mt-1 text-2xl font-extrabold text-latus-ink">Uso de tu empresa</h3></div>
             <p className="hidden text-sm text-latus-muted md:block">Los límites se actualizan al cambiar de plan.</p>
           </div>
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <UsageBar icon={Users} label="Usuarios del equipo" value={data?.usage?.users || 0} limit={limits.users} />
             <UsageBar icon={UserRoundCheck} label="Clientes registrados" value={data?.usage?.contacts || 0} limit={limits.contacts} />
+            <div className="rounded-2xl border border-latus-warm-border bg-white p-5 shadow-sm">
+              <div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-violet-50 text-violet-700"><BadgeDollarSign className="h-5 w-5" /></span><div><p className="text-sm font-extrabold text-latus-ink">Consumo variable de IA</p><p className="mt-0.5 text-xs text-latus-muted">Costo del proveedor + fee de servicio</p></div></div>
+              <p className="mt-5 text-3xl font-black tracking-tight text-latus-ink">{Number(data?.ai_billing?.fee_percent || 0).toFixed(1)}%</p>
+              <p className="mt-1 text-xs leading-relaxed text-latus-muted">El porcentaje queda registrado con cada uso y no cambia retroactivamente.</p>
+            </div>
           </div>
         </section>
 

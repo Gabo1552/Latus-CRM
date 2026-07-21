@@ -152,6 +152,13 @@ El backend de Latus CRM incluye verificaciones de seguridad automáticas al inic
 6. **Modo de Mercado Pago:**
    Cuando Mercado Pago está configurado, Staging exige `MERCADOPAGO_MODE=test` y Producción exige `MERCADOPAGO_MODE=production`.
 
+### Costos variables de IA
+
+- El fee global inicial es 20% y se configura únicamente desde **Consumo de IA** con una cuenta incluida en `PLATFORM_ADMIN_EMAILS`.
+- En **Plataforma > Administrar licencia** puede definirse un fee diferente para una empresa; si queda vacío, utiliza el global.
+- Cada llamada conserva el costo base, el porcentaje, el fee y el total facturable vigentes en ese momento. Cambiar el fee no modifica registros históricos.
+- Cuando el proveedor devuelve el costo exacto se usa ese importe. En los demás casos se calcula con los tokens reportados y la tabla de precios por modelo, identificado como estimado.
+
 ---
 
 ## ✅ Lista de Comprobación de Aislamiento (Checklist)

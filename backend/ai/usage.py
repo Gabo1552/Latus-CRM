@@ -7,10 +7,13 @@ once per process).
 from __future__ import annotations
 
 import logging
+import math
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+
+from utils.tenancy import get_organization_id
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,8 @@ DEFAULT_PRICING: dict[str, dict[str, float]] = {
 }
 
 VALID_PURPOSES = ("bot_pipeline", "summary_regen", "suggest_reply", "connection_test")
+DEFAULT_AI_FEE_PERCENT = 20.0
+MAX_AI_FEE_PERCENT = 500.0
 
 # Models we already warned about, to avoid log spam.
 _warned_models: set[str] = set()
@@ -90,6 +95,85 @@ async def reset_pricing(db, user_id: str | None) -> dict:
     return await load_pricing(db)
 
 
+def validate_fee_percent(value: float) -> float:
+    fee = float(value)
+    if not math.isfinite(fee) or fee < 0 or fee > MAX_AI_FEE_PERCENT:
+        raise ValueError(f"El fee debe estar entre 0 y {int(MAX_AI_FEE_PERCENT)}%")
+    return round(fee, 4)
+
+
+async def load_billing_policy(db) -> dict:
+    """Return the platform-wide AI billing policy."""
+    doc = await db.pricing_config.find_one({"_id": "default"}, {"_id": 0}) or {}
+    stored_fee = doc.get("default_ai_fee_percent")
+    return {
+        "default_fee_percent": validate_fee_percent(
+            DEFAULT_AI_FEE_PERCENT if stored_fee is None else stored_fee
+        ),
+        "updated_at": doc.get("ai_fee_updated_at"),
+        "updated_by": doc.get("ai_fee_updated_by"),
+    }
+
+
+async def save_billing_policy(db, fee_percent: float, user_id: str | None) -> dict:
+    fee = validate_fee_percent(fee_percent)
+    await db.pricing_config.update_one(
+        {"_id": "default"},
+        {"$set": {
+            "default_ai_fee_percent": fee,
+            "ai_fee_updated_at": _now_iso(),
+            "ai_fee_updated_by": user_id,
+        }},
+        upsert=True,
+    )
+    return await load_billing_policy(db)
+
+
+async def effective_fee_percent(db, organization_id: str | None = None) -> float:
+    """Resolve a tenant override, falling back to the global platform fee."""
+    policy = await load_billing_policy(db)
+    organization_id = organization_id or get_organization_id()
+    if organization_id:
+        organization = await db.organizations.find_one(
+            {"organization_id": organization_id}, {"_id": 0, "ai_fee_percent": 1}
+        ) or {}
+        override = organization.get("ai_fee_percent")
+        if override is not None:
+            return validate_fee_percent(override)
+    return policy["default_fee_percent"]
+
+
+def billing_breakdown(log: dict) -> dict[str, float | str]:
+    """Return the immutable provider/fee/customer amounts for one usage log.
+
+    Logs created before AI billing existed are kept at 0% fee so historical
+    amounts never change retroactively when the platform policy changes.
+    """
+    has_provider_cost = log.get("provider_cost_usd") is not None
+    base_cost = float(
+        log.get("provider_cost_usd") if has_provider_cost
+        else log.get("estimated_cost_usd") or 0.0
+    )
+    fee_percent = float(log.get("ai_fee_percent") or 0.0)
+    fee_usd = float(
+        log.get("ai_fee_usd")
+        if log.get("ai_fee_usd") is not None
+        else round(base_cost * fee_percent / 100.0, 8)
+    )
+    billable = float(
+        log.get("billable_cost_usd")
+        if log.get("billable_cost_usd") is not None
+        else round(base_cost + fee_usd, 8)
+    )
+    return {
+        "base_cost_usd": round(base_cost, 8),
+        "ai_fee_percent": fee_percent,
+        "ai_fee_usd": round(fee_usd, 8),
+        "billable_cost_usd": round(billable, 8),
+        "billing_cost_source": "provider_response" if has_provider_cost else "estimated",
+    }
+
+
 def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int,
                   pricing: dict[str, dict[str, float]] | None = None) -> float:
     """USD cost given a model and token counts. ``pricing`` defaults to
@@ -117,12 +201,19 @@ async def log_usage(db, *, status: str, provider: str, model: str,
                     error_message: str | None = None,
                     provider_cost_usd: float | None = None,
                     provider_request_id: str | None = None,
+                    fee_percent: float | None = None,
                     pricing: dict | None = None) -> None:
     """Persist a single usage log entry. Best-effort — never raises."""
     try:
         total = (prompt_tokens or 0) + (completion_tokens or 0)
         cost = estimate_cost(model, prompt_tokens, completion_tokens, pricing) \
             if status == "success" else 0.0
+        effective_fee = validate_fee_percent(
+            fee_percent if fee_percent is not None else await effective_fee_percent(db)
+        )
+        base_cost = float(provider_cost_usd) if provider_cost_usd is not None else float(cost)
+        fee_usd = round(base_cost * effective_fee / 100.0, 8)
+        billable_cost = round(base_cost + fee_usd, 8)
         await db.ai_usage_logs.insert_one({
             "log_id": uuid.uuid4().hex,
             "created_at": _now_iso(),
@@ -134,6 +225,10 @@ async def log_usage(db, *, status: str, provider: str, model: str,
             "estimated_cost_usd": float(cost),
             "provider_cost_usd": float(provider_cost_usd) if provider_cost_usd is not None else None,
             "cost_source": "provider_response" if provider_cost_usd is not None else "estimated",
+            "base_cost_usd": round(base_cost, 8),
+            "ai_fee_percent": effective_fee,
+            "ai_fee_usd": fee_usd,
+            "billable_cost_usd": billable_cost,
             "token_source": "provider_response" if status == "success" and total > 0 else "unavailable",
             "provider_request_id": provider_request_id,
             "latency_ms": int(latency_ms or 0),
@@ -157,6 +252,7 @@ async def call_with_logging(db, provider, *,
                             user_id: str | None = None):
     """Call ``provider.chat`` and persist a usage log (success or error)."""
     pricing = await load_pricing(db)
+    fee_percent = await effective_fee_percent(db)
     t0 = time.perf_counter()
     try:
         res = await provider.chat(system_prompt=system_prompt,
@@ -172,7 +268,8 @@ async def call_with_logging(db, provider, *,
                         completion_tokens=0, latency_ms=elapsed,
                         purpose=purpose, conversation_id=conversation_id,
                         message_id=message_id, user_id=user_id,
-                        error_message=msg[:500], pricing=pricing)
+                        error_message=msg[:500], fee_percent=fee_percent,
+                        pricing=pricing)
         raise
     await log_usage(db, status="success", provider=res.provider,
                     model=res.model, prompt_tokens=res.prompt_tokens,
@@ -182,5 +279,6 @@ async def call_with_logging(db, provider, *,
                     user_id=user_id,
                     provider_cost_usd=getattr(res, "provider_cost_usd", None),
                     provider_request_id=getattr(res, "provider_request_id", None),
+                    fee_percent=fee_percent,
                     pricing=pricing)
     return res

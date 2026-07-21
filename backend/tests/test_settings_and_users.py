@@ -50,6 +50,14 @@ def _matches(doc, query):
             elif "$ne" in v:
                 if doc.get(k) == v["$ne"]:
                     return False
+            elif "$gte" in v or "$lte" in v:
+                value = doc.get(k)
+                if value is None:
+                    return False
+                if "$gte" in v and value < v["$gte"]:
+                    return False
+                if "$lte" in v and value > v["$lte"]:
+                    return False
             elif "$regex" in v:
                 import re
                 rx = re.compile(v["$regex"], re.IGNORECASE if v.get("$options") == "i" else 0)
@@ -168,7 +176,7 @@ class _FakeDB:
                      "messages", "notifications", "settings", "wa_status",
                      "whatsapp_events", "app_secrets", "platform_secrets", "tasks", "notes", "bot_events",
                      "password_reset_tokens", "appointments", "bot_settings", "products",
-                     "roles", "tags", "work_areas", "ai_usage_logs"):
+                     "roles", "tags", "work_areas", "ai_usage_logs", "pricing_config"):
             setattr(self, name, _Coll())
         for name in ("organizations", "memberships", "whatsapp_routes", "system_migrations"):
             setattr(self, name, _Coll())
@@ -567,6 +575,25 @@ class TestBillingFoundation:
         assert me.json()["is_platform_admin"] is True
 
         current = client.get("/api/organizations/current", headers=_h()).json()
+        _run(fake.ai_usage_logs.insert_one({
+            "log_id": "ai-month-1",
+            "organization_id": current["organization_id"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "total_tokens": 1200,
+            "estimated_cost_usd": 1.0,
+            "base_cost_usd": 1.0,
+            "ai_fee_percent": 20.0,
+            "ai_fee_usd": 0.2,
+            "billable_cost_usd": 1.2,
+        }))
+        platform_rows = client.get("/api/platform/organizations", headers=_h())
+        assert platform_rows.status_code == 200, platform_rows.text
+        company = next(
+            row for row in platform_rows.json()
+            if row["organization_id"] == current["organization_id"]
+        )
+        assert company["ai_billing"]["this_month"]["billable_cost_usd"] == 1.2
+        assert company["ai_billing"]["fee_percent"] == 20.0
         updated = client.patch(
             f"/api/platform/organizations/{current['organization_id']}/subscription",
             headers=_h(),

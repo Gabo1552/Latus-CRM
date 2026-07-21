@@ -622,6 +622,7 @@ class Organization(BaseModel):
     grace_ends_at: Optional[str] = None
     billing_email: Optional[str] = None
     billing_cycle: str = "monthly"
+    ai_fee_percent: Optional[float] = None
     requested_plan_code: Optional[str] = None
     billing_request_status: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
@@ -655,6 +656,7 @@ class PlatformSubscriptionUpdate(BaseModel):
     grace_ends_at: Optional[str] = None
     billing_email: Optional[str] = None
     internal_notes: Optional[str] = None
+    ai_fee_percent: Optional[float] = None
 
 
 class RoleUpdate(BaseModel):
@@ -1722,6 +1724,7 @@ def _public_plan_catalog(*, include_internal: bool = False) -> list[dict]:
 
 
 async def _subscription_payload(organization_id: str, *, include_internal: bool = False) -> dict:
+    from ai import usage as ai_usage
     organization = await _raw_collection("organizations").find_one(
         {"organization_id": organization_id}, {"_id": 0}
     )
@@ -1744,6 +1747,10 @@ async def _subscription_payload(organization_id: str, *, include_internal: bool 
         "plan": dict(plan),
         "access": subscription_access_state(organization),
         "usage": {"users": active_members, "contacts": contacts},
+        "ai_billing": {
+            "fee_percent": await ai_usage.effective_fee_percent(db, organization_id),
+            "has_custom_fee": organization.get("ai_fee_percent") is not None,
+        },
         "latest_request": latest_request,
         "payment_provider": {
             "name": "Mercado Pago",
@@ -2236,12 +2243,36 @@ async def mercadopago_webhook(request: Request):
 
 @api_router.get("/platform/organizations")
 async def platform_list_organizations(platform_admin: User = Depends(require_platform_admin)):
+    from ai import usage as ai_usage
     organizations = await _raw_collection("organizations").find({}, {"_id": 0}).sort(
         "created_at", -1
     ).to_list(500)
+    month_start = datetime.combine(
+        datetime.now(timezone.utc).date().replace(day=1),
+        datetime.min.time(), tzinfo=timezone.utc,
+    ).isoformat()
+    usage_logs = await _raw_collection("ai_usage_logs").find(
+        {"created_at": {"$gte": month_start}}, {"_id": 0}
+    ).to_list(100_000)
+    usage_by_organization: dict[str, dict] = {}
+    for log in usage_logs:
+        organization_id = log.get("organization_id")
+        if not organization_id:
+            continue
+        billing = ai_usage.billing_breakdown(log)
+        item = usage_by_organization.setdefault(organization_id, {
+            "calls": 0, "tokens": 0, "base_cost_usd": 0.0,
+            "ai_fee_usd": 0.0, "billable_cost_usd": 0.0,
+        })
+        item["calls"] += 1
+        item["tokens"] += int(log.get("total_tokens") or 0)
+        for field in ("base_cost_usd", "ai_fee_usd", "billable_cost_usd"):
+            item[field] = round(item[field] + float(billing[field]), 6)
+    billing_policy = await ai_usage.load_billing_policy(db)
     rows = []
     for organization in organizations:
         organization_id = organization["organization_id"]
+        fee_override = organization.get("ai_fee_percent")
         rows.append({
             **organization,
             "access": subscription_access_state(organization),
@@ -2254,6 +2285,18 @@ async def platform_list_organizations(platform_admin: User = Depends(require_pla
             "latest_request": await _raw_collection("billing_requests").find_one(
                 {"organization_id": organization_id}, {"_id": 0}, sort=[("created_at", -1)]
             ),
+            "ai_billing": {
+                "fee_percent": (
+                    ai_usage.validate_fee_percent(fee_override)
+                    if fee_override is not None
+                    else billing_policy["default_fee_percent"]
+                ),
+                "has_custom_fee": fee_override is not None,
+                "this_month": usage_by_organization.get(organization_id, {
+                    "calls": 0, "tokens": 0, "base_cost_usd": 0.0,
+                    "ai_fee_usd": 0.0, "billable_cost_usd": 0.0,
+                }),
+            },
         })
     return rows
 
@@ -2292,6 +2335,14 @@ async def platform_update_subscription(
         update["billing_email"] = billing_email or None
     if "internal_notes" in update:
         update["internal_notes"] = (update["internal_notes"] or "").strip()[:2000]
+    if "ai_fee_percent" in update and update["ai_fee_percent"] is not None:
+        from ai import usage as ai_usage
+        try:
+            update["ai_fee_percent"] = ai_usage.validate_fee_percent(
+                update["ai_fee_percent"]
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if update.get("subscription_status") == "active":
         update["billing_request_status"] = "approved"
         update["requested_plan_code"] = None
@@ -5295,6 +5346,7 @@ async def admin_ai_usage_summary(
     provider: str | None = None,
     admin: User = Depends(require_perm("ai_view")),
 ):
+    from ai import usage as ai_usage
     f, t = _date_bounds(from_, to)
     q = _build_usage_filter(f, t, model, status, provider=provider)
     logs = await db.ai_usage_logs.find(q, {"_id": 0}).to_list(50_000)
@@ -5306,32 +5358,47 @@ async def admin_ai_usage_summary(
     provider_cost = round(sum(float(l.get("provider_cost_usd") or 0.0) for l in logs), 6)
     provider_cost_calls = sum(1 for l in logs if l.get("provider_cost_usd") is not None)
     token_measured_calls = sum(1 for l in logs if l.get("status") == "success" and int(l.get("total_tokens") or 0) > 0)
+    breakdowns = [ai_usage.billing_breakdown(log) for log in logs]
+    base_cost = round(sum(float(item["base_cost_usd"]) for item in breakdowns), 6)
+    ai_fee = round(sum(float(item["ai_fee_usd"]) for item in breakdowns), 6)
+    billable_cost = round(sum(float(item["billable_cost_usd"]) for item in breakdowns), 6)
 
     by_model: dict[str, dict] = {}
     by_day: dict[str, dict] = {}
     by_conv: dict[str, dict] = {}
-    for l in logs:
+    for l, billing in zip(logs, breakdowns):
         m = l.get("model") or "unknown"
-        bm = by_model.setdefault(m, {"model": m, "calls": 0, "tokens": 0, "cost_usd": 0.0, "provider_cost_usd": 0.0})
+        bm = by_model.setdefault(m, {"model": m, "calls": 0, "tokens": 0, "cost_usd": 0.0, "provider_cost_usd": 0.0, "base_cost_usd": 0.0, "ai_fee_usd": 0.0, "billable_cost_usd": 0.0})
         bm["calls"] += 1
         bm["tokens"] += int(l.get("total_tokens") or 0)
         bm["cost_usd"] = round(bm["cost_usd"] + float(l.get("estimated_cost_usd") or 0.0), 6)
         bm["provider_cost_usd"] = round(bm["provider_cost_usd"] + float(l.get("provider_cost_usd") or 0.0), 6)
+        bm["base_cost_usd"] = round(bm["base_cost_usd"] + float(billing["base_cost_usd"]), 6)
+        bm["ai_fee_usd"] = round(bm["ai_fee_usd"] + float(billing["ai_fee_usd"]), 6)
+        bm["billable_cost_usd"] = round(bm["billable_cost_usd"] + float(billing["billable_cost_usd"]), 6)
 
         d = (l.get("created_at") or "")[:10]
-        bd = by_day.setdefault(d, {"date": d, "calls": 0, "tokens": 0, "cost_usd": 0.0, "provider_cost_usd": 0.0})
+        bd = by_day.setdefault(d, {"date": d, "calls": 0, "tokens": 0, "cost_usd": 0.0, "provider_cost_usd": 0.0, "base_cost_usd": 0.0, "ai_fee_usd": 0.0, "billable_cost_usd": 0.0})
         bd["calls"] += 1
         bd["tokens"] += int(l.get("total_tokens") or 0)
         bd["cost_usd"] = round(bd["cost_usd"] + float(l.get("estimated_cost_usd") or 0.0), 6)
         bd["provider_cost_usd"] = round(bd["provider_cost_usd"] + float(l.get("provider_cost_usd") or 0.0), 6)
+        bd["base_cost_usd"] = round(bd["base_cost_usd"] + float(billing["base_cost_usd"]), 6)
+        bd["ai_fee_usd"] = round(bd["ai_fee_usd"] + float(billing["ai_fee_usd"]), 6)
+        bd["billable_cost_usd"] = round(bd["billable_cost_usd"] + float(billing["billable_cost_usd"]), 6)
 
         cid = l.get("conversation_id")
         if cid:
-            bc = by_conv.setdefault(cid, {"conversation_id": cid, "calls": 0, "cost_usd": 0.0})
+            bc = by_conv.setdefault(cid, {"conversation_id": cid, "calls": 0, "cost_usd": 0.0, "base_cost_usd": 0.0, "ai_fee_usd": 0.0, "billable_cost_usd": 0.0})
             bc["calls"] += 1
             bc["cost_usd"] = round(bc["cost_usd"] + float(l.get("estimated_cost_usd") or 0.0), 6)
+            bc["base_cost_usd"] = round(bc["base_cost_usd"] + float(billing["base_cost_usd"]), 6)
+            bc["ai_fee_usd"] = round(bc["ai_fee_usd"] + float(billing["ai_fee_usd"]), 6)
+            bc["billable_cost_usd"] = round(bc["billable_cost_usd"] + float(billing["billable_cost_usd"]), 6)
 
-    top_conversations = sorted(by_conv.values(), key=lambda x: x["cost_usd"], reverse=True)[:10]
+    top_conversations = sorted(
+        by_conv.values(), key=lambda x: x["billable_cost_usd"], reverse=True
+    )[:10]
     return {
         "from": f[:10], "to": t[:10],
         "total_calls": total_calls,
@@ -5342,6 +5409,9 @@ async def admin_ai_usage_summary(
         "estimated_cost_usd": total_cost,
         "provider_cost_usd": provider_cost,
         "provider_cost_calls": provider_cost_calls,
+        "base_cost_usd": base_cost,
+        "ai_fee_usd": ai_fee,
+        "billable_cost_usd": billable_cost,
         "token_measured_calls": token_measured_calls,
         "measurement": {
             "tokens": "provider_response",
@@ -5349,7 +5419,9 @@ async def admin_ai_usage_summary(
             "token_coverage_pct": round(token_measured_calls * 100.0 / success_calls, 1) if success_calls else 0.0,
             "provider_cost_coverage_pct": round(provider_cost_calls * 100.0 / success_calls, 1) if success_calls else 0.0,
         },
-        "by_model": sorted(by_model.values(), key=lambda x: x["cost_usd"], reverse=True),
+        "by_model": sorted(
+            by_model.values(), key=lambda x: x["billable_cost_usd"], reverse=True
+        ),
         "by_day": sorted(by_day.values(), key=lambda x: x["date"]),
         "top_conversations": top_conversations,
     }
@@ -5367,17 +5439,23 @@ async def admin_ai_usage_logs(
     offset: int = Query(0, ge=0),
     admin: User = Depends(require_perm("ai_view")),
 ):
+    from ai import usage as ai_usage
     f, t = _date_bounds(from_, to)
     q = _build_usage_filter(f, t, model, status, conversation_id, provider)
     total = await db.ai_usage_logs.count_documents(q)
     items = await db.ai_usage_logs.find(q, {"_id": 0}) \
         .sort("created_at", -1).to_list(offset + limit)
-    return {"items": items[offset:offset + limit], "total": total,
+    page = [
+        {**item, **ai_usage.billing_breakdown(item)}
+        for item in items[offset:offset + limit]
+    ]
+    return {"items": page, "total": total,
             "limit": limit, "offset": offset}
 
 
 @api_router.get("/admin/ai-usage/quick")
 async def admin_ai_usage_quick(admin: User = Depends(require_perm("ai_view"))):
+    from ai import usage as ai_usage
     today = datetime.now(timezone.utc).date()
     today_iso_f = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc).isoformat()
     month_iso_f = datetime.combine(today.replace(day=1), datetime.min.time(),
@@ -5385,12 +5463,16 @@ async def admin_ai_usage_quick(admin: User = Depends(require_perm("ai_view"))):
 
     async def _agg(query):
         items = await db.ai_usage_logs.find(query, {"_id": 0}).to_list(50_000)
+        billing = [ai_usage.billing_breakdown(item) for item in items]
         return {
             "calls": len(items),
             "tokens": sum(int(i.get("total_tokens") or 0) for i in items),
             "cost_usd": round(sum(float(i.get("estimated_cost_usd") or 0.0) for i in items), 6),
             "provider_cost_usd": round(sum(float(i.get("provider_cost_usd") or 0.0) for i in items), 6),
             "provider_cost_calls": sum(1 for i in items if i.get("provider_cost_usd") is not None),
+            "base_cost_usd": round(sum(float(i["base_cost_usd"]) for i in billing), 6),
+            "ai_fee_usd": round(sum(float(i["ai_fee_usd"]) for i in billing), 6),
+            "billable_cost_usd": round(sum(float(i["billable_cost_usd"]) for i in billing), 6),
         }
 
     today_stats   = await _agg({"created_at": {"$gte": today_iso_f}})
@@ -5466,6 +5548,32 @@ class AIPriceItem(BaseModel):
     model: str
     input_per_million: float
     output_per_million: float
+
+
+class AIBillingPolicyUpdate(BaseModel):
+    default_fee_percent: float
+
+
+@api_router.get("/platform/ai-billing")
+async def platform_get_ai_billing(
+    platform_admin: User = Depends(require_platform_admin),
+):
+    from ai import usage as ai_usage
+    return await ai_usage.load_billing_policy(db)
+
+
+@api_router.put("/platform/ai-billing")
+async def platform_put_ai_billing(
+    payload: AIBillingPolicyUpdate,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    from ai import usage as ai_usage
+    try:
+        return await ai_usage.save_billing_policy(
+            db, payload.default_fee_percent, platform_admin.user_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @api_router.put("/admin/ai-pricing")

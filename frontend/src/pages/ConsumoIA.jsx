@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -99,6 +99,11 @@ export default function ConsumoIA() {
     queryFn: () => api.get("/admin/ai-usage/provider-reporting").then((r) => r.data),
     enabled: canView,
   });
+  const billingPolicyQ = useQuery({
+    queryKey: ["platform-ai-billing"],
+    queryFn: () => api.get("/platform/ai-billing").then((r) => r.data),
+    enabled: canManagePlatformAI,
+  });
 
   const reloadAll = () => {
     qc.invalidateQueries({ queryKey: ["ai-usage-quick"] });
@@ -126,7 +131,7 @@ export default function ConsumoIA() {
               <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-latus-ink text-white shadow-[0_10px_24px_rgba(13,31,42,0.18)]"><Activity className="h-5 w-5" /></div>
               <div>
                 <p className="text-lg font-bold tracking-tight text-latus-ink">Control de uso y costos</p>
-                <p className="mt-1 max-w-2xl text-sm leading-relaxed text-latus-muted">Los tokens se toman de la respuesta del proveedor. Los importes calculados por el CRM son estimaciones hasta conciliarlos con la API de facturación.</p>
+                <p className="mt-1 max-w-2xl text-sm leading-relaxed text-latus-muted">Cada consumo conserva el costo del proveedor, el fee vigente y el total facturable. Cuando la API no informa el costo exacto, el CRM utiliza el precio configurado y lo identifica como estimado.</p>
               </div>
             </div>
             <div className="flex flex-wrap gap-2 text-xs">
@@ -141,22 +146,28 @@ export default function ConsumoIA() {
           <QuickCard data-testid="card-today"      label="Hoy"
                      calls={quickQ.data?.today?.calls}
                      tokens={quickQ.data?.today?.tokens}
-                     cost={quickQ.data?.today?.cost_usd}
+                     cost={quickQ.data?.today?.billable_cost_usd ?? quickQ.data?.today?.cost_usd}
                      loading={quickQ.isPending} />
           <QuickCard data-testid="card-month"      label="Este mes"
                      calls={quickQ.data?.this_month?.calls}
                      tokens={quickQ.data?.this_month?.tokens}
-                     cost={quickQ.data?.this_month?.cost_usd}
+                     cost={quickQ.data?.this_month?.billable_cost_usd ?? quickQ.data?.this_month?.cost_usd}
                      loading={quickQ.isPending} />
           <QuickCard data-testid="card-all-time"   label="Total acumulado"
                      calls={quickQ.data?.all_time?.calls}
                      tokens={quickQ.data?.all_time?.tokens}
-                     cost={quickQ.data?.all_time?.cost_usd}
+                     cost={quickQ.data?.all_time?.billable_cost_usd ?? quickQ.data?.all_time?.cost_usd}
                      loading={quickQ.isPending} />
           <TopModelCard data-testid="card-top-model"
                         model={quickQ.data?.top_model?.model}
                         share={quickQ.data?.top_model?.share_pct}
                         loading={quickQ.isPending} />
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3" data-testid="ai-billing-breakdown">
+          <BillingMetric label="Costo del proveedor" value={summaryQ.data?.base_cost_usd} detail="Real cuando el proveedor lo informa; estimado en los demás casos." />
+          <BillingMetric label="Fee Latus" value={summaryQ.data?.ai_fee_usd} detail="Porcentaje congelado al momento de cada consumo." />
+          <BillingMetric label="Total facturable" value={summaryQ.data?.billable_cost_usd} detail="Costo del proveedor más el fee comercial." primary />
         </div>
 
         <ProviderVerificationPanel
@@ -263,6 +274,12 @@ export default function ConsumoIA() {
         />
 
         {/* Pricing editor */}
+        {canManagePlatformAI && (
+          <AIFeeEditor
+            policy={billingPolicyQ.data}
+            onSaved={() => qc.invalidateQueries({ queryKey: ["platform-ai-billing"] })}
+          />
+        )}
         <PricingEditor canAdmin={canManagePlatformAI} pricing={pricingQ.data} onSaved={() => qc.invalidateQueries({ queryKey: ["ai-pricing"] })} />
       </div>
     </AppLayout>
@@ -388,7 +405,7 @@ function QuickCard({ label, calls, tokens, cost, loading, ...props }) {
         {loading ? "—" : fmtInt(calls)}
       </p>
       <p className="mt-0.5 text-xs text-latus-muted">llamadas · {loading ? "—" : fmtInt(tokens)} tokens</p>
-      <div className="mt-4 flex items-center justify-between border-t border-latus-warm-border pt-3"><span className="text-[10px] font-semibold uppercase tracking-wide text-latus-muted">Costo estimado</span><p className="flex items-center gap-1 text-sm font-bold text-latus-blue"><DollarSign className="h-3 w-3" /> {loading ? "—" : fmtUSD(cost)}</p></div>
+      <div className="mt-4 flex items-center justify-between border-t border-latus-warm-border pt-3"><span className="text-[10px] font-semibold uppercase tracking-wide text-latus-muted">Total facturable</span><p className="flex items-center gap-1 text-sm font-bold text-latus-blue"><DollarSign className="h-3 w-3" /> {loading ? "—" : fmtUSD(cost)}</p></div>
     </div>
   );
 }
@@ -406,6 +423,16 @@ function TopModelCard({ model, share, loading, ...props }) {
         </p>
         <p className="text-[10px] text-latus-muted">del total</p>
       </div>
+    </div>
+  );
+}
+
+function BillingMetric({ label, value, detail, primary = false }) {
+  return (
+    <div className={`rounded-xl border p-5 shadow-sm ${primary ? "border-sky-200 bg-latus-ink text-white" : "border-latus-warm-border bg-white text-latus-ink"}`}>
+      <p className={`text-[11px] font-extrabold uppercase tracking-[0.12em] ${primary ? "text-latus-ice/70" : "text-latus-muted"}`}>{label}</p>
+      <p className="mt-2 text-2xl font-black tracking-tight">{fmtUSD(value)}</p>
+      <p className={`mt-2 text-xs leading-relaxed ${primary ? "text-latus-ice/70" : "text-latus-muted"}`}>{detail}</p>
     </div>
   );
 }
@@ -431,7 +458,7 @@ function ByModelTable({ data }) {
             <th className="text-left px-3 py-2">Modelo</th>
             <th className="text-right px-3 py-2">Llamadas</th>
             <th className="text-right px-3 py-2">Tokens</th>
-            <th className="text-right px-3 py-2">Estimado</th>
+            <th className="text-right px-3 py-2">Total facturable</th>
             <th className="text-right px-3 py-2">%</th>
           </tr>
         </thead>
@@ -444,7 +471,7 @@ function ByModelTable({ data }) {
               <td className="px-3 py-2 font-mono text-xs">{r.model}</td>
               <td className="px-3 py-2 text-right">{fmtInt(r.calls)}</td>
               <td className="px-3 py-2 text-right">{fmtInt(r.tokens)}</td>
-              <td className="px-3 py-2 text-right font-mono">{fmtUSD(r.cost_usd)}</td>
+              <td className="px-3 py-2 text-right font-mono">{fmtUSD(r.billable_cost_usd ?? r.cost_usd)}</td>
               <td className="px-3 py-2 text-right">
                 {total ? `${((r.calls / total) * 100).toFixed(0)}%` : "—"}
               </td>
@@ -458,7 +485,7 @@ function ByModelTable({ data }) {
 
 function ByDayTable({ data }) {
   const rows = data?.by_day || [];
-  const max = Math.max(1, ...rows.map((r) => Number(r.cost_usd || 0)));
+  const max = Math.max(1, ...rows.map((r) => Number(r.billable_cost_usd ?? r.cost_usd ?? 0)));
   return (
     <div className="overflow-hidden rounded-xl border border-latus-warm-border bg-white" data-testid="by-day-table">
       <div className="flex items-center gap-2 border-b border-latus-warm-border px-5 py-4">
@@ -471,7 +498,7 @@ function ByDayTable({ data }) {
             <th className="text-left px-3 py-2">Fecha</th>
             <th className="text-right px-3 py-2">Llamadas</th>
             <th className="text-right px-3 py-2">Tokens</th>
-            <th className="text-right px-3 py-2">Estimado</th>
+            <th className="text-right px-3 py-2">Total facturable</th>
           </tr>
         </thead>
         <tbody>
@@ -479,7 +506,7 @@ function ByDayTable({ data }) {
             <tr><td colSpan={4} className="text-center text-[#888888] py-4">Sin datos</td></tr>
           )}
           {rows.map((r) => {
-            const pct = (Number(r.cost_usd || 0) / max) * 100;
+            const pct = (Number(r.billable_cost_usd ?? r.cost_usd ?? 0) / max) * 100;
             return (
               <tr key={r.date} className="border-t border-[#E9E6DC]">
                 <td className="px-3 py-2 font-mono text-xs">{r.date}</td>
@@ -490,7 +517,7 @@ function ByDayTable({ data }) {
                     <div className="w-12 h-1 bg-latus-warm-gray rounded-sm overflow-hidden">
                       <div className="h-1 bg-[#0E8DDB]" style={{ width: `${pct}%` }} />
                     </div>
-                    {fmtUSD(r.cost_usd)}
+                    {fmtUSD(r.billable_cost_usd ?? r.cost_usd)}
                   </div>
                 </td>
               </tr>
@@ -515,7 +542,7 @@ function TopConvsTable({ data }) {
           <tr>
             <th className="text-left px-3 py-2">Conversación</th>
             <th className="text-right px-3 py-2">Llamadas</th>
-            <th className="text-right px-3 py-2">Costo estimado</th>
+            <th className="text-right px-3 py-2">Total facturable</th>
             <th></th>
           </tr>
         </thead>
@@ -527,7 +554,7 @@ function TopConvsTable({ data }) {
             <tr key={r.conversation_id} className="border-t border-[#E9E6DC]">
               <td className="px-3 py-2 font-mono text-xs truncate max-w-[280px]">{r.conversation_id}</td>
               <td className="px-3 py-2 text-right">{fmtInt(r.calls)}</td>
-              <td className="px-3 py-2 text-right font-mono">{fmtUSD(r.cost_usd)}</td>
+              <td className="px-3 py-2 text-right font-mono">{fmtUSD(r.billable_cost_usd ?? r.cost_usd)}</td>
               <td className="px-3 py-2 text-right">
                 <Link to="/inbox" state={{ convId: r.conversation_id }}
                       className="inline-flex items-center gap-1 text-xs font-semibold text-[#0E8DDB] hover:underline">
@@ -572,7 +599,7 @@ function LogsTable({ logs, total, page, numPages, onPrev, onNext, loading }) {
               <th className="text-left px-3 py-2">Modelo</th>
               <th className="text-left px-3 py-2">Propósito</th>
               <th className="text-right px-3 py-2">Tokens</th>
-              <th className="text-right px-3 py-2">Costo</th>
+              <th className="text-right px-3 py-2">Costo + fee</th>
               <th className="text-right px-3 py-2">Latencia</th>
               <th className="text-left px-3 py-2">Estado</th>
               <th className="text-left px-3 py-2">Conversación</th>
@@ -592,7 +619,12 @@ function LogsTable({ logs, total, page, numPages, onPrev, onNext, loading }) {
                 <td className="px-3 py-2 font-mono">{l.model}</td>
                 <td className="px-3 py-2">{PURPOSE_LABEL[l.purpose] || l.purpose}</td>
                 <td className="px-3 py-2 text-right">{fmtInt(l.total_tokens)}</td>
-                <td className="px-3 py-2 text-right font-mono"><p>{fmtUSD(l.provider_cost_usd ?? l.estimated_cost_usd)}</p><span className={`mt-0.5 inline-flex rounded-full px-1.5 py-0.5 text-[8px] font-bold uppercase ${l.provider_cost_usd != null ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{l.provider_cost_usd != null ? "real" : "estimado"}</span></td>
+                <td className="px-3 py-2 text-right font-mono">
+                  <p className="text-[10px] text-latus-muted">Base {fmtUSD(l.base_cost_usd ?? l.provider_cost_usd ?? l.estimated_cost_usd)}</p>
+                  <p className="text-[10px] text-latus-muted">Fee {Number(l.ai_fee_percent || 0).toFixed(1)}% · {fmtUSD(l.ai_fee_usd)}</p>
+                  <p className="mt-1 font-extrabold text-latus-blue">{fmtUSD(l.billable_cost_usd ?? l.base_cost_usd)}</p>
+                  <span className={`mt-0.5 inline-flex rounded-full px-1.5 py-0.5 text-[8px] font-bold uppercase ${l.billing_cost_source === "provider_response" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{l.billing_cost_source === "provider_response" ? "real" : "estimado"}</span>
+                </td>
                 <td className="px-3 py-2 text-right">{fmtInt(l.latency_ms)} ms</td>
                 <td className="px-3 py-2">
                   {l.status === "success" ? (
@@ -626,6 +658,42 @@ function LogsTable({ logs, total, page, numPages, onPrev, onNext, loading }) {
 // ---------------------------------------------------------------------------
 // Pricing editor (compact sub-section, lives at the bottom of /consumo-ia)
 // ---------------------------------------------------------------------------
+
+function AIFeeEditor({ policy, onSaved }) {
+  const [value, setValue] = useState("");
+  useEffect(() => {
+    if (policy?.default_fee_percent !== undefined) setValue(String(policy.default_fee_percent));
+  }, [policy?.default_fee_percent]);
+  const numeric = Number(value);
+  const invalid = !Number.isFinite(numeric) || numeric < 0 || numeric > 500;
+  const save = useMutation({
+    mutationFn: () => api.put("/platform/ai-billing", { default_fee_percent: numeric }),
+    onSuccess: () => { toast.success("Fee global actualizado"); onSaved && onSaved(); },
+    onError: (e) => toast.error(e?.response?.data?.detail || "No se pudo guardar el fee"),
+  });
+  if (!policy) return null;
+  const dirty = numeric !== Number(policy.default_fee_percent);
+  return (
+    <div className="rounded-xl border border-sky-200 bg-gradient-to-r from-sky-50 to-white p-5" data-testid="ai-fee-editor">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-sm font-extrabold text-latus-ink">Fee global por consumo de IA</p>
+          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-latus-muted">Se suma al costo del proveedor y queda congelado en cada registro. Desde Plataforma podés definir un porcentaje distinto para una empresa específica.</p>
+        </div>
+        <div className="flex items-end gap-2">
+          <label className="text-xs font-bold text-latus-ink">Porcentaje
+            <div className="relative mt-1">
+              <Input type="number" min="0" max="500" step="0.1" value={value} onChange={(e) => setValue(e.target.value)} className="h-10 w-32 rounded-lg border-latus-warm-border pr-8 text-right font-mono" />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-latus-muted">%</span>
+            </div>
+          </label>
+          <Button type="button" disabled={!dirty || invalid || save.isPending} onClick={() => save.mutate()} className="h-10 bg-latus-blue text-white hover:bg-latus-blue/90">{save.isPending ? "Guardando…" : "Guardar fee"}</Button>
+        </div>
+      </div>
+      {invalid && <p className="mt-2 text-xs font-semibold text-rose-600">Ingresá un porcentaje entre 0% y 500%.</p>}
+    </div>
+  );
+}
 
 
 function PricingEditor({ pricing, onSaved, canAdmin }) {

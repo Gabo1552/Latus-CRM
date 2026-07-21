@@ -88,6 +88,10 @@ class TestUsageLogging:
         assert l["conversation_id"] == "conv1"
         # 1000/1M * 0.150 + 200/1M * 0.600 = 0.00015 + 0.00012 = 0.00027
         assert l["estimated_cost_usd"] == pytest.approx(0.00027, abs=1e-6)
+        assert l["base_cost_usd"] == pytest.approx(0.00027, abs=1e-8)
+        assert l["ai_fee_percent"] == 20.0
+        assert l["ai_fee_usd"] == pytest.approx(0.000054, abs=1e-8)
+        assert l["billable_cost_usd"] == pytest.approx(0.000324, abs=1e-8)
         assert l["purpose"] == "bot_pipeline"
 
     def test_unknown_model_zero_cost(self, srv, monkeypatch):
@@ -124,9 +128,40 @@ class TestUsageLogging:
         _run(usage.call_with_logging(fake, prov, system_prompt="s", user_block="u"))
         log = fake.ai_usage_logs.docs[-1]
         assert log["provider_cost_usd"] == pytest.approx(0.0042)
+        assert log["base_cost_usd"] == pytest.approx(0.0042)
+        assert log["ai_fee_usd"] == pytest.approx(0.00084)
+        assert log["billable_cost_usd"] == pytest.approx(0.00504)
         assert log["cost_source"] == "provider_response"
         assert log["token_source"] == "provider_response"
         assert log["provider_request_id"] == "gen-123"
+
+    def test_usage_freezes_organization_fee_override(self, srv, monkeypatch):
+        _, fake, _ = srv
+        from ai import providers, usage
+        from utils.tenancy import reset_organization_id, set_organization_id
+
+        _run(fake.organizations.insert_one({
+            "organization_id": "org_fee", "name": "Empresa Fee",
+            "ai_fee_percent": 12.5,
+        }))
+
+        class _Res:
+            content = "{}"; model = "gpt-4o-mini"
+            prompt_tokens = 1000; completion_tokens = 0; latency_ms = 10
+            provider = "openai"
+
+        async def fake_chat(self, **kwargs): return _Res()
+        monkeypatch.setattr(providers.OpenAIProvider, "chat", fake_chat)
+        token = set_organization_id("org_fee")
+        try:
+            provider = providers.OpenAIProvider(model="gpt-4o-mini", api_key="x")
+            _run(usage.call_with_logging(fake, provider, system_prompt="s", user_block="u"))
+        finally:
+            reset_organization_id(token)
+        log = fake.ai_usage_logs.docs[-1]
+        assert log["ai_fee_percent"] == 12.5
+        assert log["ai_fee_usd"] == pytest.approx(0.00001875)
+        assert log["billable_cost_usd"] == pytest.approx(0.00016875)
 
     def test_error_call_creates_error_log(self, srv, monkeypatch):
         _, fake, client = srv
@@ -223,6 +258,28 @@ class TestUsageEndpoints:
         assert d["total"] == 25 and d["limit"] == 10
         assert len(d["items"]) == 10
 
+    def test_fee_breakdown_is_aggregated_and_exposed(self, srv):
+        _, fake, client = srv
+        self._seed_log(
+            fake, estimated_cost_usd=0.001, base_cost_usd=0.001,
+            ai_fee_percent=25, ai_fee_usd=0.00025,
+            billable_cost_usd=0.00125,
+        )
+        summary = client.get(
+            "/api/admin/ai-usage/summary", headers=_h("T-ADMIN")
+        ).json()
+        assert summary["base_cost_usd"] == pytest.approx(0.001)
+        assert summary["ai_fee_usd"] == pytest.approx(0.00025)
+        assert summary["billable_cost_usd"] == pytest.approx(0.00125)
+        assert summary["by_model"][0]["billable_cost_usd"] == pytest.approx(0.00125)
+
+        detail = client.get(
+            "/api/admin/ai-usage/logs", headers=_h("T-ADMIN")
+        ).json()["items"][0]
+        assert detail["ai_fee_percent"] == 25
+        assert detail["billing_cost_source"] == "estimated"
+        assert detail["billable_cost_usd"] == pytest.approx(0.00125)
+
     def test_quick(self, srv):
         _, fake, client = srv
         self._seed_log(fake)
@@ -266,6 +323,40 @@ class TestUsageEndpoints:
                              "output_per_million": 0})
         assert r.status_code == 400
         assert "negativos" in r.text
+
+    def test_platform_fee_policy_and_organization_override(self, srv):
+        server, fake, client = srv
+        current = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        policy = client.get("/api/platform/ai-billing", headers=_h("T-ADMIN"))
+        assert policy.status_code == 200
+        assert policy.json()["default_fee_percent"] == 20.0
+
+        updated = client.put(
+            "/api/platform/ai-billing", headers=_h("T-ADMIN"),
+            json={"default_fee_percent": 35},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["default_fee_percent"] == 35.0
+        assert client.put(
+            "/api/platform/ai-billing", headers=_h("T-AGENT"),
+            json={"default_fee_percent": 10},
+        ).status_code == 403
+
+        override = client.patch(
+            f"/api/platform/organizations/{current['organization_id']}/subscription",
+            headers=_h("T-ADMIN"), json={"ai_fee_percent": 12.5},
+        )
+        assert override.status_code == 200
+        assert override.json()["ai_billing"] == {
+            "fee_percent": 12.5, "has_custom_fee": True,
+        }
+        assert client.patch(
+            f"/api/platform/organizations/{current['organization_id']}/subscription",
+            headers=_h("T-ADMIN"), json={"ai_fee_percent": 501},
+        ).status_code == 400
+
+        from ai import usage
+        assert _run(usage.effective_fee_percent(fake, current["organization_id"])) == 12.5
 
     def test_rbac_403(self, srv):
         _, _, client = srv
