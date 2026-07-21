@@ -210,6 +210,177 @@ class TestUsageLogging:
         assert log["latency_ms"] >= 0
 
 
+class TestAIVariableSettlement:
+    def test_amount_calculation_freezes_rate_and_buffer(self):
+        from billing.ai_settlement import calculate_amounts
+        amounts = calculate_amounts(
+            plan_amount_ars=45_000, billable_cost_usd=2.5,
+            usd_to_ars_rate=1_500, fx_buffer_percent=10,
+        )
+        assert amounts["ai_cost_converted_ars"] == 3_750
+        assert amounts["ai_amount_ars"] == 4_125
+        assert amounts["total_amount_ars"] == 49_125
+
+    def test_policy_requires_exchange_rate_before_enabling(self, srv):
+        _, _, client = srv
+        default = client.get("/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"))
+        assert default.status_code == 200
+        assert default.json()["enabled"] is False
+        rejected = client.put(
+            "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
+            json={"enabled": True},
+        )
+        assert rejected.status_code == 400
+        assert "cotización" in rejected.text.lower()
+        configured = client.put(
+            "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
+            json={"usd_to_ars_rate": 1500, "fx_buffer_percent": 8,
+                  "settlement_lead_hours": 24, "max_rate_age_hours": 72,
+                  "enabled": True},
+        )
+        assert configured.status_code == 200
+        assert configured.json()["enabled"] is True
+        assert client.get(
+            "/api/platform/ai-settlement-policy", headers=_h("T-AGENT")
+        ).status_code == 403
+
+    def test_due_settlement_updates_subscription_once_and_payment_closes_it(self, srv, monkeypatch):
+        server, fake, client = srv
+        from datetime import datetime, timedelta, timezone
+
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        organization_id = organization["organization_id"]
+        now = datetime.now(timezone.utc)
+        _run(fake.organizations.update_one(
+            {"organization_id": organization_id},
+            {"$set": {
+                "plan_code": "starter", "subscription_status": "active",
+                "provider_status": "authorized", "provider_preapproval_id": "pre_123",
+                "current_period_end": (now + timedelta(hours=2)).isoformat(),
+                "provider_last_payment_at": (now - timedelta(days=29)).isoformat(),
+            }},
+        ))
+        _run(fake.ai_usage_logs.insert_one({
+            "organization_id": organization_id,
+            "created_at": (now - timedelta(days=1)).isoformat(),
+            "status": "success", "total_tokens": 1000,
+            "provider_cost_usd": 1.0, "ai_fee_percent": 20,
+            "ai_fee_usd": 0.2, "billable_cost_usd": 1.2,
+        }))
+        configured = client.put(
+            "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
+            json={"usd_to_ars_rate": 1000, "fx_buffer_percent": 10,
+                  "settlement_lead_hours": 24, "max_rate_age_hours": 72,
+                  "enabled": True},
+        )
+        assert configured.status_code == 200
+        calls = []
+        async def fake_mp(method, path, *, payload=None):
+            calls.append((method, path, payload))
+            return {"id": "pre_123", "status": "authorized"}
+        monkeypatch.setattr(server, "_mercadopago_request", fake_mp)
+
+        first = client.post(
+            f"/api/platform/ai-settlements/run?organization_id={organization_id}",
+            headers=_h("T-ADMIN"),
+        )
+        assert first.status_code == 200, first.text
+        assert first.json()["applied"] == 1
+        assert len(calls) == 1
+        assert calls[0][2]["auto_recurring"]["transaction_amount"] == 46_320
+        statement = fake.ai_billing_statements.docs[-1]
+        assert statement["billable_cost_usd"] == pytest.approx(1.2)
+        assert statement["status"] == "applied"
+
+        second = client.post(
+            f"/api/platform/ai-settlements/run?organization_id={organization_id}",
+            headers=_h("T-ADMIN"),
+        )
+        assert second.status_code == 200
+        assert len(calls) == 1, "Idempotency must not update Mercado Pago twice"
+
+        _run(server._apply_mercadopago_payment({
+            "id": "pay_123", "preapproval_id": "pre_123", "status": "approved",
+            "transaction_amount": 46_320, "date_approved": now.isoformat(),
+        }))
+        assert fake.ai_billing_statements.docs[-1]["status"] == "paid"
+        assert fake.ai_billing_statements.docs[-1]["provider_payment_id"] == "pay_123"
+        assert fake.ai_billing_statements.docs[-1]["base_amount_restored_ars"] == 45_000
+        assert len(calls) == 2
+        assert calls[-1][2]["auto_recurring"]["transaction_amount"] == 45_000
+
+        _run(server._apply_mercadopago_payment({
+            "id": "pay_123", "preapproval_id": "pre_123", "status": "approved",
+            "transaction_amount": 46_320, "date_approved": now.isoformat(),
+        }))
+        assert len(calls) == 2, "A repeated payment webhook must not restore the base amount twice"
+
+    def test_bcra_rate_refresh_parses_official_response(self, srv, monkeypatch):
+        _, _, client = srv
+        from billing import ai_settlement
+
+        class _Response:
+            status_code = 200
+            def json(self):
+                return {"results": [{"fecha": "2026-07-21", "detalle": [{
+                    "codigoMoneda": "USD", "tipoCotizacion": 1477.5,
+                }]}]}
+        class _Client:
+            def __init__(self, *args, **kwargs): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): pass
+            async def get(self, *args, **kwargs): return _Response()
+        monkeypatch.setattr(ai_settlement.httpx, "AsyncClient", _Client)
+        response = client.post(
+            "/api/platform/ai-settlement-policy/refresh-rate", headers=_h("T-ADMIN")
+        )
+        assert response.status_code == 200
+        assert response.json()["usd_to_ars_rate"] == 1477.5
+        assert response.json()["exchange_rate_source"] == "bcra"
+
+    def test_cancellation_waits_for_final_variable_settlement(self, srv, monkeypatch):
+        server, fake, client = srv
+        from datetime import datetime, timedelta, timezone
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        organization_id = organization["organization_id"]
+        now = datetime.now(timezone.utc)
+        _run(fake.organizations.update_one(
+            {"organization_id": organization_id},
+            {"$set": {"subscription_status": "active", "provider_status": "authorized",
+                      "provider_preapproval_id": "pre_cancel",
+                      "current_period_end": (now + timedelta(hours=2)).isoformat(),
+                      "provider_last_payment_at": (now - timedelta(days=29)).isoformat()}},
+        ))
+        _run(fake.ai_usage_logs.insert_one({
+            "organization_id": organization_id,
+            "created_at": (now - timedelta(days=1)).isoformat(), "status": "success",
+            "total_tokens": 1000, "provider_cost_usd": 1.0, "ai_fee_percent": 20,
+            "ai_fee_usd": 0.2, "billable_cost_usd": 1.2,
+        }))
+        enabled = client.put(
+            "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
+            json={"usd_to_ars_rate": 1500, "enabled": True},
+        )
+        assert enabled.status_code == 200
+        calls = []
+        async def fake_mp(*args, **kwargs):
+            calls.append((args, kwargs))
+            return {"id": "pre_cancel", "status": "authorized"}
+        monkeypatch.setattr(server, "_mercadopago_request", fake_mp)
+        response = client.post("/api/billing/cancel", headers=_h("T-ADMIN"))
+        assert response.status_code == 200
+        assert response.json()["organization"]["cancel_at_period_end"] is True
+        assert calls == [], "Mercado Pago must remain active until the final settlement is paid"
+        settlement = client.post(
+            f"/api/platform/ai-settlements/run?organization_id={organization_id}",
+            headers=_h("T-ADMIN"),
+        )
+        assert settlement.status_code == 200
+        assert len(calls) == 1
+        charged = calls[0][1]["payload"]["auto_recurring"]["transaction_amount"]
+        assert charged == 1980, "Final settlement must charge AI only, not another plan month"
+
+
 class TestProviderUsageParsing:
     def test_openai_report_aggregation(self, srv):
         from ai.provider_usage import _openai_cost, _openai_usage

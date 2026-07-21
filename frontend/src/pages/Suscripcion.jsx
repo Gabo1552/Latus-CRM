@@ -109,14 +109,19 @@ export default function Suscripcion() {
   });
   const cancelSubscription = useMutation({
     mutationFn: () => api.post("/billing/cancel").then((response) => response.data),
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["billing-subscription"] });
-      toast.success("La renovación automática fue cancelada");
+      toast.success(
+        result?.organization?.cancel_at_period_end
+          ? "La cancelación quedó programada para el cierre del período"
+          : "La renovación automática fue cancelada",
+      );
     },
     onError: (error) => toast.error(error.response?.data?.detail || "No se pudo cancelar la suscripción"),
   });
 
   const data = subscriptionQ.data;
+  const latestAIStatement = data?.ai_billing?.latest_statement;
   const status = STATUS[data?.organization?.subscription_status] || STATUS.not_configured;
   const limits = data?.plan?.limits || {};
   const relevantDate = useMemo(() => {
@@ -186,7 +191,7 @@ export default function Suscripcion() {
             <UsageBar icon={UserRoundCheck} label="Clientes registrados" value={data?.usage?.contacts || 0} limit={limits.contacts} />
             <UsageBar icon={Sparkles} label="Tokens de IA este mes" value={data?.ai_billing?.this_month?.tokens || 0} limit={limits.monthly_ai_tokens} />
           </div>
-          <p className="mt-3 text-xs font-semibold text-latus-muted">Al alcanzar el cupo mensual incluido, el bot pausa nuevas llamadas de IA para evitar consumos no cubiertos por el plan.</p>
+          <p className="mt-3 text-xs font-semibold text-latus-muted">Al alcanzar el cupo operativo mensual del plan, el bot pausa nuevas llamadas de IA para mantener el consumo bajo control.</p>
         </section>
 
         <section className="overflow-hidden rounded-[24px] border border-latus-warm-border bg-white shadow-sm">
@@ -199,6 +204,12 @@ export default function Suscripcion() {
             <div className="bg-white p-5"><p className="text-[11px] font-extrabold uppercase tracking-wider text-latus-muted">Fee de Latus · {Number(data?.ai_billing?.fee_percent || 0).toFixed(1)}%</p><p className="mt-2 text-2xl font-black text-latus-ink">{usd.format(Number(data?.ai_billing?.this_month?.ai_fee_usd || 0))}</p><p className="mt-1 text-xs text-latus-muted">El porcentaje histórico queda congelado con cada uso.</p></div>
             <div className="bg-latus-ink p-5 text-white"><p className="text-[11px] font-extrabold uppercase tracking-wider text-white/55">Total facturable de IA</p><p className="mt-2 text-3xl font-black text-white">{usd.format(Number(data?.ai_billing?.this_month?.billable_cost_usd || 0))}</p><p className="mt-1 text-xs text-white/55">Proveedor + fee acumulados durante el mes actual.</p></div>
           </div>
+          {latestAIStatement && (
+            <div className="flex flex-col gap-2 border-t border-latus-warm-border bg-sky-50/60 px-5 py-4 text-sm sm:flex-row sm:items-center sm:justify-between sm:px-6">
+              <div><p className="font-extrabold text-latus-ink">Última liquidación: {latestAIStatement.status === "paid" ? "cobrada" : latestAIStatement.status === "applied" ? "incluida en la próxima renovación" : latestAIStatement.status === "payment_failed" ? "pago pendiente" : "en preparación"}</p><p className="mt-1 text-xs text-latus-muted">Consumo IA {usd.format(Number(latestAIStatement.billable_cost_usd || 0))} · convertido a ARS con cotización {Number(latestAIStatement.usd_to_ars_rate || 0).toLocaleString("es-AR")} y colchón de {Number(latestAIStatement.fx_buffer_percent || 0).toFixed(1)}%.</p></div>
+              <p className="text-lg font-black text-latus-ink">Próximo total: {money.format(Number(latestAIStatement.total_amount_ars || 0))}</p>
+            </div>
+          )}
         </section>
 
         <section>
@@ -275,14 +286,14 @@ export default function Suscripcion() {
               {data?.payment_provider?.status === "authorized" && (
                 <button
                   type="button"
-                  disabled={cancelSubscription.isPending}
+                  disabled={cancelSubscription.isPending || data?.organization?.cancel_at_period_end}
                   onClick={() => {
-                    if (!window.confirm("¿Querés cancelar la renovación automática? Mantendrás el acceso hasta el final del período ya abonado.")) return;
+                    if (!window.confirm("¿Querés cancelar la renovación automática? Mantendrás el acceso hasta el final del período ya abonado. Si existe consumo de IA pendiente, se cobrará únicamente esa liquidación final antes de cerrar la suscripción.")) return;
                     cancelSubscription.mutate();
                   }}
                   className="mt-3 inline-flex items-center gap-1.5 text-xs font-bold text-rose-600 hover:text-rose-700 disabled:opacity-50"
                 >
-                  <XCircle className="h-3.5 w-3.5" />{cancelSubscription.isPending ? "Cancelando..." : "Cancelar renovación automática"}
+                  <XCircle className="h-3.5 w-3.5" />{data?.organization?.cancel_at_period_end ? "Cancelación programada al cierre" : cancelSubscription.isPending ? "Cancelando..." : "Cancelar renovación automática"}
                 </button>
               )}
             </div>

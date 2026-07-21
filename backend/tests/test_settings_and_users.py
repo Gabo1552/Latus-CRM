@@ -180,7 +180,7 @@ class _FakeDB:
             setattr(self, name, _Coll())
         for name in ("organizations", "memberships", "whatsapp_routes", "system_migrations"):
             setattr(self, name, _Coll())
-        for name in ("billing_requests", "billing_events"):
+        for name in ("billing_requests", "billing_events", "ai_billing_statements"):
             setattr(self, name, _Coll())
 
 

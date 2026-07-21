@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BadgeDollarSign, Building2, CheckCircle2, KeyRound, Pencil, Search, ShieldAlert,
-  Sparkles, Users, X,
+  BadgeDollarSign, Building2, CheckCircle2, FileText, KeyRound, Pencil, RefreshCw,
+  Search, ShieldAlert, Sparkles, Users, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import AppLayout from "@/components/AppLayout";
@@ -33,6 +33,89 @@ function statusTone(allowed) {
 
 function dateInput(value) {
   return value ? String(value).slice(0, 10) : "";
+}
+
+const SETTLEMENT_STATUS = {
+  pending: "Pendiente", applying: "Aplicando", applied: "Próximo cobro",
+  paid: "Cobrado", payment_failed: "Pago rechazado", failed: "Error",
+  closed_no_charge: "Cerrado sin saldo",
+};
+
+function AIVariableBillingPanel() {
+  const qc = useQueryClient();
+  const policyQ = useQuery({
+    queryKey: ["ai-settlement-policy"],
+    queryFn: () => api.get("/platform/ai-settlement-policy").then((r) => r.data),
+  });
+  const statementsQ = useQuery({
+    queryKey: ["ai-settlements"],
+    queryFn: () => api.get("/platform/ai-settlements?limit=8").then((r) => r.data),
+  });
+  const [draft, setDraft] = useState(null);
+  useEffect(() => { if (policyQ.data) setDraft(policyQ.data); }, [policyQ.data]);
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["ai-settlement-policy"] });
+    qc.invalidateQueries({ queryKey: ["ai-settlements"] });
+    qc.invalidateQueries({ queryKey: ["platform-organizations"] });
+  };
+  const save = useMutation({
+    mutationFn: () => {
+      const payload = {
+        enabled: !!draft.enabled,
+        fx_buffer_percent: Number(draft.fx_buffer_percent),
+        settlement_lead_hours: Number(draft.settlement_lead_hours),
+        max_rate_age_hours: Number(draft.max_rate_age_hours),
+      };
+      if (Number(draft.usd_to_ars_rate) !== Number(policyQ.data?.usd_to_ars_rate)) {
+        payload.usd_to_ars_rate = Number(draft.usd_to_ars_rate);
+      }
+      return api.put("/platform/ai-settlement-policy", payload);
+    },
+    onSuccess: () => { toast.success("Política de liquidación guardada"); invalidate(); },
+    onError: (e) => toast.error(e.response?.data?.detail || "No se pudo guardar"),
+  });
+  const refreshRate = useMutation({
+    mutationFn: () => api.post("/platform/ai-settlement-policy/refresh-rate"),
+    onSuccess: () => { toast.success("Cotización oficial actualizada"); invalidate(); },
+    onError: (e) => toast.error(e.response?.data?.detail || "No se pudo consultar el BCRA"),
+  });
+  const run = useMutation({
+    mutationFn: () => api.post("/platform/ai-settlements/run").then((r) => r.data),
+    onSuccess: (data) => { toast.success(data.applied ? `${data.applied} liquidación aplicada` : "No hay cobros dentro de la ventana de liquidación"); invalidate(); },
+    onError: (e) => toast.error(e.response?.data?.detail || "No se pudo ejecutar la liquidación"),
+  });
+  if (!draft) return null;
+  const invalid = Number(draft.usd_to_ars_rate) <= 0 || Number(draft.fx_buffer_percent) < 0
+    || Number(draft.settlement_lead_hours) < 1 || Number(draft.max_rate_age_hours) < 12;
+  const rows = statementsQ.data?.items || [];
+  return (
+    <section className="overflow-hidden rounded-[24px] border border-latus-warm-border bg-white shadow-sm" data-testid="ai-variable-billing-panel">
+      <div className="flex flex-col gap-4 border-b border-latus-warm-border bg-latus-cream/35 p-5 sm:flex-row sm:items-start sm:justify-between sm:px-6">
+        <div className="flex items-start gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-violet-100 text-violet-700"><BadgeDollarSign className="h-5 w-5" /></span><div><h2 className="font-extrabold text-latus-ink">Cobro automático del consumo de IA</h2><p className="mt-1 max-w-3xl text-sm leading-5 text-latus-muted">Antes de cada renovación suma al plan el consumo cerrado, convertido a pesos con una cotización registrada. Cada liquidación queda congelada para auditoría.</p></div></div>
+        <label className="flex shrink-0 items-center gap-2 rounded-full border border-latus-warm-border bg-white px-3 py-2 text-xs font-extrabold text-latus-ink"><input type="checkbox" checked={!!draft.enabled} onChange={(e) => setDraft((d) => ({ ...d, enabled: e.target.checked }))} className="h-4 w-4 accent-latus-blue" />{draft.enabled ? "Automatización activa" : "Automatización apagada"}</label>
+      </div>
+      <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4 sm:p-6">
+        <label className="text-xs font-bold text-latus-ink">Cotización USD → ARS
+          <Input type="number" min="1" step="0.01" value={draft.usd_to_ars_rate} onChange={(e) => setDraft((d) => ({ ...d, usd_to_ars_rate: e.target.value }))} className="mt-1.5 h-10 rounded-lg border-latus-warm-border" />
+          <span className="mt-1 block font-normal text-latus-muted">Fuente: {draft.exchange_rate_source === "bcra" ? "BCRA" : "manual"}</span>
+        </label>
+        <label className="text-xs font-bold text-latus-ink">Colchón cambiario
+          <div className="relative"><Input type="number" min="0" max="100" step="0.5" value={draft.fx_buffer_percent} onChange={(e) => setDraft((d) => ({ ...d, fx_buffer_percent: e.target.value }))} className="mt-1.5 h-10 rounded-lg border-latus-warm-border pr-8" /><span className="absolute bottom-2.5 right-3 text-latus-muted">%</span></div>
+        </label>
+        <label className="text-xs font-bold text-latus-ink">Anticipación del cierre
+          <div className="relative"><Input type="number" min="1" max="168" value={draft.settlement_lead_hours} onChange={(e) => setDraft((d) => ({ ...d, settlement_lead_hours: e.target.value }))} className="mt-1.5 h-10 rounded-lg border-latus-warm-border pr-10" /><span className="absolute bottom-2.5 right-3 text-latus-muted">hs</span></div>
+        </label>
+        <label className="text-xs font-bold text-latus-ink">Vigencia máxima de cotización
+          <div className="relative"><Input type="number" min="12" max="720" value={draft.max_rate_age_hours} onChange={(e) => setDraft((d) => ({ ...d, max_rate_age_hours: e.target.value }))} className="mt-1.5 h-10 rounded-lg border-latus-warm-border pr-10" /><span className="absolute bottom-2.5 right-3 text-latus-muted">hs</span></div>
+        </label>
+      </div>
+      <div className="flex flex-col gap-3 border-t border-latus-warm-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+        <div><p className={`text-xs font-extrabold ${draft.rate_is_fresh ? "text-emerald-700" : "text-amber-700"}`}>{draft.rate_is_fresh ? "Cotización vigente" : "Cotización vencida o no configurada"}</p><p className="mt-1 text-[11px] text-latus-muted">Observada: {draft.exchange_rate_observed_at || "—"} · actualizada: {draft.exchange_rate_updated_at ? new Date(draft.exchange_rate_updated_at).toLocaleString("es-AR") : "—"}</p></div>
+        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => refreshRate.mutate()} disabled={refreshRate.isPending} className="rounded-lg border-latus-warm-border"><RefreshCw className={`h-4 w-4 ${refreshRate.isPending ? "animate-spin" : ""}`} />Actualizar desde BCRA</Button><Button variant="outline" onClick={() => run.mutate()} disabled={!draft.enabled || run.isPending} className="rounded-lg border-latus-warm-border"><FileText className="h-4 w-4" />Procesar vencimientos</Button><Button onClick={() => save.mutate()} disabled={invalid || save.isPending} className="rounded-lg bg-latus-blue text-white hover:bg-latus-blue/90">Guardar política</Button></div>
+      </div>
+      {rows.length > 0 && <div className="overflow-x-auto border-t border-latus-warm-border"><table className="w-full min-w-[900px] text-left text-xs"><thead className="bg-latus-cream text-[10px] font-extrabold uppercase tracking-wider text-latus-muted"><tr><th className="px-5 py-3">Empresa</th><th className="px-4 py-3">Período</th><th className="px-4 py-3 text-right">IA USD</th><th className="px-4 py-3 text-right">IA ARS</th><th className="px-4 py-3 text-right">Plan + IA</th><th className="px-5 py-3">Estado</th></tr></thead><tbody className="divide-y divide-latus-warm-border">{rows.map((row) => <tr key={row.statement_id}><td className="px-5 py-3 font-mono">{row.organization_id}</td><td className="px-4 py-3 text-latus-muted">{String(row.period_start).slice(0, 10)} → {String(row.period_end).slice(0, 10)}</td><td className="px-4 py-3 text-right font-mono">USD {Number(row.billable_cost_usd || 0).toFixed(4)}</td><td className="px-4 py-3 text-right font-mono">$ {Number(row.ai_amount_ars || 0).toLocaleString("es-AR")}</td><td className="px-4 py-3 text-right font-extrabold">$ {Number(row.total_amount_ars || 0).toLocaleString("es-AR")}</td><td className="px-5 py-3"><span className="rounded-full bg-slate-100 px-2.5 py-1 font-extrabold text-slate-700">{SETTLEMENT_STATUS[row.status] || row.status}</span></td></tr>)}</tbody></table></div>}
+    </section>
+  );
 }
 
 function ManageModal({ organization, onClose, onSave, saving }) {
@@ -151,6 +234,8 @@ export default function Plataforma() {
           </div>
           <Button asChild className="shrink-0 bg-latus-blue text-white hover:bg-latus-blue/90"><Link to="/configuracion?tab=ai"><KeyRound className="h-4 w-4" />Configurar IA global</Link></Button>
         </section>
+
+        <AIVariableBillingPanel />
 
         <section className="overflow-hidden rounded-[24px] border border-latus-warm-border bg-white shadow-sm">
           <div className="flex flex-col gap-4 border-b border-latus-warm-border p-5 md:flex-row md:items-center md:justify-between">

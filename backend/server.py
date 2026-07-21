@@ -1664,6 +1664,35 @@ async def _apply_mercadopago_preapproval(resource: dict) -> Optional[str]:
     return organization["organization_id"]
 
 
+async def _reconcile_ai_statement_payment(organization_id: str, resource: dict,
+                                          payment_status: str) -> None:
+    payment = resource.get("payment") if isinstance(resource.get("payment"), dict) else resource
+    payment_id = str(payment.get("id") or resource.get("id") or "")
+    try:
+        paid_amount = float(payment.get("transaction_amount") or resource.get("transaction_amount") or 0)
+    except (TypeError, ValueError):
+        paid_amount = 0.0
+    candidates = await _raw_collection("ai_billing_statements").find({
+        "organization_id": organization_id,
+        "status": {"$in": ["applied", "payment_failed"]},
+    }, {"_id": 0}).sort("applied_at", -1).to_list(10)
+    statement = next(
+        (item for item in candidates
+         if paid_amount > 0 and abs(float(item.get("total_amount_ars") or 0) - paid_amount) < 0.01),
+        None,
+    )
+    if not statement:
+        return
+    status = "paid" if payment_status == "approved" else "payment_failed"
+    update = {"status": status, "provider_payment_id": payment_id or None,
+              "provider_payment_status": payment_status, "updated_at": now_iso()}
+    if status == "paid":
+        update["paid_at"] = payment.get("date_approved") or now_iso()
+    await _raw_collection("ai_billing_statements").update_one(
+        {"statement_id": statement["statement_id"]}, {"$set": update}
+    )
+
+
 async def _apply_mercadopago_payment(resource: dict) -> Optional[str]:
     organization = await _find_organization_for_provider_resource(resource)
     if not organization:
@@ -1715,6 +1744,86 @@ async def _apply_mercadopago_payment(resource: dict) -> Optional[str]:
     await _raw_collection("organizations").update_one(
         {"organization_id": organization["organization_id"]}, {"$set": update}
     )
+    if payment_status in {"approved", "rejected", "cancelled", "cancelled_by_collector"}:
+        await _reconcile_ai_statement_payment(
+            organization["organization_id"], resource, payment_status
+        )
+    if payment_status == "approved":
+        payment = resource.get("payment") if isinstance(resource.get("payment"), dict) else resource
+        payment_id = str(payment.get("id") or resource.get("id") or "")
+        paid_statement = await _raw_collection("ai_billing_statements").find_one({
+            "organization_id": organization["organization_id"],
+            "status": "paid", "provider_payment_id": payment_id,
+        }, {"_id": 0})
+        if paid_statement and current_preapproval_id and organization.get("cancel_at_period_end"):
+            try:
+                canceled = await _mercadopago_request(
+                    "PUT", f"/preapproval/{current_preapproval_id}",
+                    payload={"status": "canceled"},
+                )
+                canceled.setdefault("id", current_preapproval_id)
+                canceled.setdefault("status", "canceled")
+                await _apply_mercadopago_preapproval(canceled)
+                await _raw_collection("organizations").update_one(
+                    {"organization_id": organization["organization_id"]},
+                    {"$set": {"cancel_at_period_end": False,
+                              "cancellation_completed_at": now_iso(),
+                              "current_period_end": paid_statement.get("charge_scheduled_at") or now_iso(),
+                              "updated_at": now_iso()}},
+                )
+            except MercadoPagoAPIError:
+                logger.exception("Could not finalize scheduled cancellation org=%s",
+                                 organization["organization_id"])
+        elif (
+            paid_statement and current_preapproval_id
+            and not paid_statement.get("base_amount_restored_at")
+        ):
+            plan_code = paid_statement.get("plan_code") or organization.get("plan_code") or "base"
+            plan = PLAN_CATALOG.get(plan_code) or PLAN_CATALOG["base"]
+            base_amount = float(plan["monthly_price_ars"])
+            try:
+                await _mercadopago_request(
+                    "PUT", f"/preapproval/{current_preapproval_id}",
+                    payload={
+                        "reason": f"Latus CRM - Plan {plan['name']}",
+                        "auto_recurring": {
+                            "transaction_amount": base_amount,
+                            "currency_id": "ARS",
+                        },
+                    },
+                )
+                restored_at = now_iso()
+                await _raw_collection("ai_billing_statements").update_one(
+                    {"statement_id": paid_statement["statement_id"]},
+                    {"$set": {"base_amount_restored_at": restored_at,
+                              "base_amount_restored_ars": base_amount,
+                              "updated_at": restored_at},
+                     "$unset": {"base_amount_restore_error": ""}},
+                )
+                await _raw_collection("organizations").update_one(
+                    {"organization_id": organization["organization_id"]},
+                    {"$set": {"next_billing_amount_ars": base_amount,
+                              "next_ai_amount_ars": 0.0,
+                              "updated_at": restored_at}},
+                )
+                await _raw_collection("billing_events").insert_one({
+                    "event_id": new_id("billevt"),
+                    "organization_id": organization["organization_id"],
+                    "type": "ai_settlement_base_amount_restored",
+                    "provider": "mercadopago",
+                    "provider_resource_id": current_preapproval_id,
+                    "statement_id": paid_statement["statement_id"],
+                    "amount_ars": base_amount,
+                    "created_at": restored_at,
+                })
+            except MercadoPagoAPIError as exc:
+                await _raw_collection("ai_billing_statements").update_one(
+                    {"statement_id": paid_statement["statement_id"]},
+                    {"$set": {"base_amount_restore_error": str(exc)[:500],
+                              "updated_at": now_iso()}},
+                )
+                logger.exception("Could not restore base subscription amount org=%s",
+                                 organization["organization_id"])
     return organization["organization_id"]
 
 def _public_plan_catalog(*, include_internal: bool = False) -> list[dict]:
@@ -1746,6 +1855,218 @@ async def _organization_ai_month_usage(organization_id: str) -> dict:
     return total
 
 
+async def _latest_ai_statement(organization_id: str) -> Optional[dict]:
+    return await _raw_collection("ai_billing_statements").find_one(
+        {"organization_id": organization_id}, {"_id": 0},
+        sort=[("created_at", -1)],
+    )
+
+
+async def _build_ai_settlement_statement(organization: dict, charge_at: datetime,
+                                         policy: dict, *, at: Optional[datetime] = None) -> dict:
+    from billing import ai_settlement
+    at = at or datetime.now(timezone.utc)
+    organization_id = organization["organization_id"]
+    period_start = ai_settlement.parse_datetime(organization.get("last_ai_settlement_end")) \
+        or ai_settlement.parse_datetime(organization.get("provider_last_payment_at")) \
+        or ai_settlement.previous_cycle_start(charge_at)
+    period_end = min(at, charge_at)
+    if period_start >= period_end:
+        period_start = ai_settlement.previous_cycle_start(charge_at)
+    logs = await _raw_collection("ai_usage_logs").find({
+        "organization_id": organization_id,
+        "created_at": {"$gte": period_start.isoformat(), "$lt": period_end.isoformat()},
+        "status": "success",
+    }, {"_id": 0}).to_list(100_000)
+    usage = ai_settlement.summarize_logs(logs)
+    plan_code = organization.get("plan_code") or "base"
+    plan = PLAN_CATALOG.get(plan_code) or PLAN_CATALOG["base"]
+    final_cancellation = bool(organization.get("cancel_at_period_end"))
+    amounts = ai_settlement.calculate_amounts(
+        plan_amount_ars=0 if final_cancellation else plan["monthly_price_ars"],
+        billable_cost_usd=usage["billable_cost_usd"],
+        usd_to_ars_rate=policy["usd_to_ars_rate"],
+        fx_buffer_percent=policy["fx_buffer_percent"],
+    )
+    cycle = charge_at.date().isoformat()
+    return {
+        "statement_id": f"aistmt_{hashlib.sha256(f'{organization_id}:{cycle}'.encode()).hexdigest()[:20]}",
+        "settlement_key": f"{organization_id}:{cycle}",
+        "organization_id": organization_id,
+        "plan_code": plan_code,
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "charge_scheduled_at": charge_at.isoformat(),
+        **usage,
+        **amounts,
+        "usd_to_ars_rate": policy["usd_to_ars_rate"],
+        "exchange_rate_source": policy["exchange_rate_source"],
+        "exchange_rate_observed_at": policy.get("exchange_rate_observed_at"),
+        "fx_buffer_percent": policy["fx_buffer_percent"],
+        "provider": "mercadopago",
+        "provider_preapproval_id": organization.get("provider_preapproval_id"),
+        "final_cancellation": final_cancellation,
+        "status": "pending",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+
+
+async def _apply_ai_settlement(organization: dict, policy: dict, *,
+                               force: bool = False) -> dict:
+    from billing import ai_settlement
+    now = datetime.now(timezone.utc)
+    organization_id = organization["organization_id"]
+    if str(organization.get("subscription_status") or "").lower() != "active":
+        return {"organization_id": organization_id, "status": "skipped", "reason": "subscription_not_active"}
+    charge_at = _parse_billing_datetime(organization.get("current_period_end"))
+    if not charge_at:
+        return {"organization_id": organization_id, "status": "skipped", "reason": "missing_charge_date"}
+    if not force:
+        seconds_until_charge = (charge_at - now).total_seconds()
+        if seconds_until_charge <= 15 * 60:
+            return {"organization_id": organization_id, "status": "skipped", "reason": "charge_too_close"}
+        if seconds_until_charge > int(policy["settlement_lead_hours"]) * 3600:
+            return {"organization_id": organization_id, "status": "skipped", "reason": "not_due"}
+    if not ai_settlement.rate_is_fresh(policy, at=now):
+        return {"organization_id": organization_id, "status": "skipped", "reason": "stale_exchange_rate"}
+    provider_id = str(organization.get("provider_preapproval_id") or "")
+    if not provider_id or str(organization.get("provider_status") or "").lower() != "authorized":
+        return {"organization_id": organization_id, "status": "skipped", "reason": "subscription_not_authorized"}
+
+    draft = await _build_ai_settlement_statement(organization, charge_at, policy, at=now)
+    if float(draft.get("total_amount_ars") or 0) <= 0 and draft.get("final_cancellation"):
+        existing = await _raw_collection("ai_billing_statements").find_one(
+            {"settlement_key": draft["settlement_key"]}, {"_id": 0}
+        )
+        if existing and existing.get("status") == "closed_no_charge":
+            return existing
+        statement = existing or draft
+        if not existing:
+            try:
+                await _raw_collection("ai_billing_statements").insert_one(dict(statement))
+            except DuplicateKeyError:
+                statement = await _raw_collection("ai_billing_statements").find_one(
+                    {"settlement_key": draft["settlement_key"]}, {"_id": 0}
+                ) or draft
+        canceled = await _mercadopago_request(
+            "PUT", f"/preapproval/{provider_id}", payload={"status": "canceled"}
+        )
+        canceled.setdefault("id", provider_id)
+        canceled.setdefault("status", "canceled")
+        await _apply_mercadopago_preapproval(canceled)
+        closed_at = now_iso()
+        await _raw_collection("ai_billing_statements").update_one(
+            {"statement_id": statement["statement_id"]},
+            {"$set": {"status": "closed_no_charge", "paid_at": closed_at,
+                      "updated_at": closed_at}},
+        )
+        await _raw_collection("organizations").update_one(
+            {"organization_id": organization_id},
+            {"$set": {"cancel_at_period_end": False,
+                      "cancellation_completed_at": closed_at,
+                      "current_period_end": charge_at.isoformat(), "updated_at": closed_at}},
+        )
+        return {**statement, "status": "closed_no_charge", "paid_at": closed_at}
+    if float(draft.get("total_amount_ars") or 0) <= 0:
+        return {"organization_id": organization_id, "status": "skipped", "reason": "no_charge"}
+    existing = await _raw_collection("ai_billing_statements").find_one(
+        {"settlement_key": draft["settlement_key"]}, {"_id": 0}
+    )
+    if existing and existing.get("status") in {"applied", "paid", "payment_failed"}:
+        return existing
+    statement = existing or draft
+    if not existing:
+        try:
+            await _raw_collection("ai_billing_statements").insert_one(dict(statement))
+        except DuplicateKeyError:
+            statement = await _raw_collection("ai_billing_statements").find_one(
+                {"settlement_key": draft["settlement_key"]}, {"_id": 0}
+            ) or draft
+    await _raw_collection("ai_billing_statements").update_one(
+        {"statement_id": statement["statement_id"]},
+        {"$set": {"status": "applying", "apply_started_at": now_iso(), "updated_at": now_iso()}},
+    )
+    try:
+        provider_result = await _mercadopago_request(
+            "PUT", f"/preapproval/{provider_id}",
+            payload={
+                "reason": (
+                    "Latus CRM - Liquidación final de consumo de IA"
+                    if statement.get("final_cancellation") else
+                    f"Latus CRM - Plan {PLAN_CATALOG.get(statement['plan_code'], PLAN_CATALOG['base'])['name']} + consumo de IA"
+                ),
+                "auto_recurring": {
+                    "transaction_amount": statement["total_amount_ars"],
+                    "currency_id": "ARS",
+                },
+            },
+        )
+    except MercadoPagoAPIError as exc:
+        await _raw_collection("ai_billing_statements").update_one(
+            {"statement_id": statement["statement_id"]},
+            {"$set": {"status": "failed", "error": str(exc)[:500],
+                      "updated_at": now_iso()}},
+        )
+        return {**statement, "status": "failed", "error": str(exc)}
+    applied_at = now_iso()
+    await _raw_collection("ai_billing_statements").update_one(
+        {"statement_id": statement["statement_id"]},
+        {"$set": {"status": "applied", "applied_at": applied_at,
+                  "provider_response_status": provider_result.get("status"),
+                  "updated_at": applied_at}, "$unset": {"error": ""}},
+    )
+    await _raw_collection("organizations").update_one(
+        {"organization_id": organization_id},
+        {"$set": {"last_ai_settlement_end": statement["period_end"],
+                  "next_billing_amount_ars": statement["total_amount_ars"],
+                  "next_ai_amount_ars": statement["ai_amount_ars"],
+                  "last_ai_statement_id": statement["statement_id"],
+                  "updated_at": applied_at}},
+    )
+    await _raw_collection("billing_events").insert_one({
+        "event_id": new_id("billevt"), "organization_id": organization_id,
+        "type": "ai_settlement_applied", "provider": "mercadopago",
+        "provider_resource_id": provider_id, "statement_id": statement["statement_id"],
+        "amount_ars": statement["total_amount_ars"], "created_at": applied_at,
+    })
+    return {**statement, "status": "applied", "applied_at": applied_at}
+
+
+async def process_due_ai_settlements(*, force_organization_id: Optional[str] = None,
+                                     force: bool = False) -> dict:
+    from billing import ai_settlement
+    policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
+    if not policy["enabled"] and not force:
+        return {"enabled": False, "processed": 0, "applied": 0, "items": []}
+    updated = ai_settlement.parse_datetime(policy.get("exchange_rate_updated_at"))
+    if policy.get("exchange_rate_source") == "bcra" and (
+        not updated or datetime.now(timezone.utc) - updated > timedelta(hours=12)
+    ):
+        try:
+            policy = await ai_settlement.refresh_bcra_rate(_raw_collection("pricing_config"))
+        except ValueError:
+            logger.exception("No se pudo actualizar la cotización BCRA para liquidaciones de IA")
+    query: dict[str, Any] = {
+        "subscription_status": "active", "provider_status": "authorized",
+        "current_period_end": {"$ne": None},
+    }
+    if force_organization_id:
+        query = {"organization_id": force_organization_id}
+    organizations = await _raw_collection("organizations").find(query, {"_id": 0}).to_list(1000)
+    items = []
+    for organization in organizations:
+        try:
+            items.append(await _apply_ai_settlement(organization, policy, force=force))
+        except Exception as exc:
+            logger.exception("AI settlement failed org=%s", organization.get("organization_id"))
+            items.append({"organization_id": organization.get("organization_id"),
+                          "status": "failed", "error": str(exc)[:500]})
+    return {"enabled": policy["enabled"], "processed": len(items),
+            "applied": sum(1 for item in items if item.get("status") == "applied"),
+            "items": items}
+
+
 async def _subscription_payload(organization_id: str, *, include_internal: bool = False) -> dict:
     from ai import usage as ai_usage
     organization = await _raw_collection("organizations").find_one(
@@ -1774,6 +2095,7 @@ async def _subscription_payload(organization_id: str, *, include_internal: bool 
             "fee_percent": await ai_usage.effective_fee_percent(db, organization_id),
             "has_custom_fee": organization.get("ai_fee_percent") is not None,
             "this_month": await _organization_ai_month_usage(organization_id),
+            "latest_statement": await _latest_ai_statement(organization_id),
         },
         "latest_request": latest_request,
         "payment_provider": {
@@ -1864,13 +2186,25 @@ async def create_billing_checkout(
     current_provider_plan = organization.get("provider_plan_code")
 
     async def change_active_plan(provider_id: str, *, reactivate: bool = False) -> dict:
+        open_statement = await _raw_collection("ai_billing_statements").find_one(
+            {"organization_id": user.organization_id, "status": "applied"},
+            {"_id": 0}, sort=[("applied_at", -1)],
+        )
+        carried_ai_amount = 0.0
+        carry_statement = False
+        if open_statement:
+            scheduled = _parse_billing_datetime(open_statement.get("charge_scheduled_at"))
+            if scheduled and scheduled > datetime.now(timezone.utc):
+                carry_statement = True
+                carried_ai_amount = float(open_statement.get("ai_amount_ars") or 0)
+        next_total = round(float(plan["monthly_price_ars"]) + carried_ai_amount, 2)
         provider_update = {
             "reason": f"Latus CRM - Plan {plan['name']}",
             "external_reference": _mercadopago_external_reference(
                 user.organization_id, payload.plan_code
             ),
             "auto_recurring": {
-                "transaction_amount": plan["monthly_price_ars"],
+                "transaction_amount": next_total,
                 "currency_id": "ARS",
             },
         }
@@ -1900,12 +2234,26 @@ async def create_billing_checkout(
             "billing_email": billing_email,
             "billing_request_status": "approved",
             "requested_plan_code": None,
+            "cancel_at_period_end": False,
             "provider_last_synced_at": now_iso(),
             "updated_at": now_iso(),
         }
         await _raw_collection("organizations").update_one(
             {"organization_id": user.organization_id}, {"$set": update}
         )
+        if open_statement and carry_statement:
+            await _raw_collection("ai_billing_statements").update_one(
+                {"statement_id": open_statement["statement_id"]},
+                {"$set": {
+                    "original_plan_code": open_statement.get("original_plan_code") or open_statement.get("plan_code"),
+                    "plan_code": payload.plan_code,
+                    "plan_amount_ars": float(plan["monthly_price_ars"]),
+                    "total_amount_ars": next_total,
+                    "final_cancellation": False,
+                    "plan_changed_before_payment_at": now_iso(),
+                    "updated_at": now_iso(),
+                }},
+            )
         await _raw_collection("billing_requests").update_many(
             {"organization_id": user.organization_id, "status": "pending"},
             {"$set": {
@@ -2159,6 +2507,24 @@ async def cancel_billing_subscription(
         raise HTTPException(status_code=400, detail="No hay una suscripción para cancelar")
     if str(organization.get("provider_status") or "").lower() == "canceled":
         return await _subscription_payload(user.organization_id)
+    from billing import ai_settlement
+    variable_policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
+    if variable_policy["enabled"] and str(organization.get("provider_status") or "").lower() == "authorized":
+        requested_at = now_iso()
+        await _raw_collection("organizations").update_one(
+            {"organization_id": user.organization_id},
+            {"$set": {"cancel_at_period_end": True,
+                      "cancellation_requested_at": requested_at,
+                      "cancellation_requested_by": user.user_id,
+                      "updated_at": requested_at}},
+        )
+        await _raw_collection("billing_events").insert_one({
+            "event_id": new_id("billevt"), "organization_id": user.organization_id,
+            "type": "subscription_cancellation_scheduled", "provider": "mercadopago",
+            "provider_resource_id": str(provider_id), "actor_user_id": user.user_id,
+            "actor_email": user.email, "created_at": requested_at,
+        })
+        return await _subscription_payload(user.organization_id)
     try:
         provider_result = await _mercadopago_request(
             "PUT", f"/preapproval/{provider_id}", payload={"status": "canceled"}
@@ -2320,6 +2686,7 @@ async def platform_list_organizations(platform_admin: User = Depends(require_pla
                     "calls": 0, "tokens": 0, "base_cost_usd": 0.0,
                     "ai_fee_usd": 0.0, "billable_cost_usd": 0.0,
                 }),
+                "latest_statement": await _latest_ai_statement(organization_id),
             },
         })
     return rows
@@ -5619,6 +5986,14 @@ class AIBillingPolicyUpdate(BaseModel):
     default_fee_percent: float
 
 
+class AIVariableBillingPolicyUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    usd_to_ars_rate: Optional[float] = None
+    fx_buffer_percent: Optional[float] = None
+    settlement_lead_hours: Optional[int] = None
+    max_rate_age_hours: Optional[int] = None
+
+
 @api_router.get("/platform/ai-billing")
 async def platform_get_ai_billing(
     platform_admin: User = Depends(require_platform_admin),
@@ -5639,6 +6014,66 @@ async def platform_put_ai_billing(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@api_router.get("/platform/ai-settlement-policy")
+async def platform_get_ai_settlement_policy(
+    platform_admin: User = Depends(require_platform_admin),
+):
+    from billing import ai_settlement
+    policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
+    return {**policy, "rate_is_fresh": ai_settlement.rate_is_fresh(policy)}
+
+
+@api_router.put("/platform/ai-settlement-policy")
+async def platform_put_ai_settlement_policy(
+    payload: AIVariableBillingPolicyUpdate,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    from billing import ai_settlement
+    try:
+        policy = await ai_settlement.save_policy(
+            _raw_collection("pricing_config"),
+            payload.model_dump(exclude_unset=True), platform_admin.user_id,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {**policy, "rate_is_fresh": ai_settlement.rate_is_fresh(policy)}
+
+
+@api_router.post("/platform/ai-settlement-policy/refresh-rate")
+async def platform_refresh_ai_exchange_rate(
+    platform_admin: User = Depends(require_platform_admin),
+):
+    from billing import ai_settlement
+    try:
+        policy = await ai_settlement.refresh_bcra_rate(
+            _raw_collection("pricing_config"), platform_admin.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {**policy, "rate_is_fresh": ai_settlement.rate_is_fresh(policy)}
+
+
+@api_router.post("/platform/ai-settlements/run")
+async def platform_run_ai_settlements(
+    organization_id: Optional[str] = None,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    return await process_due_ai_settlements(force_organization_id=organization_id)
+
+
+@api_router.get("/platform/ai-settlements")
+async def platform_list_ai_settlements(
+    organization_id: Optional[str] = None,
+    limit: int = Query(100, ge=1, le=500),
+    platform_admin: User = Depends(require_platform_admin),
+):
+    query = {"organization_id": organization_id} if organization_id else {}
+    items = await _raw_collection("ai_billing_statements").find(
+        query, {"_id": 0}
+    ).sort("created_at", -1).to_list(limit)
+    return {"items": items, "count": len(items)}
 
 
 @api_router.put("/admin/ai-pricing")
@@ -6880,7 +7315,7 @@ async def _seed(force: bool = False):
         for coll in [
             "contacts", "leads", "conversations", "messages", "tasks", "notes",
             "tags", "appointments", "products", "work_areas", "ai_usage_logs",
-            "bot_events", "notifications",
+            "ai_billing_statements", "bot_events", "notifications",
         ]:
             await db.__getattr__(coll).delete_many({})
         await db.users.delete_many({"is_demo": True})
@@ -7300,6 +7735,17 @@ async def _ensure_indexes() -> None:
             "provider_event_id", unique=True, sparse=True,
             name="ux_billing_provider_event",
         )
+        await _raw_collection("ai_billing_statements").create_index(
+            "settlement_key", unique=True, name="ux_ai_statement_settlement_key",
+        )
+        await _raw_collection("ai_billing_statements").create_index(
+            [("organization_id", 1), ("created_at", -1)],
+            name="ix_ai_statement_org_created",
+        )
+        await _raw_collection("ai_billing_statements").create_index(
+            "provider_payment_id", unique=True, sparse=True,
+            name="ux_ai_statement_provider_payment",
+        )
         await _raw_collection("organizations").create_index(
             "provider_preapproval_id", unique=True, sparse=True,
             name="ux_organizations_provider_preapproval",
@@ -7704,6 +8150,10 @@ def _start_scheduler():
                     logger.exception("scheduled send_due_appointment_reminders failed org=%s", organization_id)
             finally:
                 reset_organization_id(token)
+        try:
+            await process_due_ai_settlements()
+        except Exception:  # pragma: no cover - log only
+            logger.exception("scheduled AI billing settlement scan failed")
 
     sched.add_job(
         _job,

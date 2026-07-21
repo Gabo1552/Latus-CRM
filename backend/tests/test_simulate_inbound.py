@@ -204,7 +204,7 @@ class _FakeDB:
                      "wa_status", "whatsapp_events", "app_secrets", "platform_secrets", "tasks",
                      "appointments", "notes", "bot_events", "bot_settings", "ai_usage_logs",
                      "pricing_config", "products", "work_areas", "billing_requests",
-                     "billing_events"):
+                     "billing_events", "ai_billing_statements"):
             setattr(self, name, _Coll(name))
         for name in ("organizations", "memberships", "whatsapp_routes"):
             setattr(self, name, _Coll(name))

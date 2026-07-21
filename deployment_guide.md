@@ -164,6 +164,17 @@ El backend de Latus CRM incluye verificaciones de seguridad automáticas al inic
 - La pantalla **Suscripción** muestra el cupo mensual de tokens y separa costo del proveedor, fee de Latus y total facturable acumulado del mes.
 - Antes de cada llamada se reserva una estimación conservadora de tokens. Si la empresa alcanzó el cupo mensual de su plan, la llamada se bloquea y el bot deriva de forma segura sin generar costo adicional.
 
+### Liquidación automática del consumo de IA
+
+- La automatización se configura exclusivamente en **Plataforma > Cobro automático del consumo de IA** y comienza apagada. No habilitarla en producción hasta revisar una liquidación con la suscripción de prueba.
+- La cotización USD/ARS puede cargarse manualmente o actualizarse desde la API oficial de Estadísticas Cambiarias del BCRA. Las cotizaciones BCRA se refrescan automáticamente cada 12 horas; las manuales nunca se reemplazan solas.
+- Si la cotización supera la vigencia máxima configurada, el sistema no modifica la suscripción. Esto evita convertir costos con un tipo de cambio desactualizado.
+- Dentro de la ventana previa a la renovación, el sistema cierra el consumo todavía no liquidado, congela costo base, fee, cotización, colchón cambiario e importe final, y actualiza el próximo monto mediante `PUT /preapproval/{id}`.
+- Cuando Mercado Pago confirma ese cobro, el importe recurrente vuelve de inmediato al precio base del plan. Así el variable anterior no puede repetirse si el siguiente cierre no llegara a ejecutarse.
+- Cada ciclo usa una clave única por empresa y fecha de cobro. Un reinicio o una ejecución manual repetida no genera una segunda liquidación ni vuelve a modificar Mercado Pago.
+- Los webhooks de pago aprobado o rechazado concilian la liquidación por empresa e importe. El detalle aparece tanto en **Plataforma** como en **Suscripción**.
+- Con la liquidación variable activa, una cancelación se programa al cierre del período: se cobra únicamente el consumo de IA pendiente —sin sumar un nuevo mes del plan— y luego el webhook cancela la renovación. Si no hay saldo de IA, se cancela sin generar un cobro.
+
 ---
 
 ## ✅ Lista de Comprobación de Aislamiento (Checklist)
