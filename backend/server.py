@@ -1789,7 +1789,6 @@ async def create_billing_checkout(
         "external_reference": _mercadopago_external_reference(
             user.organization_id, payload.plan_code
         ),
-        "payer_email": billing_email,
         "auto_recurring": {
             "frequency": 1,
             "frequency_type": "months",
@@ -1799,6 +1798,8 @@ async def create_billing_checkout(
         "back_url": f"{APP_BASE_URL}/suscripcion?checkout=retorno",
         "status": "pending",
     }
+    if not settings.get("access_token", "").startswith("TEST-"):
+        provider_payload["payer_email"] = billing_email
     try:
         preapproval = await _mercadopago_request(
             "POST", "/preapproval", payload=provider_payload
