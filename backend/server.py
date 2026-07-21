@@ -1786,7 +1786,14 @@ async def create_billing_checkout(
 
     payer_email_to_send = billing_email
     if settings.get("access_token", "").startswith("TEST-") and "@testuser.com" not in billing_email and "test_user" not in billing_email:
-        payer_email_to_send = "test_user_buyer@testuser.com"
+        try:
+            logger.info("Creating Mercado Pago test buyer user for test mode...")
+            test_user = await _mercadopago_request("POST", "/users/test_user", payload={"site_id": "MLA"})
+            if test_user.get("email"):
+                payer_email_to_send = test_user["email"]
+                logger.info("Using generated test buyer email: %s", payer_email_to_send)
+        except Exception as exc:
+            logger.warning("Could not auto-create test user via MP API: %s", exc)
 
     provider_payload = {
         "reason": f"Latus CRM - Plan {plan['name']}",
@@ -1809,13 +1816,12 @@ async def create_billing_checkout(
         )
     except MercadoPagoAPIError as exc:
         exc_str = str(exc).lower()
-        if "must be real or test users" in exc_str or "payer_email" in exc_str:
+        if ("must be real or test users" in exc_str or "payer_email" in exc_str) and payer_email_to_send == billing_email:
             try:
-                logger.info("Attempting to auto-create a Mercado Pago test buyer user for test mode...")
+                logger.info("Retrying preapproval creation with fresh test buyer email...")
                 test_user = await _mercadopago_request("POST", "/users/test_user", payload={"site_id": "MLA"})
                 test_email = test_user.get("email")
                 if test_email:
-                    logger.info("Successfully created test buyer user: %s", test_email)
                     provider_payload["payer_email"] = test_email
                     preapproval = await _mercadopago_request("POST", "/preapproval", payload=provider_payload)
                 else:
