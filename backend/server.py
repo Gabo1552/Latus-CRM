@@ -1808,7 +1808,23 @@ async def create_billing_checkout(
             "POST", "/preapproval", payload=provider_payload
         )
     except MercadoPagoAPIError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        exc_str = str(exc).lower()
+        if "must be real or test users" in exc_str or "payer_email" in exc_str:
+            try:
+                logger.info("Attempting to auto-create a Mercado Pago test buyer user for test mode...")
+                test_user = await _mercadopago_request("POST", "/users/test_user", payload={"site_id": "MLA"})
+                test_email = test_user.get("email")
+                if test_email:
+                    logger.info("Successfully created test buyer user: %s", test_email)
+                    provider_payload["payer_email"] = test_email
+                    preapproval = await _mercadopago_request("POST", "/preapproval", payload=provider_payload)
+                else:
+                    raise exc
+            except Exception as test_exc:
+                logger.warning("Could not auto-create test user for MP preapproval: %s", test_exc)
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+        else:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
     if not preapproval.get("id") or not preapproval.get("init_point"):
         raise HTTPException(status_code=502, detail="Mercado Pago no devolvió el enlace de pago")
     update = {
