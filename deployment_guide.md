@@ -1,97 +1,116 @@
-# Guía de Despliegue en Producción · Latus CRM
+# Guía de Despliegue y Separación de Entornos (Staging vs Producción) · Latus CRM
 
-Esta guía contiene los pasos necesarios para desplegar Latus CRM en producción utilizando **MongoDB Atlas** (Base de datos), **Railway** (Backend FastAPI) y **Vercel** (Frontend React).
-
----
-
-## 1. Base de Datos: MongoDB Atlas
-
-Recomendamos utilizar **MongoDB Atlas** (el servicio en la nube oficial de MongoDB) para alojar la base de datos de producción.
-
-1. **Crear una cuenta**: Registrate en [MongoDB Atlas](https://www.mongodb.com/cloud/atlas).
-2. **Crear un Cluster Gratuito**: Crea un cluster M0 (gratuito) en la región de tu preferencia (ej. AWS us-east-1).
-3. **Configurar el Acceso a la Red (Network Access)**:
-   - Ve a **Network Access** > **Add IP Address**.
-   - Agrega `0.0.0.0/0` (permitir acceso desde cualquier lugar), ya que los servidores de Railway/Vercel usan IPs dinámicas.
-4. **Crear un Usuario de Base de Datos (Database Access)**:
-   - Ve a **Database Access** > **Add New Database User**.
-   - Elige el método *Password*, define un usuario y una contraseña segura. Asígnale el rol `Read and write to any database`.
-5. **Obtener la URL de Conexión**:
-   - Ve a **Database** > **Connect** > **Drivers**.
-   - Copia la cadena de conexión (Connection String), que se verá similar a:
-     `mongodb+srv://<usuario>:<password>@cluster0.xxxx.mongodb.net/?retryWrites=true&w=majority`
-   - Reemplaza `<password>` con la contraseña del usuario que creaste. Esta será tu variable de entorno `MONGO_URL`.
+Esta guía detalla la arquitectura, configuración y el paso a paso exacto para mantener **totalmente aislados** los entornos de **Staging** (pruebas) y **Producción** (operativo real) de Latus CRM.
 
 ---
 
-## 2. Backend: Railway
+## 🏗️ Arquitectura de Entornos Separados
 
-Recomendamos **Railway** para el backend porque maneja procesos de larga duración, websockets y tareas en segundo plano de forma nativa a través de Docker.
-
-1. **Crear una cuenta**: Registrate en [Railway.app](https://railway.app) usando tu cuenta de GitHub.
-2. **Crear un Nuevo Proyecto**:
-   - Haz clic en **New Project** > **Deploy from GitHub repo**.
-   - Selecciona tu repositorio de `Latus-CRM`.
-3. **Configurar el Root Directory del Backend**:
-   - Ve a la configuración de la tarjeta del servicio en Railway.
-   - En **Settings** > **Root Directory**, escribe `/backend`.
-   - Railway detectará automáticamente el archivo `Dockerfile` que creamos en `/backend/Dockerfile` y compilará la imagen.
-4. **Configurar las Variables de Entorno (Variables)**:
-   Agrega las siguientes variables en la pestaña **Variables**:
-
-   | Variable | Valor sugerido / Descripción |
-   | :--- | :--- |
-   | `PORT` | `8000` |
-   | `MONGO_URL` | La cadena de conexión de MongoDB Atlas (obtenida en el Paso 1). |
-   | `DB_NAME` | `latus_crm` (nombre de la base de datos en MongoDB). |
-   | `CORS_ORIGINS` | Tu URL de producción de Vercel (ej. `https://latus-crm.vercel.app`). *¡Crítico para las cookies!* |
-   | `LATUS_SEED_DEMO` | `true` (Ponelo en `true` solo en el primer despliegue para precargar leads y pipeline demo. Luego cambialo a `false` o eliminalo). |
-   | `LATUS_LLM_KEY` | Clave del sistema universal o clave API de tu proveedor (OpenAI, Anthropic). |
-   | `PLATFORM_ADMIN_EMAILS` | Emails, separados por coma, que podrán administrar planes y licencias de todas las empresas. |
-   | `APP_BASE_URL` | URL pública del frontend en Vercel, sin barra final. Se usa para volver al CRM luego de pagar. |
-   | `PUBLIC_BASE_URL` | URL pública del backend en Railway, sin barra final. |
-   | `MERCADOPAGO_ACCESS_TOKEN` | Credencial privada de producción de la aplicación de Mercado Pago. Nunca debe cargarse en Vercel. |
-   | `MERCADOPAGO_WEBHOOK_SECRET` | Firma secreta generada al configurar Webhooks en Mercado Pago. |
-   | `BILLING_GRACE_DAYS` | Días de acceso de gracia tras un cobro rechazado. Valor recomendado: `7`. |
-
-5. **Generar el Dominio Público**:
-   - Ve a **Settings** > **Domains** > **Generate Domain** (o asocia tu propio dominio).
-   - Copia la URL generada (ej. `https://latus-crm-production.up.railway.app`). Esta URL será tu `REACT_APP_BACKEND_URL` en el frontend.
-
-### Configurar Mercado Pago para suscripciones
-
-1. En **Mercado Pago Developers > Tus integraciones**, crea o abre la aplicación de Latus CRM.
-2. Copia el **Access Token de producción** a `MERCADOPAGO_ACCESS_TOKEN` en Railway.
-3. En **Webhooks**, configura como URL de producción:
-   `https://TU-BACKEND.up.railway.app/api/webhooks/mercadopago`
-4. Activa los eventos **Pagos**, **Suscripciones vinculadas** (`subscription_preapproval`) y **Pagos autorizados de suscripciones** (`subscription_authorized_payment`).
-5. Guarda la configuración y copia la firma secreta generada a `MERCADOPAGO_WEBHOOK_SECRET` en Railway.
-6. Reinicia el servicio y verifica en **Suscripción** que se muestre “Mercado Pago conectado”.
-
-El CRM nunca recibe ni almacena los datos de tarjeta. El comprador completa la adhesión en Mercado Pago y el backend consulta el recurso oficial antes de habilitar o suspender la licencia.
+| Componente | Entorno de Staging | Entorno de Producción |
+| :--- | :--- | :--- |
+| **Frontend** | Vercel (`latus-crm-staging.vercel.app`) | Vercel (`latus-crm-production.vercel.app` / Dominio propio) |
+| **Backend** | Railway (`latus-crm-staging.up.railway.app`) | Railway (`latus-crm-production.up.railway.app`) |
+| **Base de Datos** | MongoDB Atlas (`DB_NAME=latus-crm-staging`) | MongoDB Atlas (`DB_NAME=latus-crm-production`) |
+| **Mercado Pago** | Integración de Pruebas (`TEST-...` / Vendedor Test) | Integración Productiva (`APP_USR-...`) |
+| **Variable `ENVIRONMENT`** | `ENVIRONMENT=staging` | `ENVIRONMENT=production` |
 
 ---
 
-## 3. Frontend: Vercel
+## 📊 Matriz de Variables de Entorno
 
-Desplegaremos el frontend React SPA en **Vercel**, el cual leerá automáticamente la configuración de `vercel.json` para dar soporte a la navegación por rutas.
+### 1. Variables para Railway (Backend)
 
-1. **Crear una cuenta**: Registrate en [Vercel](https://vercel.com) e inicia sesión con GitHub.
-2. **Importar el Proyecto**:
-   - Haz clic en **Add New** > **Project**.
-   - Elige el repositorio `Latus-CRM`.
-3. **Configurar el Proyecto**:
-   - **Root Directory**: Haz clic en *Edit* y selecciona la carpeta `frontend`.
-   - **Framework Preset**: Selecciona `Create React App`.
-   - **Build Command**: Asegúrate de que sea `npm run build`.
-   - **Output Directory**: Asegúrate de que sea `build`.
-4. **Configurar las Variables de Entorno**:
-   Agrega la siguiente variable de entorno:
+| Variable | Valor en Staging | Valor en Producción | Descripción |
+| :--- | :--- | :--- | :--- |
+| `ENVIRONMENT` | `staging` | `production` | **Crítico:** Controla las reglas de seguridad y validación de arranque. |
+| `PORT` | `8000` | `8000` | Puerto en el que escucha FastAPI. |
+| `MONGO_URL` | String de MongoDB Atlas | String de MongoDB Atlas | Conexión a la instancia de MongoDB Atlas. |
+| `DB_NAME` | `latus-crm-staging` | `latus-crm-production` | **Crítico:** Nombre de la base de datos independiente. |
+| `APP_BASE_URL` | `https://latus-crm-staging.vercel.app` | `https://latus-crm.vercel.app` | URL pública del frontend. |
+| `CORS_ORIGINS` | `https://latus-crm-staging.vercel.app` | `https://latus-crm.vercel.app,https://somoslatus.com` | Orígenes HTTP/HTTPS autorizados para CORS y cookies. |
+| `MERCADOPAGO_ACCESS_TOKEN` | Credencial `TEST-...` o token de vendedor de prueba | Credencial `APP_USR-...` real | Token privado de API de Mercado Pago. |
+| `MERCADOPAGO_WEBHOOK_SECRET` | Secret del webhook de prueba | Secret del webhook productivo | Firma secreta para validar eventos de MP. |
+| `LATUS_LLM_KEY` | Clave API de prueba o compartida | Clave API de producción | Clave del proveedor de LLM / IA. |
+| `RESEND_API_KEY` | Clave Resend | Clave Resend | Clave de envío de e-mails transaccionales. |
+| `RESEND_FROM_EMAIL` | `notificaciones@somoslatus.com` | `notificaciones@somoslatus.com` | Remitente de e-mails. |
+| `RESEND_FROM_NAME` | `Latus CRM (Staging)` | `Latus CRM` | Nombre visible del remitente. |
 
-   | Variable | Valor |
-   | :--- | :--- |
-   | `REACT_APP_BACKEND_URL` | La URL pública de tu backend en Railway (ej. `https://latus-crm-production.up.railway.app`). **Sin `/api` ni barras `/` al final.** |
+### 2. Variables para Vercel (Frontend)
 
-5. **Desplegar**:
-   - Haz clic en **Deploy**. Vercel compilará la aplicación y te dará una URL pública de producción (ej. `https://latus-crm.vercel.app`).
-   - **Paso Final**: Copia esta URL de Vercel y agrégala a la variable `CORS_ORIGINS` en la configuración de tu backend de Railway para habilitar las peticiones y cookies seguras.
+| Variable | Valor en Staging | Valor en Producción |
+| :--- | :--- | :--- |
+| `REACT_APP_BACKEND_URL` | `https://latus-crm-staging.up.railway.app` | `https://latus-crm-production.up.railway.app` |
+
+---
+
+## 🗄️ Paso a Paso: Crear la Base de Datos de Producción en MongoDB Atlas
+
+1. Inicia sesión en [MongoDB Atlas](https://cloud.mongodb.com/).
+2. Ve a **Database** > Selecciona tu Cluster existente.
+3. No es necesario crear un cluster nuevo si utilizas Atlas M0/M10/M20. Las bases de datos se crean automáticamente especificando el nombre en `DB_NAME`.
+4. Para la variable `DB_NAME` en el proyecto backend de **Producción en Railway**, establece exactamente:
+   ```env
+   DB_NAME=latus-crm-production
+   ```
+5. Para el entorno de **Staging en Railway**, establece:
+   ```env
+   DB_NAME=latus-crm-staging
+   ```
+6. El backend creará automáticamente las colecciones e índices necesarios de forma aislada sin interferir entre sí.
+
+---
+
+## 💳 Paso a Paso: Configurar Aplicaciones e Integraciones en Mercado Pago
+
+Debes mantener dos aplicaciones o configuraciones separadas en el panel de desarrolladores de Mercado Pago:
+
+### A. Aplicación de Staging (Pruebas)
+1. Ve a **Mercado Pago Developers > Tus integraciones**.
+2. Abre la aplicación de pruebas o crea una llamada `Latus CRM - Staging`.
+3. Ve a **Credenciales de prueba** y copia el `Access Token` (`TEST-...`) o utiliza las credenciales de tu **Cuenta Vendedora de Prueba**.
+4. Configura en las variables de Railway Staging: `MERCADOPAGO_ACCESS_TOKEN`.
+5. Ve a **Webhooks** en la aplicación de pruebas y agrega la URL:
+   ```text
+   https://latus-crm-staging.up.railway.app/api/webhooks/mercadopago
+   ```
+6. Eventos a suscribir: `Pagos`, `Suscripciones vinculadas` (`subscription_preapproval`) y `Pagos autorizados de suscripciones`.
+
+### B. Aplicación de Producción (Cobros Reales)
+1. En **Tus integraciones**, crea o abre la aplicación oficial productiva (ej. `Latus CRM`).
+2. Ve a **Credenciales de producción** (requiere activar credenciales completando rubro y sitio web).
+3. Copia el `Access Token` de producción (`APP_USR-...`).
+4. Configura en las variables de Railway Producción: `MERCADOPAGO_ACCESS_TOKEN`.
+5. Ve a **Webhooks** (Modo Producción) y agrega la URL:
+   ```text
+   https://latus-crm-production.up.railway.app/api/webhooks/mercadopago
+   ```
+6. Copia el secret generado a `MERCADOPAGO_WEBHOOK_SECRET` en Railway Producción.
+
+---
+
+## 🛡️ Guardrails de Seguridad Implementados en el Código
+
+El backend de Latus CRM incluye verificaciones de seguridad automáticas al iniciar (`startup guardrails` en `server.py`):
+
+1. **Protección de Base de Datos en Producción:**
+   Si `ENVIRONMENT=production` y `DB_NAME` contiene `staging` o `test`, el servidor **rehúsa iniciar** y lanza una excepción indicando que se debe corregir la variable.
+2. **Protección de Credenciales de Pago en Producción:**
+   Si `ENVIRONMENT=production` y `MERCADOPAGO_ACCESS_TOKEN` comienza con `TEST-`, el servidor **rehúsa iniciar** para evitar transacciones simuladas en producción.
+3. **Protección de Staging:**
+   Si `ENVIRONMENT=staging` y `DB_NAME` contiene `production`, el servidor rehúsa iniciar para impedir que pruebas afecten datos reales.
+
+---
+
+## ✅ Lista de Comprobación de Aislamiento (Checklist)
+
+- [ ] `ENVIRONMENT=staging` configurado en Railway Staging.
+- [ ] `ENVIRONMENT=production` configurado en Railway Producción.
+- [ ] `DB_NAME` de Staging es `latus-crm-staging`.
+- [ ] `DB_NAME` de Producción es `latus-crm-production`.
+- [ ] `MERCADOPAGO_ACCESS_TOKEN` en Producción arranca con `APP_USR-...`.
+- [ ] Webhook de Staging apunta a `https://latus-crm-staging.up.railway.app/api/webhooks/mercadopago`.
+- [ ] Webhook de Producción apunta a `https://latus-crm-production.up.railway.app/api/webhooks/mercadopago`.
+- [ ] `CORS_ORIGINS` en Backend Staging únicamente permite `https://latus-crm-staging.vercel.app`.
+- [ ] `CORS_ORIGINS` en Backend Producción únicamente permite el frontend de Producción.
+- [ ] `REACT_APP_BACKEND_URL` en Vercel Staging apunta al backend de Staging.
+- [ ] `REACT_APP_BACKEND_URL` en Vercel Producción apunta al backend de Producción.

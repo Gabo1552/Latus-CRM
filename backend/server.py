@@ -61,6 +61,39 @@ load_dotenv(ROOT_DIR / '.env')
 # Instead we expose lazy proxies that resolve the env on first ``await`` and
 # fail with a clear, loggable error — but never block ``import server``.
 
+def validate_environment_guardrails():
+    """
+    Validates environment configuration to prevent cross-contamination between Staging & Production.
+    - ENVIRONMENT: 'development', 'staging', or 'production'
+    - Production Guardrails:
+        1. ENVIRONMENT=production requires MERCADOPAGO_ACCESS_TOKEN NOT starting with 'TEST-'
+        2. ENVIRONMENT=production requires DB_NAME NOT containing 'staging' or 'test'
+    - Staging Guardrails:
+        1. ENVIRONMENT=staging warns/prevents production DB names from being used
+    """
+    env = (os.environ.get("ENVIRONMENT") or os.environ.get("NODE_ENV") or "development").strip().lower()
+    db_name = (os.environ.get("DB_NAME") or "").strip().lower()
+    mp_token = (os.environ.get("MERCADOPAGO_ACCESS_TOKEN") or "").strip()
+
+    if env == "production":
+        if "staging" in db_name or "test" in db_name:
+            raise RuntimeError(
+                f"[GUARDRAIL DE SEGURIDAD] Producción no puede iniciarse usando la base de datos de pruebas '{db_name}'. "
+                "Definí DB_NAME=latus-crm-production en las variables de Railway de Producción."
+            )
+        if mp_token.startswith("TEST-"):
+            raise RuntimeError(
+                "[GUARDRAIL DE SEGURIDAD] Producción no puede iniciarse usando credenciales de prueba de Mercado Pago ('TEST-...'). "
+                "Definí tu MERCADOPAGO_ACCESS_TOKEN de producción ('APP_USR-...') en las variables de Railway de Producción."
+            )
+    elif env == "staging":
+        if db_name and "production" in db_name:
+            raise RuntimeError(
+                f"[GUARDRAIL DE SEGURIDAD] Staging no puede iniciarse usando la base de datos de producción '{db_name}'. "
+                "Definí DB_NAME=latus-crm-staging en las variables de Railway de Staging."
+            )
+
+
 class _DBProxy:
     """Lazy proxy for the active Motor database. Initializes on first access."""
 
@@ -81,6 +114,7 @@ class _DBProxy:
                 raise RuntimeError(
                     "MONGO_URL/DB_NAME no configurados. Definí ambos en el entorno del deploy."
                 )
+            validate_environment_guardrails()
             cls._client = AsyncIOMotorClient(mongo_url)
             cls._db = cls._client[db_name]
             return cls._db
@@ -7252,7 +7286,6 @@ async def block_viewer_on_writes(request: Request, call_next):
 
 
 origins = [
-    "https://latus-crm.vercel.app",
     "http://localhost:3000",
     "http://localhost:5173",
     "http://127.0.0.1:3000",
