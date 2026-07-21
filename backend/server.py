@@ -1680,9 +1680,31 @@ async def create_billing_checkout(
     if current_provider_id and current_provider_status == "authorized":
         if current_provider_plan == payload.plan_code:
             return {"checkout_url": None, "status": "authorized", "plan_updated": False}
-        return await change_active_plan(str(current_provider_id))
+        try:
+            return await change_active_plan(str(current_provider_id))
+        except HTTPException as exc:
+            if "not valid for callerId" in str(exc.detail) or "not_found" in str(exc.detail).lower():
+                logger.warning("Clearing invalid Mercado Pago preapproval ID %s for org %s: %s", current_provider_id, user.organization_id, exc.detail)
+                await _raw_collection("organizations").update_one(
+                    {"organization_id": user.organization_id},
+                    {"$set": {"provider_preapproval_id": None, "provider_subscription_id": None, "provider_status": None}}
+                )
+                current_provider_id = None
+            else:
+                raise
     if current_provider_id and current_provider_status == "paused":
-        return await change_active_plan(str(current_provider_id), reactivate=True)
+        try:
+            return await change_active_plan(str(current_provider_id), reactivate=True)
+        except HTTPException as exc:
+            if "not valid for callerId" in str(exc.detail) or "not_found" in str(exc.detail).lower():
+                logger.warning("Clearing invalid Mercado Pago preapproval ID %s for org %s: %s", current_provider_id, user.organization_id, exc.detail)
+                await _raw_collection("organizations").update_one(
+                    {"organization_id": user.organization_id},
+                    {"$set": {"provider_preapproval_id": None, "provider_subscription_id": None, "provider_status": None}}
+                )
+                current_provider_id = None
+            else:
+                raise
     if current_provider_id and current_provider_status == "pending":
         try:
             existing = await _mercadopago_request("GET", f"/preapproval/{current_provider_id}")
@@ -1753,7 +1775,14 @@ async def create_billing_checkout(
                 "PUT", f"/preapproval/{current_provider_id}", payload={"status": "canceled"}
             )
         except MercadoPagoAPIError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+            if "not valid for callerId" in str(exc) or "not_found" in str(exc).lower() or getattr(exc, "status_code", None) in {400, 404}:
+                logger.warning("Clearing invalid Mercado Pago preapproval ID %s for org %s: %s", current_provider_id, user.organization_id, exc)
+                await _raw_collection("organizations").update_one(
+                    {"organization_id": user.organization_id},
+                    {"$set": {"provider_preapproval_id": None, "provider_subscription_id": None, "provider_status": None}}
+                )
+            else:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     provider_payload = {
         "reason": f"Latus CRM - Plan {plan['name']}",

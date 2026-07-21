@@ -263,17 +263,17 @@ export default function Inbox() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-latus-muted" />
               <Input data-testid="inbox-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar chats…" className="pl-9 rounded-sm bg-white h-9" />
             </div>
-            <div className="space-y-1.5">
-              <div className="flex gap-2">
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-1.5">
                 <Select value={filters.status} onValueChange={(v) => setFilters({ ...filters, status: v })}>
-                  <SelectTrigger data-testid="inbox-filter-status" className="rounded-sm bg-white h-8 text-xs"><SelectValue placeholder="Estado" /></SelectTrigger>
+                  <SelectTrigger data-testid="inbox-filter-status" className="rounded-md bg-white h-8 text-xs border-[#E2E8F0]"><SelectValue placeholder="Estado" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todos los estados</SelectItem>
                     {CONV_STATUSES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
                 <Select value={filters.priority} onValueChange={(v) => setFilters({ ...filters, priority: v })}>
-                  <SelectTrigger data-testid="inbox-filter-priority" className="rounded-sm bg-white h-8 text-xs"><SelectValue placeholder="Prioridad" /></SelectTrigger>
+                  <SelectTrigger data-testid="inbox-filter-priority" className="rounded-md bg-white h-8 text-xs border-[#E2E8F0]"><SelectValue placeholder="Prioridad" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todas las prioridades</SelectItem>
                     {PRIORITIES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
@@ -281,7 +281,7 @@ export default function Inbox() {
                 </Select>
               </div>
               <Select value={filters.assigned_work_area} onValueChange={(v) => setFilters({ ...filters, assigned_work_area: v })}>
-                <SelectTrigger data-testid="inbox-filter-work-area" className="rounded-sm bg-white h-8 text-xs w-full"><SelectValue placeholder="Filtrar por Área" /></SelectTrigger>
+                <SelectTrigger data-testid="inbox-filter-work-area" className="rounded-md bg-white h-8 text-xs w-full border-[#E2E8F0]"><SelectValue placeholder="Filtrar por Área" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todas las áreas</SelectItem>
                   <SelectItem value="unassigned">Sin área asignada</SelectItem>
@@ -298,25 +298,43 @@ export default function Inbox() {
                 key={c.id}
                 onClick={() => setActiveId(c.id)}
                 data-testid={`conv-item-${c.id}`}
-                className={`w-full flex items-start gap-3 p-3 text-left border-b border-[#E9E6DC] transition-colors ${activeId === c.id ? "bg-white border-l-2 border-l-[#0E8DDB]" : "hover:bg-white"}`}
+                className={`w-full flex items-center gap-3 p-3.5 text-left border-b border-[#E9E6DC] transition-colors relative ${
+                  activeId === c.id ? "bg-white border-l-4 border-l-[#0E8DDB] shadow-2xs" : "hover:bg-white/60"
+                }`}
               >
-                <Avatar src={c.contact?.avatar} name={c.contact?.name} size={40} />
+                <div className="relative shrink-0">
+                  <Avatar src={c.contact?.avatar} name={c.contact?.name} size={42} />
+                  {c.unread > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-[#0E8DDB] text-white text-[10px] font-bold rounded-full h-4 min-w-4 px-1 flex items-center justify-center border-2 border-white shadow-2xs">
+                      {c.unread}
+                    </span>
+                  )}
+                </div>
+
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-semibold text-sm text-[#0B1B26] truncate">{c.contact?.name}</p>
-                    {c.unread > 0 && <span className="bg-[#0E8DDB] text-white text-[10px] font-bold rounded-full h-4 min-w-4 px-1 flex items-center justify-center">{c.unread}</span>}
+                  <div className="flex items-center justify-between gap-1 mb-0.5">
+                    <p className="font-bold text-sm text-[#0B1B26] truncate">{c.contact?.name || "Sin nombre"}</p>
+                    <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: statusMeta(PRIORITIES, c.priority).color }} title={`Prioridad: ${c.priority}`} />
                   </div>
-                  <p className="text-xs text-[#888888] truncate mt-0.5">{c.last_message}</p>
-                  <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                    {!c.bot_enabled
-                      ? <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#0E8DDB] bg-[#F4F2EC] border border-[#EFE3E1] rounded-full px-1.5 py-px"><UserIcon className="h-2.5 w-2.5" />HUMANO</span>
-                      : <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#888888] bg-latus-warm-gray rounded-full px-1.5 py-px"><Bot className="h-2.5 w-2.5" />BOT</span>}
-                    {c.assigned_work_area && (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#71717A] bg-[#E9E6DC] rounded-full px-1.5 py-px uppercase">
-                        {c.assigned_work_area}
+
+                  <p className="text-xs text-[#71717A] truncate font-normal leading-normal">{c.last_message || "Sin mensajes"}</p>
+
+                  <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                    {!c.bot_enabled ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#0E8DDB] bg-[#E0F2FE] border border-[#BAE6FD] rounded-md px-1.5 py-0.5">
+                        <UserIcon className="h-2.5 w-2.5" /> HUMANO
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#52525B] bg-[#F4F4F5] border border-[#E4E4E7] rounded-md px-1.5 py-0.5">
+                        <Bot className="h-2.5 w-2.5 text-[#0E8DDB]" /> BOT
                       </span>
                     )}
-                    <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: statusMeta(PRIORITIES, c.priority).color }} />
+
+                    {c.assigned_work_area && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#475569] bg-[#F1F5F9] border border-[#E2E8F0] rounded-md px-1.5 py-0.5 uppercase">
+                        {c.assigned_work_area.replace("_", " ")}
+                      </span>
+                    )}
                   </div>
                 </div>
               </button>
@@ -336,20 +354,20 @@ export default function Inbox() {
               {/* header */}
               <div className="h-16 border-b border-[#E9E6DC] flex items-center justify-between px-5 shrink-0">
                 <div className="flex items-center gap-3">
-                  <Avatar src={active.contact?.avatar} name={active.contact?.name} size={38} />
+                  <Avatar src={active.contact?.avatar} name={active.contact?.name} size={40} />
                   <div>
                     <div className="flex items-center gap-2">
-                      <p className="font-bold text-[#0B1B26] leading-tight">{active.contact?.name}</p>
+                      <p className="font-bold text-base text-[#0B1B26] leading-tight">{active.contact?.name || "Sin nombre"}</p>
                       {active.channel === "whatsapp" && (
-                        <span data-testid="channel-badge-whatsapp" className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wide uppercase text-[#0E8DDB] bg-[#F4F2EC] border border-[#EFE3E1] rounded-sm px-1.5 py-px">
+                        <span data-testid="channel-badge-whatsapp" className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wider uppercase text-[#0E8DDB] bg-[#E0F2FE] border border-[#BAE6FD] rounded-md px-2 py-0.5">
                           WhatsApp
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-[#888888]">{active.contact?.phone}</p>
+                    {active.contact?.phone && <p className="text-xs text-[#71717A] mt-0.5 font-medium">{active.contact.phone}</p>}
                   </div>
                 </div>
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2.5">
                   <div className="flex items-center gap-2" data-testid="handoff-control">
                     <Button
                       data-testid="bot-status-header-button"
@@ -361,22 +379,22 @@ export default function Inbox() {
                           reactivateBot.mutate();
                         }
                       }}
-                      className={`rounded-sm h-8 px-3 text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 ${
+                      className={`h-9 px-3.5 text-xs font-bold rounded-md transition-all shadow-2xs flex items-center gap-1.5 ${
                         active.bot_enabled
-                          ? "bg-[#22C55E] hover:bg-[#16A34A] text-white"
-                          : "bg-[#71717A] hover:bg-[#52525B] text-white"
+                          ? "bg-[#16A34A] hover:bg-[#15803D] text-white"
+                          : "bg-[#475569] hover:bg-[#334155] text-white"
                       }`}
                     >
-                      <Bot className="h-3.5 w-3.5" />
+                      <Bot className="h-4 w-4" />
                       {active.bot_enabled ? "Bot Activo" : "Control Humano"}
                     </Button>
                   </div>
                   <Select value={active.status} onValueChange={(v) => patchConv.mutate({ status: v })}>
-                    <SelectTrigger data-testid="conv-status-select" className="w-32 rounded-sm h-9 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectTrigger data-testid="conv-status-select" className="w-32 rounded-md h-9 text-xs font-medium border-[#E2E8F0]"><SelectValue /></SelectTrigger>
                     <SelectContent>{CONV_STATUSES.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}</SelectContent>
                   </Select>
                   <Select value={active.assigned_work_area || "none"} onValueChange={(v) => patchConv.mutate({ assigned_work_area: v === "none" ? null : v })}>
-                    <SelectTrigger data-testid="conv-work-area-select" className="w-36 rounded-sm h-9 text-xs"><SelectValue placeholder="Área" /></SelectTrigger>
+                    <SelectTrigger data-testid="conv-work-area-select" className="w-36 rounded-md h-9 text-xs font-medium border-[#E2E8F0]"><SelectValue placeholder="Área" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">Sin área</SelectItem>
                       {workAreas.map((wa) => (
@@ -417,11 +435,13 @@ export default function Inbox() {
                       )}
 
                       {isSystem ? (
-                        <div className="flex justify-center my-2.5" data-testid={`system-message-${m.id}`}>
-                          <div className="inline-flex max-w-[90%] flex-wrap items-center justify-center gap-x-2 gap-y-0.5 rounded-full border border-[#DCD9CE] bg-[#E9E6DC] px-3.5 py-1.5 text-center text-[11px] font-bold uppercase tracking-wider text-[#71717A] shadow-sm">
+                        <div className="flex items-center gap-3 my-3" data-testid={`system-message-${m.id}`}>
+                          <span className="h-px flex-1 bg-[#E2E8F0]" />
+                          <div className="inline-flex items-center gap-2 rounded-full border border-[#CBD5E1] bg-[#F1F5F9] px-3.5 py-1 text-center text-[11px] font-semibold text-[#475569] shadow-2xs">
                             <span>{m.body}</span>
-                            {time && <span className="font-semibold normal-case tracking-normal text-[#8D8981]" title={fullDate}>{time}</span>}
+                            {time && <span className="text-[10px] text-[#64748B] font-normal" title={fullDate}>· {time}</span>}
                           </div>
+                          <span className="h-px flex-1 bg-[#E2E8F0]" />
                         </div>
                       ) : (
                         <div className={`flex ${isCustomer ? "justify-start" : "justify-end"}`}>
@@ -476,15 +496,18 @@ export default function Inbox() {
                   </p>
                 )}
                 {freeTextBlocked ? (
-                  <div data-testid="whatsapp-template-only-composer" className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                    <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-                      <div>
-                        <p className="flex items-center gap-1.5 text-xs font-bold text-amber-900"><AlertOctagon className="h-4 w-4" /> Solo se puede enviar una plantilla</p>
-                        <p className="mt-1 text-[11px] leading-relaxed text-amber-800">
-                          La ventana de respuesta libre venció{whatsappWindowExpiry ? ` el ${whatsappWindowExpiry}` : ""}. Se bloqueó el mensaje manual para evitar el Error #131047.
-                        </p>
+                  <div data-testid="whatsapp-template-only-composer" className="rounded-xl border border-amber-300/80 bg-amber-50/90 p-3.5 shadow-2xs">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex items-start gap-2.5">
+                        <AlertOctagon className="h-5 w-5 text-amber-700 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-xs font-bold text-amber-950">Solo se puede enviar una plantilla</p>
+                          <p className="mt-0.5 text-[11px] leading-relaxed text-amber-800">
+                            La ventana de respuesta libre venció{whatsappWindowExpiry ? ` el ${whatsappWindowExpiry}` : ""}. Se bloqueó el mensaje manual para evitar el Error #131047.
+                          </p>
+                        </div>
                       </div>
-                      <Button type="button" onClick={() => setTemplateOpen(true)} disabled={readOnly || !waStatus?.configured || recontactTemplates.length === 0} className="shrink-0 bg-amber-700 text-white hover:bg-amber-800">
+                      <Button type="button" onClick={() => setTemplateOpen(true)} disabled={readOnly || !waStatus?.configured || recontactTemplates.length === 0} className="shrink-0 bg-amber-800 text-white hover:bg-amber-900 h-9 px-3.5 text-xs font-semibold rounded-md shadow-2xs flex items-center gap-1.5">
                         <FileText className="h-4 w-4" /> Seleccionar plantilla
                       </Button>
                     </div>
@@ -533,13 +556,13 @@ export default function Inbox() {
                 <p className="flex items-center gap-2"><Building2 className="h-3.5 w-3.5 text-[#0E8DDB]" /> {active.contact?.company}</p>
               </div>
 
-              <div className="flex items-center gap-2 text-xs pt-1 border-t border-[#E9E6DC]/40">
-                <span className="text-[#888888] font-semibold shrink-0">Origen del lead:</span>
+              <div className="flex items-center justify-between gap-2 text-xs pt-3 mt-3 border-t border-[#E2E8F0]">
+                <span className="text-[#64748B] font-semibold shrink-0">Origen del lead:</span>
                 <Select
                   value={active.contact?.lead_source || "Orgánico"}
                   onValueChange={(val) => updateContactSource.mutate(val)}
                 >
-                  <SelectTrigger className="w-36 h-7 rounded-sm text-xs bg-white border border-[#E9E6DC]">
+                  <SelectTrigger className="w-36 h-8 rounded-md text-xs bg-white border border-[#CBD5E1]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -746,7 +769,7 @@ function BotPanel({
 
       {/* Bot status */}
       <div>
-        <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-[#888888] mb-1.5">Estado del bot</p>
+        <p className="text-[10px] font-bold tracking-wider uppercase text-[#64748B] mb-2">Estado del bot</p>
         <div className="flex items-center justify-between gap-2">
           <BotStatusPill status={botStatus} />
           <Button
@@ -760,16 +783,16 @@ function BotPanel({
                 reactivateBot.mutate();
               }
             }}
-            className={`rounded-sm h-7 text-xs font-bold ${
+            className={`rounded-md h-8 px-3 text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 ${
               conv?.bot_enabled
-                ? "bg-[#22C55E] hover:bg-[#16A34A] text-white"
-                : "bg-[#71717A] hover:bg-[#52525B] text-white"
+                ? "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300"
+                : "bg-[#16A34A] hover:bg-[#15803D] text-white"
             }`}
           >
             {reactivateBot.isPending || deactivateBot.isPending ? (
-              <RefreshCw className="h-3 w-3 animate-spin mr-1" />
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Bot className="h-3 w-3 mr-1" />
+              <Bot className="h-3.5 w-3.5" />
             )}
             {conv?.bot_enabled ? "Desactivar bot" : "Reactivar bot"}
           </Button>

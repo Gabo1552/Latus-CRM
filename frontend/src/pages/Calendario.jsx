@@ -418,72 +418,197 @@ export default function Calendario() {
             ) : (
               dayAppointments.map((appointment) => {
                 const status = STATUS_META[appointment.status] || STATUS_META.scheduled;
-                const duration = Math.max(0, Math.round((parseISO(appointment.end_time) - parseISO(appointment.start_time)) / 60000));
+                const startTime = parseISO(appointment.start_time);
+                const endTime = parseISO(appointment.end_time);
+                const startTimeStr = format(startTime, "HH:mm");
+                const endTimeStr = format(endTime, "HH:mm");
+                const duration = Math.max(0, Math.round((endTime - startTime) / 60000));
                 const contact = appointment.lead?.contact || appointment.contact;
-                return (
-                  <article key={appointment.id} data-testid={`calendar-event-${appointment.id}`} className="rounded-lg border border-latus-warm-border bg-latus-surface p-4 shadow-[0_8px_22px_rgba(13,31,42,0.035)]">
-                    <div className="flex flex-col justify-between gap-4 xl:flex-row xl:items-center">
-                      <div className="min-w-0 space-y-3">
-                        <div className="flex flex-wrap items-center gap-2.5">
-                          <span className="rounded-md bg-latus-ice px-2.5 py-1 text-sm font-bold text-[#123c58]">
-                            {format(parseISO(appointment.start_time), "HH:mm")}
-                          </span>
-                          <h3 className="truncate text-base font-bold text-latus-ink">{appointment.title}</h3>
-                          <span className="rounded-full border border-latus-blue/20 bg-latus-ice/55 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#123c58]">
-                            {appointment.event_type === "event" ? "Evento" : "Cita"}
-                          </span>
-                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${status.className}`}>{status.label}</span>
-                          <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${appointment.created_by_bot ? "border-violet-200 bg-violet-50 text-violet-700" : "border-latus-warm-border bg-white text-latus-muted"}`}>
-                            {appointment.created_by_bot && <Bot className="h-3 w-3" />}
-                            {appointment.created_by_bot ? "Creada por IA" : "Manual"}
-                          </span>
-                        </div>
 
-                        {(appointment.description || appointment.location) && (
-                          <div className="space-y-1 text-sm text-latus-muted">
-                            {appointment.description && <p>{appointment.description}</p>}
-                            {appointment.location && <p className="flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5" />{appointment.location}</p>}
+                return (
+                  <article
+                    key={appointment.id}
+                    data-testid={`calendar-event-${appointment.id}`}
+                    className={`group relative rounded-xl border bg-white p-5 shadow-sm transition-all hover:shadow-md ${
+                      appointment.status === "completed"
+                        ? "border-l-4 border-l-emerald-500 border-latus-warm-border"
+                        : appointment.status === "cancelled"
+                        ? "border-l-4 border-l-red-400 border-latus-warm-border bg-gray-50/50"
+                        : "border-l-4 border-l-latus-blue border-latus-warm-border"
+                    }`}
+                  >
+                    {/* Header Row: Time + Badges on Left, Action buttons on Right */}
+                    <div className="flex flex-col gap-3 pb-3 border-b border-latus-warm-border/60 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 rounded-md bg-latus-ice px-2.5 py-1 text-xs font-bold text-[#123c58]">
+                          <Clock className="h-3.5 w-3.5 text-latus-blue" />
+                          {startTimeStr} - {endTimeStr}
+                          <span className="text-[11px] font-medium text-latus-muted">({duration} min)</span>
+                        </span>
+
+                        <span className="rounded-full border border-latus-blue/20 bg-latus-ice/55 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#123c58]">
+                          {appointment.event_type === "event" ? "Evento" : "Cita"}
+                        </span>
+
+                        <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${status.className}`}>
+                          {status.label}
+                        </span>
+
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                            appointment.created_by_bot
+                              ? "border-purple-200 bg-purple-50 text-purple-700"
+                              : "border-latus-warm-border bg-gray-50 text-latus-muted"
+                          }`}
+                        >
+                          {appointment.created_by_bot && <Bot className="h-3 w-3" />}
+                          {appointment.created_by_bot ? "Creada por IA" : "Manual"}
+                        </span>
+                      </div>
+
+                      {canUseAgenda && (
+                        <div className="flex flex-wrap items-center gap-1.5 self-end sm:self-auto">
+                          {appointment.status === "scheduled" && (
+                            <>
+                              {appointment.event_type === "appointment" && contact && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => sendReminder.mutate(appointment.id)}
+                                  disabled={sendReminder.isPending}
+                                  className="h-8 border-blue-200 text-xs font-medium text-latus-blue hover:bg-blue-50"
+                                >
+                                  <BellRing className="mr-1 h-3.5 w-3.5" /> Recordar
+                                </Button>
+                              )}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => updateStatus.mutate({ id: appointment.id, status: "completed" })}
+                                disabled={updateStatus.isPending}
+                                className="h-8 border-emerald-200 text-xs font-medium text-emerald-700 hover:bg-emerald-50"
+                              >
+                                <CheckCircle className="mr-1 h-3.5 w-3.5" /> Completar
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => updateStatus.mutate({ id: appointment.id, status: "cancelled" })}
+                                disabled={updateStatus.isPending}
+                                className="h-8 border-red-200 text-xs font-medium text-red-700 hover:bg-red-50"
+                              >
+                                <XCircle className="mr-1 h-3.5 w-3.5" /> Cancelar
+                              </Button>
+                            </>
+                          )}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            data-testid={`edit-calendar-event-${appointment.id}`}
+                            onClick={() => openEditDialog(appointment)}
+                            className="h-8 border-latus-warm-border text-xs text-latus-ink hover:bg-latus-surface"
+                          >
+                            <Pencil className="mr-1 h-3.5 w-3.5" /> Editar
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => confirmDelete(appointment)}
+                            disabled={deleteAppointment.isPending}
+                            className="h-8 w-8 text-latus-muted hover:bg-red-50 hover:text-red-700"
+                            aria-label={`Eliminar ${appointment.title}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Main Content Body */}
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <h3 className="text-base font-bold text-latus-ink leading-snug">
+                          {appointment.title}
+                        </h3>
+                        {appointment.description && (
+                          <p className="mt-1 text-xs text-latus-muted leading-relaxed">
+                            {appointment.description}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Info Grid */}
+                      <div className="grid grid-cols-1 gap-2 pt-1 text-xs text-latus-ink sm:grid-cols-2 lg:grid-cols-3">
+                        {contact && (
+                          <div className="flex items-center gap-2.5 rounded-lg border border-latus-warm-border/60 bg-latus-cream/40 p-2.5">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white shadow-xs">
+                              <User className="h-4 w-4 text-latus-blue" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[10px] font-semibold uppercase tracking-wider text-latus-muted">Cliente</p>
+                              <p className="font-semibold text-latus-ink truncate">{contact.name || "Cliente"}</p>
+                              {contact.phone && <p className="text-[11px] text-latus-muted truncate">{contact.phone}</p>}
+                            </div>
                           </div>
                         )}
 
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-latus-muted">
-                          {contact?.name && <span className="flex items-center gap-1.5"><User className="h-3.5 w-3.5" />{contact.name}</span>}
-                          {contact?.phone && <span className="flex items-center gap-1.5"><Phone className="h-3.5 w-3.5" />{contact.phone}</span>}
-                          <span className="flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" />{duration} min</span>
-                          {appointment.service_name && <span className="flex items-center gap-1.5 font-semibold text-latus-ink"><BriefcaseBusiness className="h-3.5 w-3.5 text-latus-blue" />{appointment.service_name}</span>}
-                          {appointment.assigned_user?.name && <span className="flex items-center gap-1.5 font-semibold text-latus-ink"><Users className="h-3.5 w-3.5 text-latus-blue" />{appointment.assigned_user.name}</span>}
-                          {appointment.reminder_enabled && (
-                            <span className="flex items-center gap-1.5"><BellRing className="h-3.5 w-3.5 text-latus-blue" />
-                              {appointment.reminder_status === "sent" ? "Recordatorio enviado" : `Recordatorio ${appointment.reminder_minutes_before} min antes`}
-                            </span>
-                          )}
-                          {appointment.confirmation_status === "confirmed" && <span className="font-bold text-emerald-700">Asistencia confirmada</span>}
-                        </div>
-                      </div>
-
-                      {canUseAgenda && <div className="flex shrink-0 flex-wrap items-center gap-2">
-                        {appointment.status === "scheduled" && (
-                          <>
-                            {appointment.event_type === "appointment" && contact && (
-                              <Button type="button" variant="outline" size="sm" onClick={() => sendReminder.mutate(appointment.id)} disabled={sendReminder.isPending} className="border-blue-200 text-latus-blue hover:bg-blue-50">
-                                <BellRing className="h-3.5 w-3.5" /> Recordar ahora
-                              </Button>
-                            )}
-                            <Button type="button" variant="outline" size="sm" onClick={() => updateStatus.mutate({ id: appointment.id, status: "completed" })} disabled={updateStatus.isPending} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50">
-                              <CheckCircle className="h-3.5 w-3.5" /> Completar
-                            </Button>
-                            <Button type="button" variant="outline" size="sm" onClick={() => updateStatus.mutate({ id: appointment.id, status: "cancelled" })} disabled={updateStatus.isPending} className="border-red-200 text-red-700 hover:bg-red-50">
-                              <XCircle className="h-3.5 w-3.5" /> Cancelar
-                            </Button>
-                          </>
+                        {appointment.service_name && (
+                          <div className="flex items-center gap-2.5 rounded-lg border border-latus-warm-border/60 bg-latus-cream/40 p-2.5">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white shadow-xs">
+                              <BriefcaseBusiness className="h-4 w-4 text-latus-blue" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[10px] font-semibold uppercase tracking-wider text-latus-muted">Servicio</p>
+                              <p className="font-semibold text-latus-ink truncate">{appointment.service_name}</p>
+                            </div>
+                          </div>
                         )}
-                        <Button type="button" variant="outline" size="sm" data-testid={`edit-calendar-event-${appointment.id}`} onClick={() => openEditDialog(appointment)} className="border-latus-warm-border text-latus-ink">
-                          <Pencil className="h-3.5 w-3.5" /> Editar
-                        </Button>
-                        <Button type="button" variant="ghost" size="icon" onClick={() => confirmDelete(appointment)} disabled={deleteAppointment.isPending} className="text-latus-muted hover:bg-red-50 hover:text-red-700" aria-label={`Eliminar ${appointment.title}`}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>}
+
+                        {appointment.location && (
+                          <div className="flex items-center gap-2.5 rounded-lg border border-latus-warm-border/60 bg-latus-cream/40 p-2.5">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white shadow-xs">
+                              <MapPin className="h-4 w-4 text-latus-blue" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[10px] font-semibold uppercase tracking-wider text-latus-muted">Ubicación</p>
+                              <p className="font-semibold text-latus-ink truncate">{appointment.location}</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {appointment.assigned_user?.name && (
+                          <div className="flex items-center gap-2.5 rounded-lg border border-latus-warm-border/60 bg-latus-cream/40 p-2.5">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white shadow-xs">
+                              <Users className="h-4 w-4 text-latus-blue" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[10px] font-semibold uppercase tracking-wider text-latus-muted">Asignado a</p>
+                              <p className="font-semibold text-latus-ink truncate">{appointment.assigned_user.name}</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {appointment.reminder_enabled && (
+                          <div className="flex items-center gap-2.5 rounded-lg border border-latus-warm-border/60 bg-latus-cream/40 p-2.5">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white shadow-xs">
+                              <BellRing className="h-4 w-4 text-latus-blue" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[10px] font-semibold uppercase tracking-wider text-latus-muted">Recordatorio</p>
+                              <p className="font-semibold text-latus-ink truncate">
+                                {appointment.reminder_status === "sent"
+                                  ? "Enviado por WhatsApp"
+                                  : `${appointment.reminder_minutes_before} min antes`}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </article>
                 );
