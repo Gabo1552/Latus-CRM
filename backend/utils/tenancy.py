@@ -42,6 +42,18 @@ TENANT_SCOPED_COLLECTIONS = frozenset({
 # is namespaced internally while callers can keep using the legacy identifier.
 COMPOSITE_ID_COLLECTIONS = frozenset({"app_secrets", "bot_settings"})
 
+# Index administration does not read or mutate tenant-owned documents and is
+# intentionally available during bootstrap. Every data operation must be
+# implemented explicitly below so a future route cannot silently bypass the
+# organization filter through ``__getattr__``.
+SAFE_COLLECTION_METADATA_METHODS = frozenset({
+    "create_index",
+    "create_indexes",
+    "index_information",
+    "list_indexes",
+    "options",
+})
+
 
 def get_organization_id() -> str | None:
     return _organization_id.get()
@@ -143,6 +155,30 @@ class TenantCollection:
             self._filter(filter_), self._document(replacement), *args, **kwargs
         )
 
+    async def find_one_and_update(
+        self, filter_: dict[str, Any], update: dict[str, Any], *args: Any, **kwargs: Any
+    ):
+        return await self._collection.find_one_and_update(
+            self._filter(filter_),
+            self._update(update, upsert=bool(kwargs.get("upsert"))),
+            *args,
+            **kwargs,
+        )
+
+    async def find_one_and_replace(
+        self, filter_: dict[str, Any], replacement: dict[str, Any], *args: Any, **kwargs: Any
+    ):
+        return await self._collection.find_one_and_replace(
+            self._filter(filter_), self._document(replacement), *args, **kwargs
+        )
+
+    async def find_one_and_delete(
+        self, filter_: dict[str, Any], *args: Any, **kwargs: Any
+    ):
+        return await self._collection.find_one_and_delete(
+            self._filter(filter_), *args, **kwargs
+        )
+
     async def delete_one(self, filter_: dict[str, Any], *args: Any, **kwargs: Any):
         return await self._collection.delete_one(self._filter(filter_), *args, **kwargs)
 
@@ -160,7 +196,11 @@ class TenantCollection:
         return self._collection.aggregate(scoped_pipeline, *args, **kwargs)
 
     def __getattr__(self, name: str):
-        return getattr(self._collection, name)
+        if name in SAFE_COLLECTION_METADATA_METHODS:
+            return getattr(self._collection, name)
+        raise AttributeError(
+            f"La operación '{name}' no está habilitada sin aislamiento para '{self._name}'"
+        )
 
 
 def tenant_collection(collection: Any, name: str) -> Any:
