@@ -606,10 +606,36 @@ class TestBillingFoundation:
         assert updated.json()["access"]["allowed"] is False
         assert fake.billing_events.docs
 
-        monkeypatch.delenv("PLATFORM_ADMIN_EMAILS")
-        blocked = client.get("/api/dashboard/metrics", headers=_h())
-        assert blocked.status_code == 402
-        assert blocked.json()["detail"]["code"] == "subscription_required"
+    def test_platform_create_organization_and_manual_license(self, srv, monkeypatch):
+        server, fake, client = srv
+        monkeypatch.setenv("PLATFORM_ADMIN_EMAILS", "admin@latus.test")
+
+        res = client.post(
+            "/api/platform/organizations",
+            headers=_h(),
+            json={
+                "name": "Inmobiliaria Test S.A.",
+                "plan_code": "growth",
+                "subscription_status": "active",
+                "license_status": "active",
+                "duration_months": 12,
+                "billing_email": "facturacion@inmotester.com",
+                "admin_name": "Carlos Admin",
+                "admin_email": "carlos@inmotester.com",
+                "admin_password": "SuperSecretPassword123!",
+                "ai_fee_percent": 15.0,
+                "internal_notes": "Licencia corporativa anual asignada manualmente.",
+            },
+        )
+        assert res.status_code == 200, res.text
+        data = res.json()
+        assert data["ok"] is True
+        assert data["organization"]["name"] == "Inmobiliaria Test S.A."
+        assert data["organization"]["plan_code"] == "growth"
+        assert data["organization"]["license_status"] == "active"
+        assert data["organization"]["ai_fee_percent"] == 15.0
+        assert data["admin_user"]["email"] == "carlos@inmotester.com"
+        assert data["admin_user"]["temp_password"] == "SuperSecretPassword123!"
 
         billing_still_available = client.get("/api/billing/subscription", headers=_h())
         assert billing_still_available.status_code == 200

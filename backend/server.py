@@ -661,6 +661,21 @@ class PlatformSubscriptionUpdate(BaseModel):
     ai_fee_percent: Optional[float] = None
 
 
+class PlatformOrganizationCreate(BaseModel):
+    name: str
+    billing_email: Optional[str] = None
+    plan_code: str = "starter"
+    subscription_status: str = "active"
+    license_status: str = "active"
+    trial_days: Optional[int] = 0
+    duration_months: Optional[int] = 12
+    admin_name: Optional[str] = None
+    admin_email: Optional[str] = None
+    admin_password: Optional[str] = None
+    internal_notes: Optional[str] = None
+    ai_fee_percent: Optional[float] = None
+
+
 class RoleUpdate(BaseModel):
     role: str
     active: Optional[bool] = None
@@ -2690,6 +2705,106 @@ async def platform_list_organizations(platform_admin: User = Depends(require_pla
             },
         })
     return rows
+
+
+@api_router.post("/platform/organizations")
+async def platform_create_organization(
+    payload: PlatformOrganizationCreate,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="El nombre de la empresa es obligatorio")
+    if payload.plan_code not in PLAN_CATALOG:
+        raise HTTPException(status_code=400, detail="Plan inválido")
+    if payload.subscription_status not in SUBSCRIPTION_STATUSES:
+        raise HTTPException(status_code=400, detail="Estado de suscripción inválido")
+    if payload.license_status not in LICENSE_STATUSES:
+        raise HTTPException(status_code=400, detail="Estado de licencia inválido")
+
+    now = datetime.now(timezone.utc)
+    trial_ends_at = None
+    if payload.trial_days and payload.trial_days > 0:
+        trial_ends_at = (now + timedelta(days=payload.trial_days)).isoformat()
+
+    current_period_end = None
+    if payload.duration_months and payload.duration_months > 0:
+        current_period_end = (now + timedelta(days=payload.duration_months * 30)).isoformat()
+
+    ai_fee = None
+    if payload.ai_fee_percent is not None:
+        from ai import usage as ai_usage
+        try:
+            ai_fee = ai_usage.validate_fee_percent(payload.ai_fee_percent)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    org_doc = Organization(
+        name=name,
+        plan_code=payload.plan_code,
+        subscription_status=payload.subscription_status,
+        license_status=payload.license_status,
+        trial_ends_at=trial_ends_at,
+        current_period_end=current_period_end,
+        billing_email=(payload.billing_email or "").strip().lower() or None,
+        internal_notes=(payload.internal_notes or "").strip() or None,
+        ai_fee_percent=ai_fee,
+        billing_manual_override=True,
+    ).model_dump()
+
+    await _raw_collection("organizations").insert_one(org_doc)
+
+    admin_user_info = None
+    if payload.admin_email and payload.admin_email.strip():
+        admin_email = payload.admin_email.strip().lower()
+        existing_user = await _raw_collection("users").find_one({"email": admin_email}, {"_id": 0})
+
+        if existing_user:
+            user_id = existing_user["user_id"]
+            existing_mem = await _raw_collection("memberships").find_one(
+                {"user_id": user_id, "organization_id": org_doc["organization_id"]}
+            )
+            if not existing_mem:
+                await _raw_collection("memberships").insert_one({
+                    "organization_id": org_doc["organization_id"],
+                    "user_id": user_id,
+                    "role": "admin",
+                    "status": "active",
+                    "work_areas": [],
+                    "display_name": payload.admin_name or existing_user.get("name") or "Admin",
+                    "created_at": now.isoformat(),
+                })
+            admin_user_info = {"user_id": user_id, "email": admin_email, "created": False}
+        else:
+            raw_pwd = payload.admin_password or "Latus12345!"
+            user_id = new_id("user")
+            hashed_pwd = hash_password(raw_pwd)
+            user_doc = {
+                "user_id": user_id,
+                "email": admin_email,
+                "name": (payload.admin_name or "").strip() or name,
+                "hashed_password": hashed_pwd,
+                "role": "admin",
+                "default_organization_id": org_doc["organization_id"],
+                "created_at": now.isoformat(),
+            }
+            await _raw_collection("users").insert_one(user_doc)
+            await _raw_collection("memberships").insert_one({
+                "organization_id": org_doc["organization_id"],
+                "user_id": user_id,
+                "role": "admin",
+                "status": "active",
+                "work_areas": [],
+                "display_name": user_doc["name"],
+                "created_at": now.isoformat(),
+            })
+            admin_user_info = {"user_id": user_id, "email": admin_email, "temp_password": raw_pwd, "created": True}
+
+    return {
+        "ok": True,
+        "organization": org_doc,
+        "admin_user": admin_user_info,
+    }
 
 
 @api_router.patch("/platform/organizations/{organization_id}/subscription")

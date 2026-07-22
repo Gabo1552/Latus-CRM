@@ -187,13 +187,135 @@ function ManageModal({ organization, onClose, onSave, saving }) {
   );
 }
 
+function CreateCompanyModal({ onClose, onCreate, creating }) {
+  const [draft, setDraft] = useState({
+    name: "",
+    plan_code: "starter",
+    subscription_status: "active",
+    license_status: "active",
+    duration_months: 12,
+    trial_days: 0,
+    billing_email: "",
+    admin_name: "",
+    admin_email: "",
+    admin_password: "Latus12345!",
+    ai_fee_percent: "",
+    internal_notes: "",
+  });
+
+  const set = (field, value) => setDraft((c) => ({ ...c, [field]: value }));
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!draft.name.trim()) {
+      toast.error("El nombre de la empresa es obligatorio");
+      return;
+    }
+    onCreate({
+      ...draft,
+      name: draft.name.trim(),
+      billing_email: draft.billing_email.trim() || undefined,
+      admin_name: draft.admin_name.trim() || undefined,
+      admin_email: draft.admin_email.trim() || undefined,
+      admin_password: draft.admin_password || undefined,
+      duration_months: Number(draft.duration_months),
+      trial_days: Number(draft.trial_days),
+      ai_fee_percent: draft.ai_fee_percent === "" ? undefined : Number(draft.ai_fee_percent),
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] grid place-items-center bg-latus-ink/55 p-4" role="dialog" aria-modal="true">
+      <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-[24px] border border-white/10 bg-latus-cream shadow-2xl">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-latus-warm-border bg-white px-6 py-5">
+          <div>
+            <p className="text-xs font-extrabold uppercase tracking-[0.14em] text-latus-blue">Alta Manual de Empresa</p>
+            <h2 className="mt-1 text-xl font-extrabold text-latus-ink">Crear Nueva Empresa y Licencia</h2>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-lg p-2 text-latus-muted hover:bg-latus-cream"><X className="h-5 w-5" /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="grid gap-4 p-6 sm:grid-cols-2">
+          <label className="text-xs font-bold text-latus-ink sm:col-span-2">Nombre de la Empresa *
+            <Input className={inputClass} value={draft.name} onChange={(e) => set("name", e.target.value)} placeholder="Ej: Inmobiliaria Ramos S.A." required />
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Plan Comercial
+            <select className={inputClass} value={draft.plan_code} onChange={(e) => set("plan_code", e.target.value)}>
+              {Object.entries(PLAN_NAMES).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Duración Licencia Manual
+            <select className={inputClass} value={draft.duration_months} onChange={(e) => set("duration_months", e.target.value)}>
+              <option value="1">1 Mes</option>
+              <option value="3">3 Meses</option>
+              <option value="6">6 Meses</option>
+              <option value="12">12 Meses (1 año)</option>
+              <option value="24">24 Meses (2 años)</option>
+            </select>
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Estado de Suscripción
+            <select className={inputClass} value={draft.subscription_status} onChange={(e) => set("subscription_status", e.target.value)}>
+              {Object.entries(SUBSCRIPTION_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Estado de Licencia
+            <select className={inputClass} value={draft.license_status} onChange={(e) => set("license_status", e.target.value)}>
+              {Object.entries(LICENSE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Email Facturación (Opcional)
+            <Input className={inputClass} type="email" value={draft.billing_email} onChange={(e) => set("billing_email", e.target.value)} placeholder="facturacion@empresa.com" />
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Días de Prueba Gratis
+            <Input className={inputClass} type="number" min="0" value={draft.trial_days} onChange={(e) => set("trial_days", e.target.value)} />
+          </label>
+          <div className="sm:col-span-2 my-1 border-t border-latus-warm-border pt-3">
+            <p className="text-xs font-extrabold uppercase tracking-wider text-latus-blue">Usuario Administrador Inicial de la Empresa (Opcional)</p>
+          </div>
+          <label className="text-xs font-bold text-latus-ink">Nombre Completo Admin
+            <Input className={inputClass} value={draft.admin_name} onChange={(e) => set("admin_name", e.target.value)} placeholder="Ej: Juan Pérez" />
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Email del Administrador
+            <Input className={inputClass} type="email" value={draft.admin_email} onChange={(e) => set("admin_email", e.target.value)} placeholder="juan@empresa.com" />
+          </label>
+          <label className="text-xs font-bold text-latus-ink sm:col-span-2">Contraseña Temporal Inicial
+            <Input className={inputClass} value={draft.admin_password} onChange={(e) => set("admin_password", e.target.value)} placeholder="Latus12345!" />
+          </label>
+          <label className="text-xs font-bold text-latus-ink sm:col-span-2">Fee % IA Específico (Opcional)
+            <Input className={inputClass} type="number" min="0" max="500" step="0.1" value={draft.ai_fee_percent} onChange={(e) => set("ai_fee_percent", e.target.value)} placeholder="Usar fee global de la plataforma" />
+          </label>
+          <label className="text-xs font-bold text-latus-ink sm:col-span-2">Notas Internas Superadmin
+            <textarea className={`${inputClass} min-h-[70px] py-2`} value={draft.internal_notes} onChange={(e) => set("internal_notes", e.target.value)} placeholder="Detalles comerciales, pago por transferencia, contrato..." />
+          </label>
+          <div className="flex justify-end gap-3 border-t border-latus-warm-border bg-white px-6 py-4 sm:col-span-2 -mx-6 -mb-6 mt-2 rounded-b-[24px]">
+            <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
+            <Button type="submit" disabled={creating} className="bg-latus-blue text-white hover:bg-latus-blue/90">{creating ? "Creando empresa..." : "Crear Empresa y Licencia"}</Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function Plataforma() {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
   const organizationsQ = useQuery({
     queryKey: ["platform-organizations"],
     queryFn: () => api.get("/platform/organizations").then((response) => response.data),
+  });
+  const createOrganization = useMutation({
+    mutationFn: (body) => api.post("/platform/organizations", body).then((r) => r.data),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["platform-organizations"] });
+      setShowCreateModal(false);
+      const adminInfo = data?.admin_user?.temp_password
+        ? ` (Admin: ${data.admin_user.email} / Pwd: ${data.admin_user.temp_password})`
+        : "";
+      toast.success(`Empresa '${data?.organization?.name}' creada con éxito${adminInfo}`);
+    },
+    onError: (error) => toast.error(error.response?.data?.detail || "No se pudo crear la empresa"),
   });
   const updateSubscription = useMutation({
     mutationFn: ({ organizationId, body }) => api.patch(`/platform/organizations/${organizationId}/subscription`, body),
@@ -240,7 +362,10 @@ export default function Plataforma() {
         <section className="overflow-hidden rounded-[24px] border border-latus-warm-border bg-white shadow-sm">
           <div className="flex flex-col gap-4 border-b border-latus-warm-border p-5 md:flex-row md:items-center md:justify-between">
             <div><h2 className="text-xl font-extrabold text-latus-ink">Empresas y licencias</h2><p className="mt-1 text-sm text-latus-muted">Control global reservado al desarrollador de la plataforma.</p></div>
-            <label className="relative block w-full md:max-w-sm"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-latus-muted" /><Input value={search} onChange={(event) => setSearch(event.target.value)} className="h-10 rounded-xl border-latus-warm-border pl-9" placeholder="Buscar empresa o identificador" /></label>
+            <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
+              <label className="relative block w-full md:w-80"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-latus-muted" /><Input value={search} onChange={(event) => setSearch(event.target.value)} className="h-10 rounded-xl border-latus-warm-border pl-9 text-xs" placeholder="Buscar empresa o identificador" /></label>
+              <Button onClick={() => setShowCreateModal(true)} data-testid="btn-create-company" className="h-10 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 text-xs font-bold w-full sm:w-auto shrink-0"><Building2 className="h-4 w-4 mr-1.5" />+ Nueva Empresa</Button>
+            </div>
           </div>
           {organizationsQ.isLoading ? (
             <div className="grid min-h-[260px] place-items-center"><div className="h-9 w-9 animate-spin rounded-full border-2 border-latus-blue border-t-transparent" /></div>
@@ -269,6 +394,7 @@ export default function Plataforma() {
           )}
         </section>
       </div>
+      {showCreateModal && <CreateCompanyModal onClose={() => setShowCreateModal(false)} creating={createOrganization.isPending} onCreate={(body) => createOrganization.mutate(body)} />}
       {selected && <ManageModal organization={selected} onClose={() => setSelected(null)} saving={updateSubscription.isPending} onSave={(body) => updateSubscription.mutate({ organizationId: selected.organization_id, body })} />}
     </AppLayout>
   );
