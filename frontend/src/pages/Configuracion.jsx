@@ -2895,20 +2895,25 @@ export default function Configuracion() {
 
   // Build visible tabs based on permissions
   const tabs = [];
-  if (hasPerm("users_admin")) tabs.push({ key: "users", label: "Usuarios", description: "Equipo, accesos y estado de usuarios", icon: UsersIcon, testid: "tab-users" });
-  if (hasPerm("whatsapp_admin")) tabs.push({ key: "whatsapp", label: "WhatsApp", description: "Conexión, credenciales y webhook", icon: MessageSquareText, testid: "tab-whatsapp" });
-  if (hasPerm("calendar_admin")) tabs.push({ key: "agenda", label: "Agenda", description: "Horarios, personas, servicios y cupos", icon: CalendarClock, testid: "tab-agenda" });
-  if (hasPerm("ai_admin")) tabs.push({ key: "bot", label: "Bot IA", description: "Comportamiento y respuestas del asistente", icon: Bot, testid: "tab-bot-ia" });
-  if (user.is_platform_admin) tabs.push({ key: "ai", label: "IA global", description: "Proveedor, modelos y credenciales de la plataforma", icon: Sparkles, testid: "tab-ai-auto" });
-  if (hasPerm("users_admin")) tabs.push({ key: "roles", label: "Roles y accesos", description: "Permisos disponibles para cada rol", icon: Shield, testid: "tab-roles" });
-  if (hasPerm("users_admin")) tabs.push({ key: "work-areas", label: "Áreas de trabajo", description: "Organización y distribución del equipo", icon: Building2, testid: "tab-work-areas" });
-  if (hasPerm("settings_admin")) tabs.push({ key: "crm", label: "Tareas y catálogo", description: "Estados, categorías y opciones del CRM", icon: Package, testid: "tab-crm-config" });
-  if (hasPerm("settings_admin")) tabs.push({ key: "email", label: "Email", description: "Servidor de correo y notificaciones", icon: MessageSquareText, testid: "tab-email-config" });
+  if (hasPerm("users_admin")) tabs.push({ key: "users", label: "Usuarios", description: "Equipo, accesos y estado de usuarios", icon: UsersIcon, testid: "tab-users", scope: "tenant" });
+  if (hasPerm("whatsapp_admin")) tabs.push({ key: "whatsapp", label: "WhatsApp", description: "Conexión, credenciales y webhook de la empresa", icon: MessageSquareText, testid: "tab-whatsapp", scope: "tenant" });
+  if (hasPerm("calendar_admin")) tabs.push({ key: "agenda", label: "Agenda", description: "Horarios, personas, servicios y cupos de citas", icon: CalendarClock, testid: "tab-agenda", scope: "tenant" });
+  if (hasPerm("ai_admin")) tabs.push({ key: "bot", label: "Bot IA (Empresa)", description: "Comportamiento y respuestas del asistente de tu empresa", icon: Bot, testid: "tab-bot-ia", scope: "tenant" });
+  if (hasPerm("users_admin")) tabs.push({ key: "roles", label: "Roles y accesos", description: "Permisos disponibles para cada rol en tu empresa", icon: Shield, testid: "tab-roles", scope: "tenant" });
+  if (hasPerm("users_admin")) tabs.push({ key: "work-areas", label: "Áreas de trabajo", description: "Organización y distribución del equipo", icon: Building2, testid: "tab-work-areas", scope: "tenant" });
+  if (hasPerm("settings_admin")) tabs.push({ key: "crm", label: "Tareas y catálogo", description: "Estados, categorías y opciones del CRM", icon: Package, testid: "tab-crm-config", scope: "tenant" });
+  if (hasPerm("settings_admin")) tabs.push({ key: "email", label: "Email", description: "Servidor de correo y notificaciones de la empresa", icon: MessageSquareText, testid: "tab-email-config", scope: "tenant" });
+  if (user.is_platform_admin) {
+    tabs.push({ key: "ai", label: "IA Global (Plataforma)", description: "Proveedor universal, modelos y credenciales reservadas del Superadmin", icon: Sparkles, testid: "tab-ai-auto", scope: "global" });
+  }
 
   // If current tab is not visible, switch to first available
   const activeTab = tabs.find((t) => t.key === tab) ? tab : (tabs[0]?.key || "users");
   const activeSection = tabs.find((item) => item.key === activeTab);
   const ActiveSectionIcon = activeSection?.icon;
+
+  const tenantItems = tabs.filter((t) => t.scope === "tenant");
+  const globalItems = tabs.filter((t) => t.scope === "global");
 
   return (
     <AppLayout title="Configuración">
@@ -2922,9 +2927,25 @@ export default function Configuracion() {
                   <SelectValue placeholder="Elegir una sección" />
                 </SelectTrigger>
                 <SelectContent>
-                  {tabs.map((item) => (
+                  {tenantItems.length > 0 && (
+                    <div className="px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-latus-muted">
+                      Configuración de la Empresa
+                    </div>
+                  )}
+                  {tenantItems.map((item) => (
                     <SelectItem key={item.key} value={item.key} data-testid={item.testid}>{item.label}</SelectItem>
                   ))}
+                  {globalItems.length > 0 && (
+                    <>
+                      <div className="my-1 border-t border-latus-warm-border" />
+                      <div className="px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[#0E8DDB]">
+                        ⚙️ Exclusivo Superadmin Latus
+                      </div>
+                      {globalItems.map((item) => (
+                        <SelectItem key={item.key} value={item.key} data-testid={item.testid}>{item.label}</SelectItem>
+                      ))}
+                    </>
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -2933,8 +2954,19 @@ export default function Configuracion() {
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white shadow-sm">
                   <ActiveSectionIcon className="h-4 w-4 text-latus-blue" />
                 </div>
-                <div>
-                  <p className="text-sm font-bold text-latus-ink">{activeSection.label}</p>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-bold text-latus-ink">{activeSection.label}</p>
+                    {activeSection.scope === "global" ? (
+                      <span className="inline-flex items-center rounded bg-[#0E8DDB]/10 px-2 py-0.5 text-[10px] font-bold text-[#0E8DDB]">
+                        Superadmin Latus
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                        Tu Empresa
+                      </span>
+                    )}
+                  </div>
                   <p className="mt-0.5 text-xs text-latus-muted">{activeSection.description}</p>
                 </div>
               </div>
