@@ -6076,6 +6076,231 @@ async def platform_list_ai_settlements(
     return {"items": items, "count": len(items)}
 
 
+class OrganizationAIBillingUpdate(BaseModel):
+    state: Optional[Literal["disabled", "simulation", "pilot", "active"]] = None
+    ai_fee_percent: Optional[float] = None
+    fx_buffer_percent: Optional[float] = None
+    billing_start_date: Optional[str] = None
+    max_monthly_ai_cost_usd: Optional[float] = None
+    limit_action: Optional[Literal["block", "warn", "request_expansion"]] = None
+
+
+class AISimulationRequest(BaseModel):
+    organization_id: str
+    period_start: Optional[str] = None
+    period_end: Optional[str] = None
+
+
+class AIKeyCredentialPayload(BaseModel):
+    provider: str
+    api_key: str
+    label: Optional[str] = None
+    assigned_organization_ids: Optional[list[str]] = None
+    is_active: bool = True
+
+
+@api_router.patch("/platform/organizations/{organization_id}/ai-variable-billing")
+async def platform_update_org_ai_variable_billing(
+    organization_id: str,
+    payload: OrganizationAIBillingUpdate,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    """Point 1: Update tenant individual AI Variable Billing settings."""
+    org = await _raw_collection("organizations").find_one({"organization_id": organization_id}, {"_id": 0})
+    if not org:
+        raise HTTPException(404, "Empresa no encontrada")
+    current_billing = org.get("ai_variable_billing") or {}
+    updated_billing = {**current_billing, **payload.model_dump(exclude_unset=True), "updated_at": now_iso()}
+    await _raw_collection("organizations").update_one(
+        {"organization_id": organization_id},
+        {"$set": {"ai_variable_billing": updated_billing, "updated_at": now_iso()}}
+    )
+    return {"organization_id": organization_id, "ai_variable_billing": updated_billing}
+
+
+@api_router.post("/platform/ai-billing/simulate")
+async def platform_simulate_ai_billing(
+    payload: AISimulationRequest,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    """Point 2: Simulation Mode engine endpoint."""
+    from billing import ai_settlement
+    org = await _raw_collection("organizations").find_one({"organization_id": payload.organization_id}, {"_id": 0})
+    if not org:
+        raise HTTPException(404, "Empresa no encontrada")
+
+    policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
+    plan_code = org.get("plan_code") or "base"
+    plan = PLAN_CATALOG.get(plan_code) or PLAN_CATALOG["base"]
+
+    org_billing = org.get("ai_variable_billing") or {}
+    fx_buffer = float(org_billing.get("fx_buffer_percent") or policy.get("fx_buffer_percent") or 10.0)
+    rate = float(policy.get("usd_to_ars_rate") or 0.0)
+    if rate <= 0:
+        rate = 1250.0
+
+    query: dict[str, Any] = {"organization_id": payload.organization_id, "status": "success"}
+    if payload.period_start:
+        query["created_at"] = {"$gte": payload.period_start}
+    if payload.period_end:
+        query.setdefault("created_at", {})["$lt"] = payload.period_end
+
+    logs = await _raw_collection("ai_usage_logs").find(query, {"_id": 0}).to_list(10_000)
+    from ai.usage import PLAN_MONTHLY_AI_TOKENS
+    included_tokens = PLAN_MONTHLY_AI_TOKENS.get(plan_code, 250_000)
+
+    simulation = ai_settlement.simulate_settlement(
+        organization_id=payload.organization_id,
+        plan_name=plan["name"],
+        plan_amount_ars=float(plan["monthly_price_ars"]),
+        logs=logs,
+        usd_to_ars_rate=rate,
+        fx_buffer_percent=fx_buffer,
+        included_tokens=included_tokens,
+    )
+    return simulation
+
+
+@api_router.post("/platform/ai-billing/statements/{statement_id}/retry")
+async def platform_retry_ai_settlement(
+    statement_id: str,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    """Point 4: Manual settlement retry endpoint."""
+    stmt = await _raw_collection("ai_billing_statements").find_one({"statement_id": statement_id}, {"_id": 0})
+    if not stmt:
+        raise HTTPException(404, "Liquidación no encontrada")
+    org = await _raw_collection("organizations").find_one({"organization_id": stmt["organization_id"]}, {"_id": 0})
+    if not org:
+        raise HTTPException(404, "Empresa no encontrada")
+
+    from billing import ai_settlement
+    policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
+    result = await _apply_ai_settlement(org, policy, force=True)
+    return result
+
+
+@api_router.get("/billing/statements/export")
+async def export_billing_statements(
+    user: User = Depends(require_perm("settings_use")),
+):
+    """Point 5: CSV export endpoint for billing statements."""
+    query = {} if is_platform_admin(user) else {"organization_id": user.organization_id}
+    statements = await _raw_collection("ai_billing_statements").find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+    lines = ["statement_id,organization_id,plan_code,total_tokens,billable_cost_usd,total_amount_ars,status,created_at"]
+    for s in statements:
+        lines.append(f"{s.get('statement_id')},{s.get('organization_id')},{s.get('plan_code')},{s.get('tokens',0)},{s.get('billable_cost_usd',0.0)},{s.get('total_amount_ars',0.0)},{s.get('status')},{s.get('created_at')}")
+
+    from fastapi.responses import Response
+    return Response(content="\n".join(lines), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="liquidaciones.csv"'})
+
+
+@api_router.get("/billing/statements/{statement_id}/receipt")
+async def get_statement_receipt_html(
+    statement_id: str,
+    user: User = Depends(require_perm("settings_use")),
+):
+    """Point 5: Printable HTML Receipt for a settlement."""
+    stmt = await _raw_collection("ai_billing_statements").find_one({"statement_id": statement_id}, {"_id": 0})
+    if not stmt:
+        raise HTTPException(404, "Liquidación no encontrada")
+    if not is_platform_admin(user) and stmt.get("organization_id") != user.organization_id:
+        raise HTTPException(403, "No tenés permiso para ver esta liquidación")
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><title>Comprobante de Liquidación {stmt.get('statement_id')}</title>
+<style>body {{ font-family: sans-serif; padding: 40px; color: #1e293b; }} .box {{ border: 1px solid #e2e8f0; padding: 24px; border-radius: 8px; max-width: 600px; margin: auto; }} h2 {{ color: #0f172a; }} .row {{ display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }} .total {{ font-weight: bold; font-size: 1.2em; color: #2563eb; }}</style>
+</head>
+<body>
+<div class="box">
+  <h2>Comprobante de Liquidación Latus CRM</h2>
+  <p><strong>ID Liquidación:</strong> {stmt.get('statement_id')}</p>
+  <p><strong>Organización:</strong> {stmt.get('organization_id')}</p>
+  <p><strong>Fecha:</strong> {stmt.get('created_at')}</p>
+  <hr/>
+  <div class="row"><span>Plan ({stmt.get('plan_code')}):</span><span>${stmt.get('plan_amount_ars', 0):,.2f} ARS</span></div>
+  <div class="row"><span>Consumo IA Excedente:</span><span>${stmt.get('ai_amount_ars', 0):,.2f} ARS</span></div>
+  <div class="row"><span>Cotización USD/ARS:</span><span>${stmt.get('usd_to_ars_rate', 0):,.2f}</span></div>
+  <div class="row total"><span>Total Liquidado:</span><span>${stmt.get('total_amount_ars', 0):,.2f} ARS</span></div>
+  <p style="margin-top:20px; font-size:0.85em; color:#64748b;">Estado: {stmt.get('status', 'pending').upper()}</p>
+</div>
+</body></html>"""
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=html)
+
+
+@api_router.get("/platform/ai-keys")
+async def platform_get_ai_keys(
+    platform_admin: User = Depends(require_platform_admin),
+):
+    """Point 8: Centralized AI Credentials Management (Superadmin Only)."""
+    keys = await _raw_collection("system_ai_credentials").find({}, {"_id": 0, "api_key_masked": 1, "key_id": 1, "provider": 1, "label": 1, "assigned_organization_ids": 1, "is_active": 1, "created_at": 1}).to_list(100)
+    return {"keys": keys}
+
+
+@api_router.post("/platform/ai-keys")
+async def platform_save_ai_key(
+    payload: AIKeyCredentialPayload,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    """Point 8: Register or rotate centralized AI Provider Credential."""
+    raw_key = payload.api_key.strip()
+    masked = f"{raw_key[:6]}...{raw_key[-4:]}" if len(raw_key) > 10 else "••••••••"
+    key_id = f"key_{uuid.uuid4().hex[:10]}"
+    doc = {
+        "key_id": key_id,
+        "provider": payload.provider.lower(),
+        "api_key_masked": masked,
+        "label": payload.label or f"Clave {payload.provider}",
+        "assigned_organization_ids": payload.assigned_organization_ids,
+        "is_active": payload.is_active,
+        "created_at": now_iso(),
+        "created_by": platform_admin.user_id,
+    }
+    await _raw_collection("system_ai_credentials").insert_one(doc)
+    return {"key_id": key_id, "status": "created", "masked": masked}
+
+
+@api_router.delete("/platform/ai-keys/{key_id}")
+async def platform_delete_ai_key(
+    key_id: str,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    """Point 8: Revoke/Delete AI Provider Credential."""
+    result = await _raw_collection("system_ai_credentials").delete_one({"key_id": key_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Credencial no encontrada")
+    return {"key_id": key_id, "status": "deleted"}
+
+
+@api_router.get("/platform/alerts")
+async def platform_list_alerts(
+    organization_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    platform_admin: User = Depends(require_platform_admin),
+):
+    """Point 9: Operational Alerts List."""
+    from utils.alerts import list_system_alerts
+    alerts = await list_system_alerts(db, organization_id=organization_id, status=status, limit=limit)
+    return {"alerts": alerts, "count": len(alerts)}
+
+
+@api_router.post("/platform/alerts/{alert_id}/resolve")
+async def platform_resolve_alert(
+    alert_id: str,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    """Point 9: Resolve Operational Alert."""
+    from utils.alerts import resolve_system_alert
+    success = await resolve_system_alert(db, alert_id, user_id=platform_admin.user_id)
+    if not success:
+        raise HTTPException(404, "Alerta no encontrada o ya resuelta")
+    return {"alert_id": alert_id, "status": "resolved"}
+
+
 @api_router.put("/admin/ai-pricing")
 async def admin_ai_pricing_put(item: AIPriceItem,
                                admin: User = Depends(require_platform_admin)):

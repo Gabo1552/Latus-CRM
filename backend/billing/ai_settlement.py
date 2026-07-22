@@ -184,3 +184,116 @@ def calculate_amounts(*, plan_amount_ars: float, billable_cost_usd: float,
         "plan_amount_ars": float(plan_amount),
         "total_amount_ars": float((plan_amount + ai_amount).quantize(Decimal("0.01"))),
     }
+
+
+def calculate_profitability_breakdown(*,
+                                      plan_amount_ars: float,
+                                      ai_amount_ars: float,
+                                      base_cost_usd: float,
+                                      usd_to_ars_rate: float,
+                                      mp_fee_percent: float = 4.5,
+                                      tax_percent: float = 0.0,
+                                      min_margin_percent: float = 15.0) -> dict[str, float | bool | str]:
+    """Calculate Net Profit breakdown and verify minimum margin safety rules.
+
+    Formula:
+      Ingresos - Costo Proveedor - Costo Mercado Pago - Impuestos = Margen Neto
+    """
+    total_revenue_ars = round(plan_amount_ars + ai_amount_ars, 2)
+    provider_cost_ars = round(base_cost_usd * usd_to_ars_rate, 2)
+    mp_fee_ars = round(total_revenue_ars * (mp_fee_percent / 100.0), 2)
+    tax_ars = round(total_revenue_ars * (tax_percent / 100.0), 2)
+    net_profit_ars = round(total_revenue_ars - provider_cost_ars - mp_fee_ars - tax_ars, 2)
+    net_margin_percent = round((net_profit_ars / total_revenue_ars * 100.0), 2) if total_revenue_ars > 0 else 0.0
+
+    is_profitable = net_margin_percent >= min_margin_percent and net_profit_ars > 0
+    warning = None
+    if not is_profitable:
+        warning = f"Margen neto insuficiente ({net_margin_percent}% < mínimo {min_margin_percent}%). Revisa Fee o cotización."
+
+    return {
+        "total_revenue_ars": total_revenue_ars,
+        "provider_cost_ars": provider_cost_ars,
+        "mp_fee_ars": mp_fee_ars,
+        "tax_ars": tax_ars,
+        "net_profit_ars": net_profit_ars,
+        "net_margin_percent": net_margin_percent,
+        "min_margin_percent": min_margin_percent,
+        "is_profitable": is_profitable,
+        "warning": warning,
+    }
+
+
+def generate_settlement_reference(organization_id: str, period: str, nonce: str | None = None) -> str:
+    """Generate an immutable, unique external reference for Mercado Pago settlements."""
+    if not nonce:
+        import uuid
+        nonce = uuid.uuid4().hex[:8]
+    clean_org = str(organization_id).replace("org_", "").replace("-", "")[:8]
+    clean_period = str(period).replace("-", "")[:6]
+    return f"latus_settle_{clean_org}_{clean_period}_{nonce}"
+
+
+def simulate_settlement(*,
+                        organization_id: str,
+                        plan_name: str,
+                        plan_amount_ars: float,
+                        logs: list[dict],
+                        usd_to_ars_rate: float,
+                        fx_buffer_percent: float = 10.0,
+                        included_tokens: int = 250_000,
+                        mp_fee_percent: float = 4.5,
+                        tax_percent: float = 0.0,
+                        min_margin_percent: float = 15.0) -> dict:
+    """Simulate a settlement statement without modifying Mercado Pago or DB.
+
+    Handles excess token calculation: tokens <= included_tokens are free;
+    excess tokens are converted to USD and ARS.
+    """
+    summary = summarize_logs(logs)
+    total_tokens = summary["tokens"]
+    excess_tokens = max(0, total_tokens - included_tokens)
+
+    # Ratio of excess tokens to total tokens to calculate billable USD cost
+    excess_ratio = (excess_tokens / total_tokens) if total_tokens > 0 else 0.0
+    billable_cost_usd = round(summary["billable_cost_usd"] * excess_ratio, 6)
+    base_cost_usd = round(summary["base_cost_usd"] * excess_ratio, 6)
+
+    amounts = calculate_amounts(
+        plan_amount_ars=plan_amount_ars,
+        billable_cost_usd=billable_cost_usd,
+        usd_to_ars_rate=usd_to_ars_rate,
+        fx_buffer_percent=fx_buffer_percent,
+    )
+
+    profitability = calculate_profitability_breakdown(
+        plan_amount_ars=plan_amount_ars,
+        ai_amount_ars=amounts["ai_amount_ars"],
+        base_cost_usd=base_cost_usd,
+        usd_to_ars_rate=usd_to_ars_rate,
+        mp_fee_percent=mp_fee_percent,
+        tax_percent=tax_percent,
+        min_margin_percent=min_margin_percent,
+    )
+
+    return {
+        "simulation": True,
+        "organization_id": organization_id,
+        "plan_name": plan_name,
+        "period_summary": {
+            "calls": summary["calls"],
+            "total_tokens": total_tokens,
+            "included_tokens": included_tokens,
+            "excess_tokens": excess_tokens,
+            "base_cost_usd": base_cost_usd,
+            "billable_cost_usd": billable_cost_usd,
+        },
+        "rates": {
+            "usd_to_ars_rate": usd_to_ars_rate,
+            "fx_buffer_percent": fx_buffer_percent,
+        },
+        "amounts": amounts,
+        "profitability": profitability,
+        "generated_at": now_iso(),
+    }
+
