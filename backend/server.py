@@ -6363,6 +6363,128 @@ async def get_statement_receipt_html(
     return HTMLResponse(content=html)
 
 
+@api_router.get("/platform/financial-dashboard")
+async def platform_financial_dashboard(
+    platform_admin: User = Depends(require_platform_admin),
+):
+    """Superadmin Executive Billing & Operations Dashboard."""
+    from ai import usage as ai_usage
+    from billing import ai_settlement
+    from utils.alerts import list_system_alerts
+
+    policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
+    rate = float(policy.get("usd_to_ars_rate") or 1250.0)
+    fx_buffer_default = float(policy.get("fx_buffer_percent") or 10.0)
+
+    organizations = await _raw_collection("organizations").find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+    today = datetime.now(timezone.utc).date()
+    month_start = datetime.combine(today.replace(day=1), datetime.min.time(), tzinfo=timezone.utc).isoformat()
+
+    usage_logs = await _raw_collection("ai_usage_logs").find(
+        {"created_at": {"$gte": month_start}}, {"_id": 0}
+    ).to_list(100_000)
+
+    usage_by_org: dict[str, dict] = {}
+    for log in usage_logs:
+        org_id = log.get("organization_id")
+        if not org_id:
+            continue
+        b = ai_usage.billing_breakdown(log)
+        item = usage_by_org.setdefault(org_id, {
+            "calls": 0, "tokens": 0, "base_cost_usd": 0.0, "ai_fee_usd": 0.0, "billable_cost_usd": 0.0,
+        })
+        item["calls"] += 1
+        item["tokens"] += int(log.get("total_tokens") or 0)
+        item["base_cost_usd"] = round(item["base_cost_usd"] + float(b["base_cost_usd"]), 6)
+        item["ai_fee_usd"] = round(item["ai_fee_usd"] + float(b["ai_fee_usd"]), 6)
+        item["billable_cost_usd"] = round(item["billable_cost_usd"] + float(b["billable_cost_usd"]), 6)
+
+    org_matrix = []
+    total_subscriptions_ars = 0.0
+    total_ai_billable_usd = 0.0
+    total_ai_provider_cost_usd = 0.0
+    total_ai_fee_usd = 0.0
+
+    for org in organizations:
+        org_id = org["organization_id"]
+        plan_code = org.get("plan_code") or "base"
+        plan = PLAN_CATALOG.get(plan_code) or PLAN_CATALOG["base"]
+        plan_price = float(plan.get("monthly_price_ars") or 0.0)
+
+        access = subscription_access_state(org)
+        allowed = access.get("allowed", False)
+
+        u = usage_by_org.get(org_id, {
+            "calls": 0, "tokens": 0, "base_cost_usd": 0.0, "ai_fee_usd": 0.0, "billable_cost_usd": 0.0,
+        })
+
+        if allowed:
+            total_subscriptions_ars += plan_price
+
+        total_ai_billable_usd += u["billable_cost_usd"]
+        total_ai_provider_cost_usd += u["base_cost_usd"]
+        total_ai_fee_usd += u["ai_fee_usd"]
+
+        org_var_billing = org.get("ai_variable_billing") or {}
+        org_buffer = float(org_var_billing.get("fx_buffer_percent") or fx_buffer_default)
+        ai_billable_ars = round(u["billable_cost_usd"] * rate * (1 + org_buffer / 100.0), 2)
+        total_monthly_ars = round(plan_price + ai_billable_ars, 2)
+
+        org_matrix.append({
+            "organization_id": org_id,
+            "name": org.get("name") or "Sin nombre",
+            "plan_code": plan_code,
+            "plan_name": plan.get("name") or plan_code,
+            "plan_price_ars": plan_price,
+            "subscription_status": org.get("subscription_status") or "not_configured",
+            "license_status": org.get("license_status") or "not_configured",
+            "access_allowed": allowed,
+            "ai_state": org_var_billing.get("state") or ("active" if allowed else "disabled"),
+            "billing_email": org.get("billing_email"),
+            "current_period_end": org.get("current_period_end"),
+            "internal_notes": org.get("internal_notes"),
+            "ai_usage": {
+                **u,
+                "billable_cost_ars": ai_billable_ars,
+            },
+            "total_monthly_ars": total_monthly_ars,
+        })
+
+    total_ai_billable_ars = round(total_ai_billable_usd * rate * (1 + fx_buffer_default / 100.0), 2)
+    total_ai_provider_cost_ars = round(total_ai_provider_cost_usd * rate, 2)
+    total_ai_fee_ars = round(total_ai_fee_usd * rate, 2)
+
+    total_revenue_ars = round(total_subscriptions_ars + total_ai_billable_ars, 2)
+    estimated_net_profit_ars = round(total_revenue_ars - total_ai_provider_cost_ars, 2)
+    net_margin_percent = round((estimated_net_profit_ars / total_revenue_ars * 100.0), 1) if total_revenue_ars > 0 else 0.0
+
+    latest_statements = await _raw_collection("ai_billing_statements").find({}, {"_id": 0}).sort("created_at", -1).to_list(20)
+    alerts = await list_system_alerts(db, limit=10)
+
+    return {
+        "summary": {
+            "total_organizations": len(organizations),
+            "active_licenses": sum(1 for o in org_matrix if o["access_allowed"]),
+            "usd_to_ars_rate": rate,
+            "fx_buffer_percent": fx_buffer_default,
+            "monthly_subscriptions_ars": total_subscriptions_ars,
+            "monthly_ai_billable_usd": round(total_ai_billable_usd, 4),
+            "monthly_ai_billable_ars": total_ai_billable_ars,
+            "monthly_ai_provider_cost_usd": round(total_ai_provider_cost_usd, 4),
+            "monthly_ai_provider_cost_ars": total_ai_provider_cost_ars,
+            "monthly_ai_fee_gross_profit_usd": round(total_ai_fee_usd, 4),
+            "monthly_ai_fee_gross_profit_ars": total_ai_fee_ars,
+            "total_revenue_ars": total_revenue_ars,
+            "estimated_net_profit_ars": estimated_net_profit_ars,
+            "net_margin_percent": net_margin_percent,
+        },
+        "organizations": org_matrix,
+        "latest_statements": latest_statements,
+        "alerts": alerts,
+    }
+
+
 @api_router.get("/platform/ai-keys")
 async def platform_get_ai_keys(
     platform_admin: User = Depends(require_platform_admin),

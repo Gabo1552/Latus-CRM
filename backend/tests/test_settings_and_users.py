@@ -85,6 +85,11 @@ class _Cursor:
             self._docs.sort(key=lambda d: d.get(key_or_list, "") or "", reverse=(direction == -1))
         return self
 
+    def limit(self, n):
+        if n is not None:
+            self._docs = self._docs[:n]
+        return self
+
     async def to_list(self, n=None):
         return list(self._docs if n is None else self._docs[:n])
 
@@ -176,8 +181,13 @@ class _FakeDB:
                      "messages", "notifications", "settings", "wa_status",
                      "whatsapp_events", "app_secrets", "platform_secrets", "tasks", "notes", "bot_events",
                      "password_reset_tokens", "appointments", "bot_settings", "products",
-                     "roles", "tags", "work_areas", "ai_usage_logs", "pricing_config"):
+                     "roles", "tags", "work_areas", "ai_usage_logs", "pricing_config", "system_alerts", "billing_events", "ai_billing_statements"):
             setattr(self, name, _Coll())
+
+    def __getattr__(self, item):
+        coll = _Coll()
+        setattr(self, item, coll)
+        return coll
         for name in ("organizations", "memberships", "whatsapp_routes", "system_migrations"):
             setattr(self, name, _Coll())
         for name in ("billing_requests", "billing_events", "ai_billing_statements"):
@@ -641,6 +651,21 @@ class TestBillingFoundation:
         assert billing_still_available.status_code == 200
         assert "internal_notes" not in billing_still_available.json()["organization"]
         assert "internal_notes" not in client.get("/api/organizations/current", headers=_h()).json()
+
+    def test_superadmin_financial_dashboard(self, srv, monkeypatch):
+        server, fake, client = srv
+        monkeypatch.setenv("PLATFORM_ADMIN_EMAILS", "admin@latus.test")
+
+        res = client.get("/api/platform/financial-dashboard", headers=_h())
+        assert res.status_code == 200, res.text
+        data = res.json()
+        assert "summary" in data
+        assert "organizations" in data
+        summary = data["summary"]
+        assert summary["total_organizations"] >= 1
+        assert "total_revenue_ars" in summary
+        assert "estimated_net_profit_ars" in summary
+        assert "monthly_ai_fee_gross_profit_usd" in summary
 
     def test_mercadopago_checkout_creates_pending_preapproval(self, srv, monkeypatch):
         server, fake, client = srv

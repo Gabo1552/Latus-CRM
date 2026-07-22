@@ -80,6 +80,15 @@ async def create_system_alert(
     return alert_doc
 
 
+def _col(db: Any, name: str) -> Any:
+    if hasattr(db, name):
+        return getattr(db, name)
+    if hasattr(db, "get_collection"):
+        return db.get_collection(name)
+    from server import _raw_collection
+    return _raw_collection(name)
+
+
 async def list_system_alerts(
     db: Any,
     *,
@@ -94,13 +103,13 @@ async def list_system_alerts(
     if status:
         query["status"] = status
 
-    cursor = db.system_alerts.find(query, {"_id": 0}).sort("created_at", -1).limit(limit)
+    cursor = _col(db, "system_alerts").find(query, {"_id": 0}).sort("created_at", -1).limit(limit)
     return await cursor.to_list(limit)
 
 
 async def resolve_system_alert(db: Any, alert_id: str, user_id: str | None = None) -> bool:
     """Mark a system alert as resolved."""
-    result = await db.system_alerts.update_one(
+    result = await _col(db, "system_alerts").update_one(
         {"alert_id": alert_id},
         {
             "$set": {
@@ -110,4 +119,4 @@ async def resolve_system_alert(db: Any, alert_id: str, user_id: str | None = Non
             }
         },
     )
-    return result.modified_count > 0
+    return bool(result.modified_count) > 0

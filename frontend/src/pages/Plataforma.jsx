@@ -296,11 +296,162 @@ function CreateCompanyModal({ onClose, onCreate, creating }) {
   );
 }
 
+function SimulationModal({ organizationId, orgName, onClose }) {
+  const simulationQ = useQuery({
+    queryKey: ["ai-simulation", organizationId],
+    queryFn: () => api.post("/platform/ai-billing/simulate", { organization_id: organizationId }).then((r) => r.data),
+  });
+
+  const sim = simulationQ.data;
+
+  return (
+    <div className="fixed inset-0 z-[100] grid place-items-center bg-latus-ink/55 p-4" role="dialog" aria-modal="true">
+      <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-[24px] border border-white/10 bg-latus-cream shadow-2xl">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-latus-warm-border bg-white px-6 py-5">
+          <div>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-0.5 text-xs font-black text-amber-800">
+              ⚡ MODO SIMULACIÓN DE PRUEBA
+            </span>
+            <h2 className="mt-1 text-xl font-extrabold text-latus-ink">Simulación de Liquidación - {orgName}</h2>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-lg p-2 text-latus-muted hover:bg-latus-cream"><X className="h-5 w-5" /></button>
+        </div>
+
+        <div className="p-6 space-y-5">
+          <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-4 text-xs text-amber-900 leading-relaxed">
+            <strong>💡 Nota de Simulación:</strong> Este cálculo previo muestra el período facturado, consumo de IA, costo del proveedor, fee de Latus y cotización oficial sin realizar ningún cambio ni cargo en Mercado Pago.
+          </div>
+
+          {simulationQ.isLoading ? (
+            <div className="grid min-h-[200px] place-items-center"><div className="h-8 w-8 animate-spin rounded-full border-2 border-latus-blue border-t-transparent" /></div>
+          ) : sim ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border border-latus-warm-border bg-white p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-latus-muted">Período Facturado</p>
+                  <p className="mt-1 text-sm font-extrabold text-latus-ink">{sim.period_start?.slice(0, 10)} → {sim.period_end?.slice(0, 10)}</p>
+                </div>
+                <div className="rounded-xl border border-latus-warm-border bg-white p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-latus-muted">Consumo Consolidado</p>
+                  <p className="mt-1 text-sm font-extrabold text-latus-ink">{sim.usage_summary?.calls || 0} llamadas ({Number(sim.usage_summary?.total_tokens || 0).toLocaleString()} tokens)</p>
+                </div>
+                <div className="rounded-xl border border-latus-warm-border bg-white p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-latus-muted">Cotización USD → ARS</p>
+                  <p className="mt-1 text-sm font-extrabold text-latus-ink">$ {Number(sim.usd_to_ars_rate || 0).toLocaleString("es-AR")} <span className="text-xs text-latus-muted">(+{sim.fx_buffer_percent}% colchón)</span></p>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-latus-warm-border bg-white overflow-hidden text-xs">
+                <div className="border-b border-latus-warm-border bg-latus-cream/40 px-4 py-3 font-extrabold text-latus-ink">Desglose Financiero Estimado</div>
+                <div className="divide-y divide-latus-warm-border p-4 space-y-2.5">
+                  <div className="flex justify-between">
+                    <span className="text-latus-muted">Precio del Plan Comercial ({sim.plan_name}):</span>
+                    <span className="font-extrabold text-latus-ink">$ {Number(sim.plan_amount_ars || 0).toLocaleString("es-AR")} ARS</span>
+                  </div>
+                  <div className="flex justify-between pt-2">
+                    <span className="text-latus-muted">Costo Base del Proveedor (USD):</span>
+                    <span className="font-mono text-slate-600">USD ${Number(sim.usage_summary?.base_cost_usd || 0).toFixed(4)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-latus-muted">Fee Latus (%) Ganancia Bruta:</span>
+                    <span className="font-mono text-emerald-700 font-bold">+ USD ${Number(sim.usage_summary?.ai_fee_usd || 0).toFixed(4)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-latus-muted">Total Excedente IA (USD Facturable):</span>
+                    <span className="font-mono font-bold text-latus-ink">USD ${Number(sim.billable_cost_usd || 0).toFixed(4)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-latus-muted">Total Excedente IA Convertido a ARS:</span>
+                    <span className="font-mono font-extrabold text-violet-700">$ {Number(sim.ai_amount_ars || 0).toLocaleString("es-AR")} ARS</span>
+                  </div>
+                  <div className="flex justify-between pt-3 border-t border-latus-warm-border text-sm font-black">
+                    <span className="text-latus-ink">Total a Recibir del Cliente (Plan + IA):</span>
+                    <span className="text-latus-blue text-base">$ {Number(sim.total_amount_ars || 0).toLocaleString("es-AR")} ARS</span>
+                  </div>
+                  <div className="flex justify-between pt-1 text-xs text-emerald-700 font-bold">
+                    <span>Ganancia Neta Estimada de Latus (en esta liquidación):</span>
+                    <span>$ {Number(sim.estimated_latus_net_profit_ars || 0).toLocaleString("es-AR")} ARS</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-rose-600 font-bold">No se pudo obtener la simulación de liquidación.</p>
+          )}
+        </div>
+
+        <div className="flex justify-end border-t border-latus-warm-border bg-white px-6 py-4 rounded-b-[24px]">
+          <Button type="button" onClick={onClose} className="bg-latus-ink text-white hover:bg-latus-ink/90">Cerrar Simulación</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SuperadminExecutiveDashboardPanel({ onExportCSV }) {
+  const dashQ = useQuery({
+    queryKey: ["platform-financial-dashboard"],
+    queryFn: () => api.get("/platform/financial-dashboard").then((r) => r.data),
+  });
+
+  const d = dashQ.data?.summary;
+  if (!d) return null;
+
+  return (
+    <section className="overflow-hidden rounded-[24px] border border-latus-warm-border bg-white shadow-sm" data-testid="superadmin-financial-dashboard">
+      <div className="flex flex-col gap-4 border-b border-latus-warm-border bg-gradient-to-r from-latus-ink to-slate-900 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6 text-white">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="grid h-7 w-7 place-items-center rounded-lg bg-emerald-500/20 text-emerald-400"><BadgeDollarSign className="h-4 w-4" /></span>
+            <span className="text-xs font-extrabold uppercase tracking-widest text-emerald-400">Dashboard de Gestión Financiera & Cobros</span>
+          </div>
+          <h2 className="mt-1 text-xl font-black text-white">Resumen Ejecutivo Superadmin</h2>
+          <p className="mt-1 text-xs text-slate-300">Monitoreo consolidado de ingresos por suscripción, consumo variable de IA, costo de proveedores y margen neto.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-right">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cotización BCRA Aplicada</p>
+            <p className="font-mono text-sm font-extrabold text-emerald-400">$ {Number(d.usd_to_ars_rate || 0).toLocaleString("es-AR")} <span className="text-xs text-slate-300">(+{d.fx_buffer_percent}% buffer)</span></p>
+          </div>
+          <Button onClick={onExportCSV} variant="outline" className="rounded-xl border-white/20 bg-white/10 text-white hover:bg-white/20 text-xs font-bold">Exportar Registro CSV</Button>
+        </div>
+      </div>
+
+      <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4 sm:p-6 bg-latus-cream/20">
+        <div className="rounded-2xl border border-latus-warm-border bg-white p-5 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wider text-latus-muted">Facturación Bruta Estimada Mes</p>
+          <p className="mt-2 text-3xl font-black tracking-tight text-latus-ink">$ {Number(d.total_revenue_ars || 0).toLocaleString("es-AR")} <span className="text-xs text-latus-muted font-normal">ARS</span></p>
+          <p className="mt-1 text-[11px] text-latus-muted">Planes $ {Number(d.monthly_subscriptions_ars || 0).toLocaleString("es-AR")} + IA $ {Number(d.monthly_ai_billable_ars || 0).toLocaleString("es-AR")}</p>
+        </div>
+
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-5 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wider text-emerald-800">Ganancia Neta Estimada Latus</p>
+          <p className="mt-2 text-3xl font-black tracking-tight text-emerald-700">$ {Number(d.estimated_net_profit_ars || 0).toLocaleString("es-AR")} <span className="text-xs font-normal">ARS</span></p>
+          <p className="mt-1 text-[11px] font-bold text-emerald-700">Margen Neto Global: {d.net_margin_percent}%</p>
+        </div>
+
+        <div className="rounded-2xl border border-violet-200 bg-violet-50/50 p-5 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wider text-violet-800">Fee Comercial IA Bruto</p>
+          <p className="mt-2 text-3xl font-black tracking-tight text-violet-700">USD ${Number(d.monthly_ai_fee_gross_profit_usd || 0).toFixed(2)}</p>
+          <p className="mt-1 text-[11px] text-violet-700 font-medium">Facturable clientes: USD ${Number(d.monthly_ai_billable_usd || 0).toFixed(2)}</p>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-600">Costo Proveedores IA (Directo)</p>
+          <p className="mt-2 text-3xl font-black tracking-tight text-slate-800">USD ${Number(d.monthly_ai_provider_cost_usd || 0).toFixed(2)}</p>
+          <p className="mt-1 text-[11px] text-slate-500">Anthropic / OpenAI / Google</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function Plataforma() {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [simulatingOrg, setSimulatingOrg] = useState(null);
   const organizationsQ = useQuery({
     queryKey: ["platform-organizations"],
     queryFn: () => api.get("/platform/organizations").then((response) => response.data),
@@ -335,9 +486,15 @@ export default function Plataforma() {
   const pending = organizations.filter((item) => item.latest_request?.status === "pending").length;
   const aiBillable = organizations.reduce((total, item) => total + Number(item.ai_billing?.this_month?.billable_cost_usd || 0), 0);
 
+  const handleExportCSV = () => {
+    window.open("/api/billing/statements/export", "_blank");
+  };
+
   return (
     <AppLayout title="Plataforma">
       <div className="mx-auto w-full max-w-[1500px] space-y-6 p-4 sm:p-6 lg:p-8" data-testid="platform-page">
+        <SuperadminExecutiveDashboardPanel onExportCSV={handleExportCSV} />
+
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {[
             { label: "Empresas registradas", value: organizations.length, icon: Building2, tone: "bg-sky-50 text-sky-700" },
@@ -384,7 +541,10 @@ export default function Plataforma() {
                       <td className="px-4 py-4"><p className="flex items-center gap-1.5 text-sm font-bold text-latus-ink"><Users className="h-3.5 w-3.5 text-latus-blue" />{organization.active_users} usuarios</p><p className="mt-1 text-xs text-latus-muted">{organization.contacts} clientes</p></td>
                       <td className="px-4 py-4"><p className="text-sm font-extrabold text-latus-ink">USD {Number(organization.ai_billing?.this_month?.billable_cost_usd || 0).toFixed(2)}</p><p className="mt-1 text-xs text-latus-muted">Base USD {Number(organization.ai_billing?.this_month?.base_cost_usd || 0).toFixed(2)} · fee {organization.ai_billing?.fee_percent ?? 0}%</p></td>
                       <td className="px-4 py-4"><span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-extrabold ${statusTone(organization.access?.allowed)}`}>{organization.access?.allowed ? "Habilitado" : "Bloqueado"}</span></td>
-                      <td className="px-5 py-4 text-right"><Button type="button" variant="outline" size="sm" onClick={() => setSelected(organization)} className="rounded-lg border-latus-warm-border"><Pencil className="h-3.5 w-3.5" />Administrar</Button></td>
+                      <td className="px-5 py-4 text-right">
+                        <Button type="button" variant="outline" size="sm" onClick={() => setSimulatingOrg(organization)} className="rounded-lg border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 text-xs font-bold mr-2">Simular</Button>
+                        <Button type="button" variant="outline" size="sm" onClick={() => setSelected(organization)} className="rounded-lg border-latus-warm-border"><Pencil className="h-3.5 w-3.5 mr-1" />Administrar</Button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -394,6 +554,7 @@ export default function Plataforma() {
           )}
         </section>
       </div>
+      {simulatingOrg && <SimulationModal organizationId={simulatingOrg.organization_id} orgName={simulatingOrg.name} onClose={() => setSimulatingOrg(null)} />}
       {showCreateModal && <CreateCompanyModal onClose={() => setShowCreateModal(false)} creating={createOrganization.isPending} onCreate={(body) => createOrganization.mutate(body)} />}
       {selected && <ManageModal organization={selected} onClose={() => setSelected(null)} saving={updateSubscription.isPending} onSave={(body) => updateSubscription.mutate({ organizationId: selected.organization_id, body })} />}
     </AppLayout>
