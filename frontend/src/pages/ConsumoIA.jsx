@@ -211,20 +211,33 @@ export default function ConsumoIA() {
                         loading={quickQ.isPending} />
         </div>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3" data-testid="ai-billing-breakdown">
-          <BillingMetric label="Costo del proveedor" value={summaryQ.data?.base_cost_usd} detail="Real cuando el proveedor lo informa; estimado en los demás casos." />
-          <BillingMetric label="Fee Latus" value={summaryQ.data?.ai_fee_usd} detail="Porcentaje congelado al momento de cada consumo." />
-          <BillingMetric label="Total facturable" value={summaryQ.data?.billable_cost_usd} detail="Costo del proveedor más el fee comercial." primary />
-        </div>
+        {canManagePlatformAI ? (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3" data-testid="ai-billing-breakdown">
+            <BillingMetric label="Costo del proveedor" value={summaryQ.data?.base_cost_usd} detail="Costo directo cobrado por los proveedores de IA." />
+            <BillingMetric label="Fee Latus (Ganancia Bruta)" value={summaryQ.data?.ai_fee_usd} detail="Margen comercial congelado por consumo de la plataforma." />
+            <BillingMetric label="Total Facturable Consolidado" value={summaryQ.data?.billable_cost_usd} detail="Suma total asignada a facturar a las empresas." primary />
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2" data-testid="ai-billing-breakdown-tenant">
+            <BillingMetric label="Consumo Total Facturable" value={summaryQ.data?.billable_cost_usd} detail="Total acumulado en el período de consumo asignado a tu empresa." primary />
+            <div className="rounded-xl border border-latus-warm-border bg-white p-5 text-latus-ink shadow-sm">
+              <p className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-latus-muted">Llamadas Exitosas</p>
+              <p className="mt-2 text-2xl font-black tracking-tight">{fmtInt(summaryQ.data?.success_calls)}</p>
+              <p className="mt-2 text-xs leading-relaxed text-latus-muted">De {fmtInt(summaryQ.data?.total_calls)} llamadas procesadas por el bot en el período.</p>
+            </div>
+          </div>
+        )}
 
-        <ProviderVerificationPanel
-          canAdmin={canManagePlatformAI}
-          status={reportingQ.data}
-          loading={reportingQ.isPending}
-          from={filters.from}
-          to={filters.to}
-          onStatusChanged={() => qc.invalidateQueries({ queryKey: ["ai-usage-provider-reporting"] })}
-        />
+        {canManagePlatformAI && (
+          <ProviderVerificationPanel
+            canAdmin={canManagePlatformAI}
+            status={reportingQ.data}
+            loading={reportingQ.isPending}
+            from={filters.from}
+            to={filters.to}
+            onStatusChanged={() => qc.invalidateQueries({ queryKey: ["ai-usage-provider-reporting"] })}
+          />
+        )}
 
         {/* Filters */}
         <div className="rounded-xl border border-latus-warm-border bg-white p-4 shadow-[0_10px_28px_rgba(13,31,42,0.035)] sm:p-5">
@@ -311,6 +324,7 @@ export default function ConsumoIA() {
 
         {/* Logs */}
         <LogsTable
+          canAdmin={canManagePlatformAI}
           logs={logsQ.data?.items || []}
           total={totalLogs}
           page={logsPage}
@@ -320,14 +334,16 @@ export default function ConsumoIA() {
           loading={logsQ.isPending}
         />
 
-        {/* Pricing editor */}
+        {/* Superadmin Config Panels */}
         {canManagePlatformAI && (
-          <AIFeeEditor
-            policy={billingPolicyQ.data}
-            onSaved={() => qc.invalidateQueries({ queryKey: ["platform-ai-billing"] })}
-          />
+          <>
+            <AIFeeEditor
+              policy={billingPolicyQ.data}
+              onSaved={() => qc.invalidateQueries({ queryKey: ["platform-ai-billing"] })}
+            />
+            <PricingEditor canAdmin={canManagePlatformAI} pricing={pricingQ.data} onSaved={() => qc.invalidateQueries({ queryKey: ["ai-pricing"] })} />
+          </>
         )}
-        <PricingEditor canAdmin={canManagePlatformAI} pricing={pricingQ.data} onSaved={() => qc.invalidateQueries({ queryKey: ["ai-pricing"] })} />
       </div>
     </AppLayout>
   );
@@ -617,7 +633,7 @@ function TopConvsTable({ data }) {
 }
 
 
-function LogsTable({ logs, total, page, numPages, onPrev, onNext, loading }) {
+function LogsTable({ logs, total, page, numPages, onPrev, onNext, loading, canAdmin }) {
   return (
     <div className="overflow-hidden rounded-xl border border-latus-warm-border bg-white" data-testid="logs-table">
       <div className="flex flex-col gap-3 border-b border-latus-warm-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -646,7 +662,7 @@ function LogsTable({ logs, total, page, numPages, onPrev, onNext, loading }) {
               <th className="text-left px-3 py-2">Modelo</th>
               <th className="text-left px-3 py-2">Propósito</th>
               <th className="text-right px-3 py-2">Tokens</th>
-              <th className="text-right px-3 py-2">Costo + fee</th>
+              <th className="text-right px-3 py-2">{canAdmin ? "Costo + Fee" : "Costo Total"}</th>
               <th className="text-right px-3 py-2">Latencia</th>
               <th className="text-left px-3 py-2">Estado</th>
               <th className="text-left px-3 py-2">Conversación</th>
@@ -667,10 +683,16 @@ function LogsTable({ logs, total, page, numPages, onPrev, onNext, loading }) {
                 <td className="px-3 py-2">{PURPOSE_LABEL[l.purpose] || l.purpose}</td>
                 <td className="px-3 py-2 text-right">{fmtInt(l.total_tokens)}</td>
                 <td className="px-3 py-2 text-right font-mono">
-                  <p className="text-[10px] text-latus-muted">Base {fmtUSD(l.base_cost_usd ?? l.provider_cost_usd ?? l.estimated_cost_usd)}</p>
-                  <p className="text-[10px] text-latus-muted">Fee {Number(l.ai_fee_percent || 0).toFixed(1)}% · {fmtUSD(l.ai_fee_usd)}</p>
-                  <p className="mt-1 font-extrabold text-latus-blue">{fmtUSD(l.billable_cost_usd ?? l.base_cost_usd)}</p>
-                  <span className={`mt-0.5 inline-flex rounded-full px-1.5 py-0.5 text-[8px] font-bold uppercase ${l.billing_cost_source === "provider_response" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{l.billing_cost_source === "provider_response" ? "real" : "estimado"}</span>
+                  {canAdmin ? (
+                    <>
+                      <p className="text-[10px] text-latus-muted">Base {fmtUSD(l.base_cost_usd ?? l.provider_cost_usd ?? l.estimated_cost_usd)}</p>
+                      <p className="text-[10px] text-latus-muted">Fee {Number(l.ai_fee_percent || 0).toFixed(1)}% · {fmtUSD(l.ai_fee_usd)}</p>
+                      <p className="mt-1 font-extrabold text-latus-blue">{fmtUSD(l.billable_cost_usd ?? l.base_cost_usd)}</p>
+                      <span className={`mt-0.5 inline-flex rounded-full px-1.5 py-0.5 text-[8px] font-bold uppercase ${l.billing_cost_source === "provider_response" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{l.billing_cost_source === "provider_response" ? "real" : "estimado"}</span>
+                    </>
+                  ) : (
+                    <p className="font-extrabold text-latus-blue">{fmtUSD(l.billable_cost_usd ?? l.base_cost_usd)}</p>
+                  )}
                 </td>
                 <td className="px-3 py-2 text-right">{fmtInt(l.latency_ms)} ms</td>
                 <td className="px-3 py-2">
