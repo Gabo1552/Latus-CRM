@@ -667,6 +667,23 @@ class TestBillingFoundation:
         assert "estimated_net_profit_ars" in summary
         assert "monthly_ai_fee_gross_profit_usd" in summary
 
+        # Test period and company filter
+        filtered_res = client.get(
+            "/api/platform/financial-dashboard?period=last_30",
+            headers=_h()
+        )
+        assert filtered_res.status_code == 200
+        assert filtered_res.json()["summary"]["period"] == "last_30"
+
+        # Test CSV export endpoint
+        csv_res = client.get(
+            "/api/platform/financial-dashboard/export?period=this_month",
+            headers=_h()
+        )
+        assert csv_res.status_code == 200
+        assert "text/csv" in csv_res.headers["content-type"]
+        assert "organization_id,name,plan_name" in csv_res.text
+
     def test_mercadopago_checkout_creates_pending_preapproval(self, srv, monkeypatch):
         server, fake, client = srv
         monkeypatch.setenv("MERCADOPAGO_ACCESS_TOKEN", "TEST-token")

@@ -6363,11 +6363,42 @@ async def get_statement_receipt_html(
     return HTMLResponse(content=html)
 
 
+def _resolve_dashboard_date_range(period: Optional[str], start_date: Optional[str], end_date: Optional[str]):
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    p_start, p_end = None, None
+
+    if period == "prev_month":
+        first_this_month = today.replace(day=1)
+        last_month_end = first_this_month - timedelta(days=1)
+        p_start = datetime.combine(last_month_end.replace(day=1), datetime.min.time(), tzinfo=timezone.utc).isoformat()
+        p_end = datetime.combine(first_this_month, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+    elif period == "last_30":
+        p_start = (now - timedelta(days=30)).isoformat()
+        p_end = now.isoformat()
+    elif period == "custom" and start_date:
+        parsed_s = _parse_billing_datetime(start_date)
+        parsed_e = _parse_billing_datetime(end_date) if end_date else None
+        p_start = datetime.combine(parsed_s.date() if parsed_s else today, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+        p_end = datetime.combine(parsed_e.date() if parsed_e else today, datetime.max.time(), tzinfo=timezone.utc).isoformat()
+    elif period == "all":
+        p_start, p_end = None, None
+    else:  # "this_month" or default
+        p_start = datetime.combine(today.replace(day=1), datetime.min.time(), tzinfo=timezone.utc).isoformat()
+        p_end = now.isoformat()
+
+    return p_start, p_end
+
+
 @api_router.get("/platform/financial-dashboard")
 async def platform_financial_dashboard(
+    organization_id: Optional[str] = None,
+    period: Optional[str] = "this_month",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     platform_admin: User = Depends(require_platform_admin),
 ):
-    """Superadmin Executive Billing & Operations Dashboard."""
+    """Superadmin Executive Billing & Operations Dashboard with company & period filtering."""
     from ai import usage as ai_usage
     from billing import ai_settlement
     from utils.alerts import list_system_alerts
@@ -6376,14 +6407,25 @@ async def platform_financial_dashboard(
     rate = float(policy.get("usd_to_ars_rate") or 1250.0)
     fx_buffer_default = float(policy.get("fx_buffer_percent") or 10.0)
 
-    organizations = await _raw_collection("organizations").find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    org_filter = {}
+    if organization_id and organization_id not in ("__all__", ""):
+        org_filter["organization_id"] = organization_id
 
-    today = datetime.now(timezone.utc).date()
-    month_start = datetime.combine(today.replace(day=1), datetime.min.time(), tzinfo=timezone.utc).isoformat()
+    organizations = await _raw_collection("organizations").find(org_filter, {"_id": 0}).sort("created_at", -1).to_list(500)
 
-    usage_logs = await _raw_collection("ai_usage_logs").find(
-        {"created_at": {"$gte": month_start}}, {"_id": 0}
-    ).to_list(100_000)
+    p_start, p_end = _resolve_dashboard_date_range(period, start_date, end_date)
+
+    logs_query: dict[str, Any] = {}
+    if organization_id and organization_id not in ("__all__", ""):
+        logs_query["organization_id"] = organization_id
+    if p_start or p_end:
+        logs_query["created_at"] = {}
+        if p_start:
+            logs_query["created_at"]["$gte"] = p_start
+        if p_end:
+            logs_query["created_at"]["$lte"] = p_end
+
+    usage_logs = await _raw_collection("ai_usage_logs").find(logs_query, {"_id": 0}).to_list(100_000)
 
     usage_by_org: dict[str, dict] = {}
     for log in usage_logs:
@@ -6459,8 +6501,11 @@ async def platform_financial_dashboard(
     estimated_net_profit_ars = round(total_revenue_ars - total_ai_provider_cost_ars, 2)
     net_margin_percent = round((estimated_net_profit_ars / total_revenue_ars * 100.0), 1) if total_revenue_ars > 0 else 0.0
 
-    latest_statements = await _raw_collection("ai_billing_statements").find({}, {"_id": 0}).sort("created_at", -1).to_list(20)
-    alerts = await list_system_alerts(db, limit=10)
+    stmt_query = {}
+    if organization_id and organization_id not in ("__all__", ""):
+        stmt_query["organization_id"] = organization_id
+    latest_statements = await _raw_collection("ai_billing_statements").find(stmt_query, {"_id": 0}).sort("created_at", -1).to_list(20)
+    alerts = await list_system_alerts(db, organization_id=organization_id if organization_id and organization_id != "__all__" else None, limit=10)
 
     return {
         "summary": {
@@ -6468,6 +6513,9 @@ async def platform_financial_dashboard(
             "active_licenses": sum(1 for o in org_matrix if o["access_allowed"]),
             "usd_to_ars_rate": rate,
             "fx_buffer_percent": fx_buffer_default,
+            "period": period,
+            "period_start": p_start,
+            "period_end": p_end,
             "monthly_subscriptions_ars": total_subscriptions_ars,
             "monthly_ai_billable_usd": round(total_ai_billable_usd, 4),
             "monthly_ai_billable_ars": total_ai_billable_ars,
@@ -6483,6 +6531,61 @@ async def platform_financial_dashboard(
         "latest_statements": latest_statements,
         "alerts": alerts,
     }
+
+
+@api_router.get("/platform/financial-dashboard/export")
+async def platform_financial_dashboard_export(
+    organization_id: Optional[str] = None,
+    period: Optional[str] = "this_month",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    """Export filtered Financial Dashboard matrix as CSV."""
+    dashboard_data = await platform_financial_dashboard(
+        organization_id=organization_id,
+        period=period,
+        start_date=start_date,
+        end_date=end_date,
+        platform_admin=platform_admin,
+    )
+
+    headers = [
+        "organization_id", "name", "plan_name", "plan_price_ars",
+        "subscription_status", "license_status", "access_allowed",
+        "calls", "tokens", "provider_cost_usd", "ai_fee_usd", "billable_cost_usd",
+        "ai_billable_ars", "total_monthly_ars", "billing_email"
+    ]
+
+    lines = [",".join(headers)]
+    for o in dashboard_data["organizations"]:
+        u = o["ai_usage"]
+        row = [
+            f'"{o["organization_id"]}"',
+            f'"{o["name"]}"',
+            f'"{o["plan_name"]}"',
+            str(o["plan_price_ars"]),
+            f'"{o["subscription_status"]}"',
+            f'"{o["license_status"]}"',
+            str(o["access_allowed"]),
+            str(u.get("calls", 0)),
+            str(u.get("tokens", 0)),
+            str(u.get("base_cost_usd", 0.0)),
+            str(u.get("ai_fee_usd", 0.0)),
+            str(u.get("billable_cost_usd", 0.0)),
+            str(u.get("billable_cost_ars", 0.0)),
+            str(o.get("total_monthly_ars", 0.0)),
+            f'"{o.get("billing_email") or ""}"',
+        ]
+        lines.append(",".join(row))
+
+    from fastapi.responses import Response
+    csv_content = "\n".join(lines)
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="dashboard_financiero_latus.csv"'}
+    )
 
 
 @api_router.get("/platform/ai-keys")

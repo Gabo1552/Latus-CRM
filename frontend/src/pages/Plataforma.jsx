@@ -388,14 +388,33 @@ function SimulationModal({ organizationId, orgName, onClose }) {
   );
 }
 
-function SuperadminExecutiveDashboardPanel({ onExportCSV }) {
+function SuperadminExecutiveDashboardPanel({
+  selectedOrgId,
+  setSelectedOrgId,
+  period,
+  setPeriod,
+  startDate,
+  setStartDate,
+  endDate,
+  setEndDate,
+  organizations,
+  onExportCSV,
+  isExporting,
+}) {
   const dashQ = useQuery({
-    queryKey: ["platform-financial-dashboard"],
-    queryFn: () => api.get("/platform/financial-dashboard").then((r) => r.data),
+    queryKey: ["platform-financial-dashboard", selectedOrgId, period, startDate, endDate],
+    queryFn: () => {
+      const params = {
+        organization_id: selectedOrgId !== "__all__" ? selectedOrgId : undefined,
+        period,
+        start_date: period === "custom" ? startDate : undefined,
+        end_date: period === "custom" ? endDate : undefined,
+      };
+      return api.get("/platform/financial-dashboard", { params }).then((r) => r.data);
+    },
   });
 
   const d = dashQ.data?.summary;
-  if (!d) return null;
 
   return (
     <section className="overflow-hidden rounded-[24px] border border-latus-warm-border bg-white shadow-sm" data-testid="superadmin-financial-dashboard">
@@ -409,39 +428,92 @@ function SuperadminExecutiveDashboardPanel({ onExportCSV }) {
           <p className="mt-1 text-xs text-slate-300">Monitoreo consolidado de ingresos por suscripción, consumo variable de IA, costo de proveedores y margen neto.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-right">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cotización BCRA Aplicada</p>
-            <p className="font-mono text-sm font-extrabold text-emerald-400">$ {Number(d.usd_to_ars_rate || 0).toLocaleString("es-AR")} <span className="text-xs text-slate-300">(+{d.fx_buffer_percent}% buffer)</span></p>
+          {d && (
+            <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-right">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cotización BCRA Aplicada</p>
+              <p className="font-mono text-sm font-extrabold text-emerald-400">$ {Number(d.usd_to_ars_rate || 0).toLocaleString("es-AR")} <span className="text-xs text-slate-300">(+{d.fx_buffer_percent}% buffer)</span></p>
+            </div>
+          )}
+          <Button onClick={onExportCSV} disabled={isExporting} variant="outline" className="rounded-xl border-white/20 bg-white/10 text-white hover:bg-white/20 text-xs font-bold">
+            {isExporting ? "Generando CSV..." : "Exportar Registro CSV"}
+          </Button>
+        </div>
+      </div>
+
+      <div className="border-b border-latus-warm-border bg-latus-cream/40 p-4 sm:px-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="w-full sm:w-64">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-latus-muted">Filtrar por Empresa</label>
+            <select value={selectedOrgId} onChange={(e) => setSelectedOrgId(e.target.value)} className="mt-1 h-9 w-full rounded-lg border border-latus-warm-border bg-white px-3 text-xs font-bold text-latus-ink">
+              <option value="__all__">🏢 Todas las empresas (Consolidado)</option>
+              {organizations.map((org) => (
+                <option key={org.organization_id} value={org.organization_id}>{org.name} ({org.organization_id})</option>
+              ))}
+            </select>
           </div>
-          <Button onClick={onExportCSV} variant="outline" className="rounded-xl border-white/20 bg-white/10 text-white hover:bg-white/20 text-xs font-bold">Exportar Registro CSV</Button>
+
+          <div className="w-full sm:w-52">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-latus-muted">Filtrar por Período</label>
+            <select value={period} onChange={(e) => setPeriod(e.target.value)} className="mt-1 h-9 w-full rounded-lg border border-latus-warm-border bg-white px-3 text-xs font-bold text-latus-ink">
+              <option value="this_month">📅 Este mes</option>
+              <option value="prev_month">📅 Mes anterior</option>
+              <option value="last_30">📅 Últimos 30 días</option>
+              <option value="custom">📆 Rango personalizado</option>
+              <option value="all">♾️ Todo el historial</option>
+            </select>
+          </div>
+
+          {period === "custom" && (
+            <>
+              <div className="w-full sm:w-36">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-latus-muted">Fecha Desde</label>
+                <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="mt-1 h-9 rounded-lg border-latus-warm-border text-xs" />
+              </div>
+              <div className="w-full sm:w-36">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-latus-muted">Fecha Hasta</label>
+                <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="mt-1 h-9 rounded-lg border-latus-warm-border text-xs" />
+              </div>
+            </>
+          )}
+
+          {dashQ.isFetching && (
+            <div className="flex items-center gap-1.5 text-xs text-latus-blue font-bold pb-2">
+              <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-latus-blue border-t-transparent" />
+              Actualizando...
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4 sm:p-6 bg-latus-cream/20">
-        <div className="rounded-2xl border border-latus-warm-border bg-white p-5 shadow-sm">
-          <p className="text-xs font-bold uppercase tracking-wider text-latus-muted">Facturación Bruta Estimada Mes</p>
-          <p className="mt-2 text-3xl font-black tracking-tight text-latus-ink">$ {Number(d.total_revenue_ars || 0).toLocaleString("es-AR")} <span className="text-xs text-latus-muted font-normal">ARS</span></p>
-          <p className="mt-1 text-[11px] text-latus-muted">Planes $ {Number(d.monthly_subscriptions_ars || 0).toLocaleString("es-AR")} + IA $ {Number(d.monthly_ai_billable_ars || 0).toLocaleString("es-AR")}</p>
-        </div>
+      {dashQ.isLoading ? (
+        <div className="grid min-h-[160px] place-items-center"><div className="h-8 w-8 animate-spin rounded-full border-2 border-latus-blue border-t-transparent" /></div>
+      ) : d ? (
+        <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4 sm:p-6 bg-latus-cream/20">
+          <div className="rounded-2xl border border-latus-warm-border bg-white p-5 shadow-sm">
+            <p className="text-xs font-bold uppercase tracking-wider text-latus-muted">Facturación Bruta Estimada</p>
+            <p className="mt-2 text-3xl font-black tracking-tight text-latus-ink">$ {Number(d.total_revenue_ars || 0).toLocaleString("es-AR")} <span className="text-xs text-latus-muted font-normal">ARS</span></p>
+            <p className="mt-1 text-[11px] text-latus-muted">Planes $ {Number(d.monthly_subscriptions_ars || 0).toLocaleString("es-AR")} + IA $ {Number(d.monthly_ai_billable_ars || 0).toLocaleString("es-AR")}</p>
+          </div>
 
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-5 shadow-sm">
-          <p className="text-xs font-bold uppercase tracking-wider text-emerald-800">Ganancia Neta Estimada Latus</p>
-          <p className="mt-2 text-3xl font-black tracking-tight text-emerald-700">$ {Number(d.estimated_net_profit_ars || 0).toLocaleString("es-AR")} <span className="text-xs font-normal">ARS</span></p>
-          <p className="mt-1 text-[11px] font-bold text-emerald-700">Margen Neto Global: {d.net_margin_percent}%</p>
-        </div>
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-5 shadow-sm">
+            <p className="text-xs font-bold uppercase tracking-wider text-emerald-800">Ganancia Neta Estimada Latus</p>
+            <p className="mt-2 text-3xl font-black tracking-tight text-emerald-700">$ {Number(d.estimated_net_profit_ars || 0).toLocaleString("es-AR")} <span className="text-xs font-normal">ARS</span></p>
+            <p className="mt-1 text-[11px] font-bold text-emerald-700">Margen Neto: {d.net_margin_percent}%</p>
+          </div>
 
-        <div className="rounded-2xl border border-violet-200 bg-violet-50/50 p-5 shadow-sm">
-          <p className="text-xs font-bold uppercase tracking-wider text-violet-800">Fee Comercial IA Bruto</p>
-          <p className="mt-2 text-3xl font-black tracking-tight text-violet-700">USD ${Number(d.monthly_ai_fee_gross_profit_usd || 0).toFixed(2)}</p>
-          <p className="mt-1 text-[11px] text-violet-700 font-medium">Facturable clientes: USD ${Number(d.monthly_ai_billable_usd || 0).toFixed(2)}</p>
-        </div>
+          <div className="rounded-2xl border border-violet-200 bg-violet-50/50 p-5 shadow-sm">
+            <p className="text-xs font-bold uppercase tracking-wider text-violet-800">Fee Comercial IA Bruto</p>
+            <p className="mt-2 text-3xl font-black tracking-tight text-violet-700">USD ${Number(d.monthly_ai_fee_gross_profit_usd || 0).toFixed(2)}</p>
+            <p className="mt-1 text-[11px] text-violet-700 font-medium">Facturable clientes: USD ${Number(d.monthly_ai_billable_usd || 0).toFixed(2)}</p>
+          </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
-          <p className="text-xs font-bold uppercase tracking-wider text-slate-600">Costo Proveedores IA (Directo)</p>
-          <p className="mt-2 text-3xl font-black tracking-tight text-slate-800">USD ${Number(d.monthly_ai_provider_cost_usd || 0).toFixed(2)}</p>
-          <p className="mt-1 text-[11px] text-slate-500">Anthropic / OpenAI / Google</p>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
+            <p className="text-xs font-bold uppercase tracking-wider text-slate-600">Costo Proveedores IA (Directo)</p>
+            <p className="mt-2 text-3xl font-black tracking-tight text-slate-800">USD ${Number(d.monthly_ai_provider_cost_usd || 0).toFixed(2)}</p>
+            <p className="mt-1 text-[11px] text-slate-500">Anthropic / OpenAI / Google</p>
+          </div>
         </div>
-      </div>
+      ) : null}
     </section>
   );
 }
@@ -452,6 +524,13 @@ export default function Plataforma() {
   const [selected, setSelected] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [simulatingOrg, setSimulatingOrg] = useState(null);
+
+  const [selectedOrgId, setSelectedOrgId] = useState("__all__");
+  const [period, setPeriod] = useState("this_month");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [isExporting, setIsExporting] = useState(false);
+
   const organizationsQ = useQuery({
     queryKey: ["platform-organizations"],
     queryFn: () => api.get("/platform/organizations").then((response) => response.data),
@@ -479,21 +558,67 @@ export default function Plataforma() {
   });
   const organizations = useMemo(() => organizationsQ.data || [], [organizationsQ.data]);
   const filtered = useMemo(() => {
+    let list = organizations;
+    if (selectedOrgId !== "__all__") {
+      list = list.filter((item) => item.organization_id === selectedOrgId);
+    }
     const term = search.trim().toLowerCase();
-    return term ? organizations.filter((item) => `${item.name} ${item.organization_id} ${item.billing_email || ""}`.toLowerCase().includes(term)) : organizations;
-  }, [organizations, search]);
+    return term ? list.filter((item) => `${item.name} ${item.organization_id} ${item.billing_email || ""}`.toLowerCase().includes(term)) : list;
+  }, [organizations, search, selectedOrgId]);
   const active = organizations.filter((item) => item.access?.allowed).length;
   const pending = organizations.filter((item) => item.latest_request?.status === "pending").length;
   const aiBillable = organizations.reduce((total, item) => total + Number(item.ai_billing?.this_month?.billable_cost_usd || 0), 0);
 
-  const handleExportCSV = () => {
-    window.open("/api/billing/statements/export", "_blank");
+  const handleExportCSV = async () => {
+    try {
+      setIsExporting(true);
+      const params = {
+        organization_id: selectedOrgId !== "__all__" ? selectedOrgId : undefined,
+        period,
+        start_date: period === "custom" ? startDate : undefined,
+        end_date: period === "custom" ? endDate : undefined,
+      };
+      const response = await api.get("/platform/financial-dashboard/export", {
+        params,
+        responseType: "blob",
+      });
+
+      const blob = new Blob([response.data], { type: "text/csv;charset=utf-8;" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const filename = `dashboard_financiero_${selectedOrgId !== "__all__" ? selectedOrgId : "global"}_${period}.csv`;
+      link.setAttribute("download", filename);
+      document.body.appendChild(link);
+      link.click();
+      if (link.parentNode) {
+        link.parentNode.removeChild(link);
+      }
+      window.URL.revokeObjectURL(url);
+      toast.success("Exportación descargada con éxito");
+    } catch (error) {
+      toast.error("Error al exportar los datos en CSV");
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   return (
     <AppLayout title="Plataforma">
       <div className="mx-auto w-full max-w-[1500px] space-y-6 p-4 sm:p-6 lg:p-8" data-testid="platform-page">
-        <SuperadminExecutiveDashboardPanel onExportCSV={handleExportCSV} />
+        <SuperadminExecutiveDashboardPanel
+          selectedOrgId={selectedOrgId}
+          setSelectedOrgId={setSelectedOrgId}
+          period={period}
+          setPeriod={setPeriod}
+          startDate={startDate}
+          setStartDate={setStartDate}
+          endDate={endDate}
+          setEndDate={setEndDate}
+          organizations={organizations}
+          onExportCSV={handleExportCSV}
+          isExporting={isExporting}
+        />
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {[
