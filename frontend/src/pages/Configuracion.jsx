@@ -2939,14 +2939,6 @@ export default function Configuracion() {
                 </div>
               </div>
             )}
-            <div className={`mt-3 rounded-sm border px-3 py-2 text-xs ${selectedModelPriced ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
-              {selectedModelPriced ? (
-                <p><CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />Costo configurado: entrada USD {Number(selectedModel.input_per_million || 0).toFixed(4)} · salida USD {Number(selectedModel.output_per_million || 0).toFixed(4)} por 1M tokens.</p>
-              ) : (
-                <p><AlertTriangle className="mr-1 inline h-3.5 w-3.5" />Este modelo no se puede activar hasta definir su costo en <Link to="/consumo-ia" className="font-extrabold underline">Consumo de IA</Link>.</p>
-              )}
-              <p className="mt-1 opacity-75">{catalogQ.data?.synced_at ? `Actualizado ${new Date(catalogQ.data.synced_at).toLocaleString("es-AR")}` : "Usando catálogo inicial; actualizalo para ver la disponibilidad vigente."}</p>
-            </div>
           </div>
         </div>
         {activeTab === "users" && <UsersTab me={user} />}
