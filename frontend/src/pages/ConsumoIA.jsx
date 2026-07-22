@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
-  Activity, AlertOctagon, BadgeDollarSign, CheckCircle2, ChevronLeft, ChevronRight,
+  Activity, AlertOctagon, BadgeDollarSign, Building2, CheckCircle2, ChevronLeft, ChevronRight,
   CircleHelp, Database, DollarSign, ExternalLink, Filter, KeyRound, RefreshCw,
   RotateCcw, ShieldCheck, Sparkles, TrendingUp,
 } from "lucide-react";
@@ -49,6 +49,7 @@ export default function ConsumoIA() {
   const canView = hasPermission(user, "ai_view");
   const canManagePlatformAI = !!user?.is_platform_admin;
 
+  const [selectedOrg, setSelectedOrg] = useState("__all__");
   const [filters, setFilters] = useState({
     from: monthStart(),
     to: todayISO(),
@@ -62,9 +63,16 @@ export default function ConsumoIA() {
 
   const qc = useQueryClient();
 
+  const orgsQ = useQuery({
+    queryKey: ["platform-organizations"],
+    queryFn: () => api.get("/platform/organizations").then((r) => r.data),
+    enabled: canManagePlatformAI,
+  });
+  const orgs = orgsQ.data?.organizations || [];
+
   const quickQ = useQuery({
-    queryKey: ["ai-usage-quick"],
-    queryFn: () => api.get("/admin/ai-usage/quick").then((r) => r.data),
+    queryKey: ["ai-usage-quick", selectedOrg],
+    queryFn: () => api.get(`/admin/ai-usage/quick${canManagePlatformAI && selectedOrg && selectedOrg !== "__all__" ? `?organization_id=${selectedOrg}` : ""}`).then((r) => r.data),
     enabled: canView,
   });
   const params = useMemo(() => {
@@ -75,8 +83,11 @@ export default function ConsumoIA() {
     if (filters.model) p.set("model", filters.model);
     if (filters.status) p.set("status", filters.status);
     if (filters.provider) p.set("provider", filters.provider);
+    if (canManagePlatformAI && selectedOrg && selectedOrg !== "__all__") {
+      p.set("organization_id", selectedOrg);
+    }
     return p.toString();
-  }, [filters, rangeBad]);
+  }, [filters, rangeBad, canManagePlatformAI, selectedOrg]);
 
   const summaryQ = useQuery({
     queryKey: ["ai-usage-summary", params],
@@ -116,7 +127,7 @@ export default function ConsumoIA() {
   const numPages = Math.max(1, Math.ceil(totalLogs / LIMIT));
 
   return (
-    <AppLayout title="Consumo de IA" actions={
+    <AppLayout title={canManagePlatformAI ? "Consumo de IA - Control Global" : "Consumo de IA de Tu Empresa"} actions={
       <Button data-testid="reload-button" variant="outline"
               onClick={reloadAll} className="h-10 rounded-lg border-latus-warm-border bg-white">
         <RefreshCw className={`h-4 w-4 mr-1.5 ${quickQ.isFetching || summaryQ.isFetching ? "animate-spin" : ""}`} />
@@ -125,13 +136,49 @@ export default function ConsumoIA() {
     }>
       <div className="mx-auto w-full max-w-[1500px] space-y-6 p-4 sm:p-6 lg:p-8" data-testid="consumo-ia-page">
 
+        {/* Superadmin Org Selector Filter */}
+        {canManagePlatformAI && (
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 p-4 rounded-xl border border-sky-200 bg-sky-50/50 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-latus-blue text-white font-bold">
+                <Building2 className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-latus-ink">Vista de Administrador Global (Superadmin)</p>
+                <p className="text-xs text-latus-muted">Filtrá el consumo por empresa individual o seleccioná el consolidado general de Latus.</p>
+              </div>
+            </div>
+            <div className="w-72">
+              <Select value={selectedOrg} onValueChange={(v) => { setSelectedOrg(v); setLogsPage(0); }}>
+                <SelectTrigger data-testid="superadmin-org-select" className="h-10 border-sky-300 bg-white font-semibold text-latus-ink text-xs shadow-sm">
+                  <SelectValue placeholder="Elegir empresa" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">🏢 Todas las empresas (Consolidado)</SelectItem>
+                  {orgs.map((o) => (
+                    <SelectItem key={o.organization_id} value={o.organization_id}>
+                      {o.name} ({o.plan_code || "base"})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        )}
+
         <section className="overflow-hidden rounded-2xl border border-latus-warm-border bg-gradient-to-br from-white via-latus-surface to-latus-ice/30 shadow-[0_18px_45px_rgba(13,31,42,0.06)]">
           <div className="flex flex-col gap-5 p-5 sm:p-6 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-start gap-4">
               <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-latus-ink text-white shadow-[0_10px_24px_rgba(13,31,42,0.18)]"><Activity className="h-5 w-5" /></div>
               <div>
-                <p className="text-lg font-bold tracking-tight text-latus-ink">Control de uso y costos</p>
-                <p className="mt-1 max-w-2xl text-sm leading-relaxed text-latus-muted">Cada consumo conserva el costo del proveedor, el fee vigente y el total facturable. Cuando la API no informa el costo exacto, el CRM utiliza el precio configurado y lo identifica como estimado.</p>
+                <p className="text-lg font-bold tracking-tight text-latus-ink">
+                  {canManagePlatformAI ? "Control de consumo global de la plataforma" : "Resumen de consumo de tu empresa"}
+                </p>
+                <p className="mt-1 max-w-2xl text-sm leading-relaxed text-latus-muted">
+                  {canManagePlatformAI
+                    ? "Monitoreá las llamadas realizadas por cada empresa, configurá los precios por millón de tokens y ajustá el fee comercial de cada modelo."
+                    : "Revisá las llamadas generadas por tu asistente, los tokens utilizados en el período y el gasto acumulado de tu organización."}
+                </p>
               </div>
             </div>
             <div className="flex flex-wrap gap-2 text-xs">
@@ -697,13 +744,14 @@ function AIFeeEditor({ policy, onSaved }) {
 
 
 function PricingEditor({ pricing, onSaved, canAdmin }) {
-  const [drafts, setDrafts] = useState({}); // { model: {input, output} }
+  const [drafts, setDrafts] = useState({});
   const [newModel, setNewModel] = useState("");
   const [newInput, setNewInput] = useState("");
   const [newOutput, setNewOutput] = useState("");
+  const [newFee, setNewFee] = useState("");
   const save = useMutation({
     mutationFn: (payload) => api.put("/admin/ai-pricing", payload),
-    onSuccess: () => { toast.success("Precio guardado"); setDrafts({}); setNewModel(""); setNewInput(""); setNewOutput(""); onSaved && onSaved(); },
+    onSuccess: () => { toast.success("Precio y fee guardados"); setDrafts({}); setNewModel(""); setNewInput(""); setNewOutput(""); setNewFee(""); onSaved && onSaved(); },
     onError: (e) => toast.error(e?.response?.data?.detail || "No se pudo guardar el precio"),
   });
   const reset = useMutation({
@@ -714,41 +762,58 @@ function PricingEditor({ pricing, onSaved, canAdmin }) {
 
   if (!pricing) return null;
   const allModels = { ...pricing.defaults, ...pricing.models };
+  const metadata = pricing.metadata || {};
   const sortedKeys = Object.keys(allModels).sort();
 
   const onChange = (model, field, value) => {
     const v = parseFloat(value);
-    setDrafts((d) => ({ ...d, [model]: { ...(d[model] || allModels[model]), [field]: isNaN(v) ? 0 : v } }));
+    const prevEntry = drafts[model] || {
+      input: allModels[model]?.input || 0,
+      output: allModels[model]?.output || 0,
+      fee_percent: metadata[model]?.fee_percent,
+    };
+    setDrafts((d) => ({
+      ...d,
+      [model]: { ...prevEntry, [field]: isNaN(v) ? (field === "fee_percent" ? undefined : 0) : v },
+    }));
   };
 
   return (
     <div className="bg-white border border-[#E9E6DC] rounded-sm" data-testid="pricing-editor">
-      <div className="p-3 border-b border-[#E9E6DC] flex items-center justify-between">
+      <div className="p-4 border-b border-[#E9E6DC] flex items-center justify-between">
         <div>
-          <p className="text-sm font-bold text-[#0B1B26]">Precios por modelo</p>
-          <p className="text-[11px] text-[#888888]">USD por 1 millón de tokens. Sirven para estimar el costo.</p>
+          <p className="text-sm font-bold text-[#0B1B26]">Catálogo de modelos, precios y fee por modelo</p>
+          <p className="text-[11px] text-[#888888]">USD por 1M de tokens y porcentaje de fee comercial específico asignado a cada modelo.</p>
         </div>
         <Button data-testid="pricing-reset"
-                variant="outline" size="sm" className="rounded-sm"
+                variant="outline" size="sm" className="rounded-sm text-xs"
                 onClick={() => reset.mutate()} disabled={!canAdmin || reset.isPending}>
           <RotateCcw className="h-3.5 w-3.5 mr-1" /> Restaurar valores por defecto
         </Button>
       </div>
       {canAdmin && (
-        <div className="grid gap-3 border-b border-[#E9E6DC] bg-sky-50/50 p-4 md:grid-cols-[1fr_170px_170px_auto] md:items-end">
+        <div className="grid gap-3 border-b border-[#E9E6DC] bg-sky-50/50 p-4 md:grid-cols-[1fr_130px_130px_120px_auto] md:items-end">
           <label className="text-xs font-bold text-latus-ink">Nuevo modelo
-            <Input value={newModel} onChange={(e) => setNewModel(e.target.value)} placeholder="Identificador exacto del proveedor" className="mt-1 h-9 rounded-sm bg-white font-mono text-xs" />
+            <Input value={newModel} onChange={(e) => setNewModel(e.target.value)} placeholder="Identificador exacto" className="mt-1 h-9 rounded-sm bg-white font-mono text-xs" />
           </label>
-          <label className="text-xs font-bold text-latus-ink">Entrada USD / 1M
-            <Input type="number" min="0" step="0.001" value={newInput} onChange={(e) => setNewInput(e.target.value)} className="mt-1 h-9 rounded-sm bg-white text-right" />
+          <label className="text-xs font-bold text-latus-ink">Entrada USD/1M
+            <Input type="number" min="0" step="0.001" value={newInput} onChange={(e) => setNewInput(e.target.value)} className="mt-1 h-9 rounded-sm bg-white text-right text-xs" />
           </label>
-          <label className="text-xs font-bold text-latus-ink">Salida USD / 1M
-            <Input type="number" min="0" step="0.001" value={newOutput} onChange={(e) => setNewOutput(e.target.value)} className="mt-1 h-9 rounded-sm bg-white text-right" />
+          <label className="text-xs font-bold text-latus-ink">Salida USD/1M
+            <Input type="number" min="0" step="0.001" value={newOutput} onChange={(e) => setNewOutput(e.target.value)} className="mt-1 h-9 rounded-sm bg-white text-right text-xs" />
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Fee % (Opcional)
+            <Input type="number" min="0" max="500" step="0.1" value={newFee} onChange={(e) => setNewFee(e.target.value)} placeholder="Default" className="mt-1 h-9 rounded-sm bg-white text-right text-xs" />
           </label>
           <Button type="button" disabled={save.isPending || !newModel.trim() || Number(newInput) < 0 || Number(newOutput) < 0 || (Number(newInput) === 0 && Number(newOutput) === 0)}
-            onClick={() => save.mutate({ model: newModel.trim(), input_per_million: Number(newInput), output_per_million: Number(newOutput) })}
-            className="h-9 rounded-sm bg-latus-blue text-white hover:bg-latus-blue/90">Agregar precio</Button>
-          <p className="text-[11px] text-latus-muted md:col-span-4">Copiá el identificador desde Configuración → IA. El modelo recién podrá activarse después de guardar un costo válido.</p>
+            onClick={() => save.mutate({
+              model: newModel.trim(),
+              input_per_million: Number(newInput),
+              output_per_million: Number(newOutput),
+              fee_percent: newFee !== "" ? Number(newFee) : undefined,
+            })}
+            className="h-9 rounded-sm bg-latus-blue text-white hover:bg-latus-blue/90 text-xs">Agregar precio</Button>
+          <p className="text-[11px] text-latus-muted md:col-span-5">Podés especificar un Fee % propio para un modelo o dejarlo vacío para que tome el Fee global de la plataforma.</p>
         </div>
       )}
       <table className="w-full text-sm">
@@ -757,38 +822,60 @@ function PricingEditor({ pricing, onSaved, canAdmin }) {
             <th className="text-left px-3 py-2">Modelo</th>
             <th className="text-right px-3 py-2">Input (USD / 1M)</th>
             <th className="text-right px-3 py-2">Output (USD / 1M)</th>
+            <th className="text-right px-3 py-2">Fee % por modelo</th>
             <th className="text-right px-3 py-2">Acción</th>
           </tr>
         </thead>
         <tbody>
           {sortedKeys.map((m) => {
-            const cur = drafts[m] || allModels[m];
+            const base = allModels[m] || { input: 0, output: 0 };
+            const metaFee = metadata[m]?.fee_percent;
+            const curInput = drafts[m]?.input !== undefined ? drafts[m].input : base.input;
+            const curOutput = drafts[m]?.output !== undefined ? drafts[m].output : base.output;
+            const curFee = drafts[m]?.fee_percent !== undefined ? drafts[m].fee_percent : metaFee;
             const dirty = drafts[m] !== undefined;
-            const bad = (cur.input < 0) || (cur.output < 0) || (cur.input === 0 && cur.output === 0);
+            const bad = (curInput < 0) || (curOutput < 0) || (curInput === 0 && curOutput === 0);
+
             return (
               <tr key={m} className="border-t border-[#E9E6DC]">
-                <td className="px-3 py-2 font-mono text-xs">{m}</td>
+                <td className="px-3 py-2 font-mono text-xs">
+                  {m}
+                  {metaFee !== undefined && metaFee !== null && (
+                    <span className="ml-2 inline-flex rounded bg-sky-100 px-1.5 py-0.5 text-[9px] font-bold text-sky-800">
+                      Fee custom: {metaFee}%
+                    </span>
+                  )}
+                </td>
                 <td className="px-3 py-2 text-right">
                   <Input data-testid={`pricing-input-${m}`} type="number" step="0.001" min="0"
-                         value={cur.input}
+                         value={curInput}
                          disabled={!canAdmin}
                          onChange={(e) => onChange(m, "input", e.target.value)}
-                         className="rounded-sm h-8 text-right w-28 ml-auto" />
+                         className="rounded-sm h-8 text-right w-24 ml-auto font-mono text-xs" />
                 </td>
                 <td className="px-3 py-2 text-right">
                   <Input data-testid={`pricing-output-${m}`} type="number" step="0.001" min="0"
-                         value={cur.output}
+                         value={curOutput}
                          disabled={!canAdmin}
                          onChange={(e) => onChange(m, "output", e.target.value)}
-                         className="rounded-sm h-8 text-right w-28 ml-auto" />
+                         className="rounded-sm h-8 text-right w-24 ml-auto font-mono text-xs" />
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <Input data-testid={`pricing-fee-${m}`} type="number" step="0.1" min="0" max="500"
+                         value={curFee ?? ""}
+                         placeholder="Global"
+                         disabled={!canAdmin}
+                         onChange={(e) => onChange(m, "fee_percent", e.target.value)}
+                         className="rounded-sm h-8 text-right w-20 ml-auto font-mono text-xs" />
                 </td>
                 <td className="px-3 py-2 text-right">
                   <Button data-testid={`pricing-save-${m}`}
                           size="sm" disabled={!canAdmin || !dirty || bad || save.isPending}
                           onClick={() => save.mutate({
                             model: m,
-                            input_per_million: cur.input,
-                            output_per_million: cur.output,
+                            input_per_million: curInput,
+                            output_per_million: curOutput,
+                            fee_percent: curFee !== undefined && curFee !== "" ? Number(curFee) : undefined,
                           })}
                           className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm h-8 text-xs">
                     Guardar

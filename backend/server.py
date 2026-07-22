@@ -5759,12 +5759,14 @@ def _date_bounds(from_str: str | None, to_str: str | None) -> tuple[str, str]:
 
 def _build_usage_filter(from_iso: str, to_iso: str, model: str | None,
                        status: str | None, conversation_id: str | None = None,
-                       provider: str | None = None) -> dict:
+                       provider: str | None = None, organization_id: str | None = None) -> dict:
     q: dict = {"created_at": {"$gte": from_iso, "$lte": to_iso}}
     if model:           q["model"] = model
     if status:          q["status"] = status
     if conversation_id: q["conversation_id"] = conversation_id
     if provider:        q["provider"] = provider
+    if organization_id and organization_id != "__all__":
+        q["organization_id"] = organization_id
     return q
 
 
@@ -5775,11 +5777,13 @@ async def admin_ai_usage_summary(
     model: str | None = None,
     status: str | None = None,
     provider: str | None = None,
+    organization_id: str | None = None,
     admin: User = Depends(require_perm("ai_view")),
 ):
     from ai import usage as ai_usage
     f, t = _date_bounds(from_, to)
-    q = _build_usage_filter(f, t, model, status, provider=provider)
+    target_org = organization_id if admin.is_platform_admin else admin.organization_id
+    q = _build_usage_filter(f, t, model, status, provider=provider, organization_id=target_org)
     logs = await db.ai_usage_logs.find(q, {"_id": 0}).to_list(50_000)
     total_calls = len(logs)
     success_calls = sum(1 for l in logs if l.get("status") == "success")
@@ -5866,13 +5870,15 @@ async def admin_ai_usage_logs(
     status: str | None = None,
     conversation_id: str | None = None,
     provider: str | None = None,
+    organization_id: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     admin: User = Depends(require_perm("ai_view")),
 ):
     from ai import usage as ai_usage
     f, t = _date_bounds(from_, to)
-    q = _build_usage_filter(f, t, model, status, conversation_id, provider)
+    target_org = organization_id if admin.is_platform_admin else admin.organization_id
+    q = _build_usage_filter(f, t, model, status, conversation_id, provider, organization_id=target_org)
     total = await db.ai_usage_logs.count_documents(q)
     items = await db.ai_usage_logs.find(q, {"_id": 0}) \
         .sort("created_at", -1).to_list(offset + limit)
@@ -5885,14 +5891,21 @@ async def admin_ai_usage_logs(
 
 
 @api_router.get("/admin/ai-usage/quick")
-async def admin_ai_usage_quick(admin: User = Depends(require_perm("ai_view"))):
+async def admin_ai_usage_quick(
+    organization_id: str | None = None,
+    admin: User = Depends(require_perm("ai_view")),
+):
     from ai import usage as ai_usage
     today = datetime.now(timezone.utc).date()
     today_iso_f = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc).isoformat()
     month_iso_f = datetime.combine(today.replace(day=1), datetime.min.time(),
                                    tzinfo=timezone.utc).isoformat()
+    target_org = organization_id if admin.is_platform_admin else admin.organization_id
 
-    async def _agg(query):
+    async def _agg(base_query):
+        query = dict(base_query)
+        if target_org and target_org != "__all__":
+            query["organization_id"] = target_org
         items = await db.ai_usage_logs.find(query, {"_id": 0}).to_list(50_000)
         billing = [ai_usage.billing_breakdown(item) for item in items]
         return {
@@ -5911,7 +5924,10 @@ async def admin_ai_usage_quick(admin: User = Depends(require_perm("ai_view"))):
     all_stats     = await _agg({})
 
     by_model: dict[str, int] = {}
-    all_logs = await db.ai_usage_logs.find({}, {"_id": 0, "model": 1}).to_list(50_000)
+    query_all = {}
+    if target_org and target_org != "__all__":
+        query_all["organization_id"] = target_org
+    all_logs = await db.ai_usage_logs.find(query_all, {"_id": 0, "model": 1}).to_list(50_000)
     for l in all_logs:
         m = l.get("model") or "unknown"
         by_model[m] = by_model.get(m, 0) + 1
@@ -5980,6 +5996,7 @@ class AIPriceItem(BaseModel):
     model: str
     input_per_million: float
     output_per_million: float
+    fee_percent: Optional[float] = None
 
 
 class AIBillingPolicyUpdate(BaseModel):

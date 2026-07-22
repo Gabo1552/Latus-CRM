@@ -76,7 +76,8 @@ async def load_pricing_metadata(db) -> dict[str, dict[str, Any]]:
 
 
 async def save_pricing(db, model: str, input_per_million: float,
-                       output_per_million: float, user_id: str | None) -> dict:
+                       output_per_million: float, user_id: str | None,
+                       fee_percent: float | None = None) -> dict:
     if input_per_million < 0 or output_per_million < 0:
         raise ValueError("Los precios no pueden ser negativos")
     if not model or len(model) > 200:
@@ -92,8 +93,15 @@ async def save_pricing(db, model: str, input_per_million: float,
         "input": float(input_per_million),
         "output": float(output_per_million),
     }
-    metadata[model] = {"source": "manual", "verified_free": False,
-                       "verified_at": _now_iso()}
+    meta_entry = dict(metadata.get(model) or {})
+    meta_entry.update({
+        "source": "manual",
+        "verified_free": False,
+        "verified_at": _now_iso(),
+    })
+    if fee_percent is not None:
+        meta_entry["fee_percent"] = validate_fee_percent(fee_percent)
+    metadata[model] = meta_entry
     await db.pricing_config.update_one(
         {"_id": "default"},
         {"$set": {"models": models, "model_metadata": metadata,
