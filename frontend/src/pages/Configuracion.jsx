@@ -1044,6 +1044,15 @@ function BotIATab({ setTab }) {
       catalog_reading_enabled: draft.catalog_reading_enabled !== undefined ? !!draft.catalog_reading_enabled : true,
       handoff_rules: draft.handoff_rules || "",
       tone: draft.tone || "",
+      tone_dialect: draft.tone_dialect || "cordobes",
+      response_length_limit: draft.response_length_limit || "conciso",
+      writing_rules: draft.writing_rules || {
+        only_closing_punctuation: true,
+        allow_slang: true,
+        custom_rules_text: "",
+      },
+      company_workflow_steps: Array.isArray(draft.company_workflow_steps) ? draft.company_workflow_steps : [],
+      custom_client_fields: Array.isArray(draft.custom_client_fields) ? draft.custom_client_fields : [],
       bot_name: (draft.bot_name || "").trim(),
       include_client_info: !!draft.include_client_info,
       default_handoff_user_id: draft.default_handoff_user_id || null,
@@ -1225,6 +1234,225 @@ function BotIATab({ setTab }) {
               className="rounded-sm h-9"
               placeholder="profesional, cercano, conciso"
             />
+          </div>
+
+          {/* Dialecto & Reglas de Ortografía */}
+          <div className="p-4 border border-[#E9E6DC] bg-amber-50/20 rounded-sm md:col-span-2 space-y-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-base">🗣️</span>
+                <Label className="text-sm font-bold text-[#0B1B26]">Dialecto, Modismos & Reglas de Puntuación</Label>
+              </div>
+              <p className="text-xs text-[#888888] mt-0.5">
+                Configurá el lenguaje natural del bot (dialecto cordobés / argentino), límite de palabras y reglas ortográficas de WhatsApp.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-xs font-bold text-[#0B1B26]">Dialecto / Región</Label>
+                <select
+                  value={draft.tone_dialect || "cordobes"}
+                  onChange={(e) => set({ tone_dialect: e.target.value })}
+                  className="mt-1 h-9 w-full rounded-sm border border-[#E9E6DC] bg-white px-3 text-xs font-semibold text-[#0B1B26]"
+                >
+                  <option value="cordobes">🇦🇷 Córdoba, Argentina (Voseo natural, "che", "viste", "de una", "joya")</option>
+                  <option value="argentino_neutro">🇦🇷 Argentino Neutro (Voseo estándar profesional)</option>
+                  <option value="estandar">🌎 Español Estándar Internacional</option>
+                </select>
+              </div>
+
+              <div>
+                <Label className="text-xs font-bold text-[#0B1B26]">Longitud de Respuestas</Label>
+                <select
+                  value={draft.response_length_limit || "conciso"}
+                  onChange={(e) => set({ response_length_limit: e.target.value })}
+                  className="mt-1 h-9 w-full rounded-sm border border-[#E9E6DC] bg-white px-3 text-xs font-semibold text-[#0B1B26]"
+                >
+                  <option value="conciso">⚡ Respuestas Concisas (1-3 oraciones breves, recomendado para WhatsApp)</option>
+                  <option value="equilibrado">⚖️ Equilibrado (2-4 oraciones)</option>
+                  <option value="detallado">📖 Detallado y Explicativo</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-3 pt-2 border-t border-[#E9E6DC]">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label className="text-xs font-bold text-[#0B1B26]">Solo signos de cierre (? y !)</Label>
+                  <p className="text-[11px] text-[#888888]">Evita colocar signos de apertura (¿ y ¡), tal como se escribe habitualmente en chats de WhatsApp.</p>
+                </div>
+                <Switch
+                  checked={draft.writing_rules?.only_closing_punctuation !== false}
+                  onCheckedChange={(v) => set({
+                    writing_rules: { ...(draft.writing_rules || {}), only_closing_punctuation: v }
+                  })}
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label className="text-xs font-bold text-[#0B1B26]">Permitir modismos conversacionales naturales</Label>
+                  <p className="text-[11px] text-[#888888]">Uso fluido de "viste", "che", "de una", "joya", "cero drama" para máxima cercanía.</p>
+                </div>
+                <Switch
+                  checked={draft.writing_rules?.allow_slang !== false}
+                  onCheckedChange={(v) => set({
+                    writing_rules: { ...(draft.writing_rules || {}), allow_slang: v }
+                  })}
+                />
+              </div>
+
+              <div>
+                <Label className="text-xs font-bold text-[#0B1B26]">Reglas de escritura adicionales</Label>
+                <Input
+                  value={draft.writing_rules?.custom_rules_text || ""}
+                  onChange={(e) => set({
+                    writing_rules: { ...(draft.writing_rules || {}), custom_rules_text: e.target.value }
+                  })}
+                  placeholder="Ej.: No usar mayúsculas sostenidas, usar 1 solo emoji por mensaje..."
+                  className="mt-1 h-9 text-xs"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Workflow Comercial Guiado */}
+          <div className="p-4 border border-[#E9E6DC] bg-blue-50/20 rounded-sm md:col-span-2 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-base">🗺️</span>
+                  <Label className="text-sm font-bold text-[#0B1B26]">Pasos del Proceso Comercial (Workflow Guiado)</Label>
+                </div>
+                <p className="text-xs text-[#888888] mt-0.5">
+                  Establecé el camino paso a paso que la IA debe guiar con cada prospecto.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="text-xs font-bold"
+                onClick={() => {
+                  const steps = Array.isArray(draft.company_workflow_steps) ? [...draft.company_workflow_steps] : [];
+                  set({ company_workflow_steps: [...steps, "Nuevo paso del proceso"] });
+                }}
+              >
+                + Agregar Paso
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              {(Array.isArray(draft.company_workflow_steps) ? draft.company_workflow_steps : []).map((step, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#0E8DDB]/10 text-xs font-bold text-[#0E8DDB]">{idx + 1}</span>
+                  <Input
+                    value={step}
+                    onChange={(e) => {
+                      const steps = [...draft.company_workflow_steps];
+                      steps[idx] = e.target.value;
+                      set({ company_workflow_steps: steps });
+                    }}
+                    className="h-9 text-xs"
+                    placeholder={`Paso ${idx + 1}...`}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-9 w-9 p-0 text-red-500 hover:text-red-700"
+                    onClick={() => {
+                      const steps = draft.company_workflow_steps.filter((_, i) => i !== idx);
+                      set({ company_workflow_steps: steps });
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Ficha Personalizada del Cliente */}
+          <div className="p-4 border border-[#E9E6DC] bg-emerald-50/20 rounded-sm md:col-span-2 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-base">📋</span>
+                  <Label className="text-sm font-bold text-[#0B1B26]">Ficha Personalizada del Cliente (Campos a Extraer por la IA)</Label>
+                </div>
+                <p className="text-xs text-[#888888] mt-0.5">
+                  Definí los datos que querés que la IA extraiga automáticamente del chat y guarde en el CRM.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="text-xs font-bold"
+                onClick={() => {
+                  const fields = Array.isArray(draft.custom_client_fields) ? [...draft.custom_client_fields] : [];
+                  set({
+                    custom_client_fields: [
+                      ...fields,
+                      { key: `campo_${fields.length + 1}`, label: `Nuevo Campo ${fields.length + 1}`, description: "" }
+                    ]
+                  });
+                }}
+              >
+                + Agregar Campo
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              {(Array.isArray(draft.custom_client_fields) ? draft.custom_client_fields : []).map((cf, idx) => (
+                <div key={idx} className="flex flex-col sm:flex-row items-start sm:items-center gap-2 p-2 border border-[#E9E6DC] rounded-sm bg-white">
+                  <Input
+                    placeholder="Clave (ej. presupuesto)"
+                    value={cf.key || ""}
+                    onChange={(e) => {
+                      const fields = [...draft.custom_client_fields];
+                      fields[idx] = { ...fields[idx], key: e.target.value.toLowerCase().replace(/\s+/g, "_") };
+                      set({ custom_client_fields: fields });
+                    }}
+                    className="h-8 text-xs font-mono w-full sm:w-36"
+                  />
+                  <Input
+                    placeholder="Etiqueta (ej. Presupuesto estimado)"
+                    value={cf.label || ""}
+                    onChange={(e) => {
+                      const fields = [...draft.custom_client_fields];
+                      fields[idx] = { ...fields[idx], label: e.target.value };
+                      set({ custom_client_fields: fields });
+                    }}
+                    className="h-8 text-xs font-bold w-full sm:w-48"
+                  />
+                  <Input
+                    placeholder="Descripción / Instrucción de extracción"
+                    value={cf.description || ""}
+                    onChange={(e) => {
+                      const fields = [...draft.custom_client_fields];
+                      fields[idx] = { ...fields[idx], description: e.target.value };
+                      set({ custom_client_fields: fields });
+                    }}
+                    className="h-8 text-xs w-full flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-red-500 hover:text-red-700"
+                    onClick={() => {
+                      const fields = draft.custom_client_fields.filter((_, i) => i !== idx);
+                      set({ custom_client_fields: fields });
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* Contexto de la empresa */}

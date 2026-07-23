@@ -47,6 +47,24 @@ DEFAULT_BOT_SETTINGS = {
     "faqs": [],
     "handoff_rules": DEFAULT_HANDOFF_RULES,
     "tone": "profesional, cercano, conciso",
+    "tone_dialect": "cordobes",
+    "response_length_limit": "conciso",
+    "writing_rules": {
+        "only_closing_punctuation": True,
+        "allow_slang": True,
+        "custom_rules_text": "",
+    },
+    "company_workflow_steps": [
+        "Saludar amablemente en tono cercano y entender la consulta inicial del cliente",
+        "Calificar requerimientos clave (presupuesto, ubicación o tipo de producto)",
+        "Ofrecer 1 o 2 opciones del catálogo de la empresa que coincidan con sus intereses",
+        "Proponer agendar una cita o llamada con un asesor humano para concretar",
+    ],
+    "custom_client_fields": [
+        {"key": "presupuesto", "label": "Presupuesto estimado", "description": "Monto o rango proyectado"},
+        {"key": "zona_interes", "label": "Zona de preferencia", "description": "Ubicación o barrio buscado"},
+        {"key": "plazo_compra", "label": "Plazo estimado de compra", "description": "Tiempo proyectado para concretar"},
+    ],
     "provider": "built_in",
     "model": "gpt-4o-mini",
     "bot_name": "Bot",
@@ -131,8 +149,8 @@ async def regenerate_summary(db, conv_id: str, *, user_id: str | None = None) ->
             {"$set": {"summary": summary, "last_summary_at": _now_iso()}},
         )
     return {"summary": summary, "last_summary_at": _now_iso()}
- 
- 
+
+
 async def _compile_client_info(db, conv, settings: dict) -> str | None:
     if not settings.get("include_client_info", True) or not conv:
         return None
@@ -151,11 +169,19 @@ async def _compile_client_info(db, conv, settings: dict) -> str | None:
             info_lines.append(f"- Empresa: {contact_doc['company']}")
         if contact_doc.get("notes"):
             info_lines.append(f"- Notas en CRM: {contact_doc['notes']}")
+        if contact_doc.get("custom_fields"):
+            cf_parts = [f"{k}: {v}" for k, v in contact_doc["custom_fields"].items() if v]
+            if cf_parts:
+                info_lines.append(f"- Ficha Personalizada Cliente: {', '.join(cf_parts)}")
     if lead_doc:
         if lead_doc.get("status"):
             info_lines.append(f"- Estado del Lead: {lead_doc['status']}")
         if lead_doc.get("value"):
             info_lines.append(f"- Valor estimado: {lead_doc['value']}")
+        if lead_doc.get("custom_fields"):
+            lead_cf_parts = [f"{k}: {v}" for k, v in lead_doc["custom_fields"].items() if v]
+            if lead_cf_parts:
+                info_lines.append(f"- Ficha Personalizada Lead: {', '.join(lead_cf_parts)}")
     
     return "\n".join(info_lines) if info_lines else None
 
@@ -164,7 +190,6 @@ async def suggest_reply(db, conv_id: str, *, user_id: str | None = None) -> dict
     conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
     if not conv: return {"draft": "", "confidence": 0.0, "error": "conv not found"}
     settings = await _load_bot_settings(db)
-    # Merge global ai_provider.system_prompt_base into business_instructions
     ai_cfg = await ai_providers.load_settings(db)
     base = (ai_cfg.get("system_prompt_base") or "").strip()
     biz = settings.get("business_instructions") or ""
@@ -175,10 +200,16 @@ async def suggest_reply(db, conv_id: str, *, user_id: str | None = None) -> dict
     block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
     client_info = await _compile_client_info(db, conv, settings)
     sp = build_system_prompt(tone=settings["tone"],
-                             business_instructions=merged_biz,
+                             company_context=merged_biz,
+                             response_instructions=settings.get("response_instructions") or "",
                              faqs=settings["faqs"], handoff_rules=settings["handoff_rules"],
                              bot_name=settings.get("bot_name", "Bot"),
-                             client_info=client_info)
+                             client_info=client_info,
+                             tone_dialect=settings.get("tone_dialect") or "cordobes",
+                             response_length_limit=settings.get("response_length_limit") or "conciso",
+                             writing_rules=settings.get("writing_rules"),
+                             company_workflow_steps=settings.get("company_workflow_steps"),
+                             custom_client_fields=settings.get("custom_client_fields"))
     asst_provider = ai_cfg.get("provider", "built_in")
     asst_model = ai_cfg.get("model", "gpt-4o-mini")
     try:
@@ -203,7 +234,6 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
 
     Returns the bot_event dict that was persisted.
     """
-    # 1) Idempotency lock
     if not force and triggered_by_message_id:
         existing = await db.bot_events.find_one(
             {"triggered_by_message_id": triggered_by_message_id}, {"_id": 0})
@@ -219,7 +249,7 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
     }
     try:
         await db.bot_events.insert_one(dict(event))
-    except Exception:  # dup key from sparse unique idx
+    except Exception:
         existing = await db.bot_events.find_one(
             {"triggered_by_message_id": triggered_by_message_id}, {"_id": 0})
         return existing or event
@@ -229,7 +259,6 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         if not conv:
             return await _finish(db, event, decision="no_action",
                                  reason="conversation not found")
-        # Global AI provider settings (multi-provider config)
         ai_cfg = await ai_providers.load_settings(db)
         if not ai_cfg.get("ai_enabled", True):
             return await _finish(db, event, decision="no_action",
@@ -237,12 +266,10 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         settings = await _load_bot_settings(db)
         work_areas = await db.work_areas.find({}, {"_id": 0}).to_list(100)
 
-        # Guard: should bot run?
         if not conversation_bot_should_run(conv, settings):
             return await _finish(db, event, decision="no_action",
                                  reason="bot disabled or human handling")
 
-        # Load context
         N = int(settings.get("recent_messages_context_max") or 12)
         msgs = await db.messages.find({"conversation_id": conv_id}, {"_id": 0}) \
             .sort("created_at", -1).to_list(N)
@@ -250,14 +277,12 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         last_inbound = next((m for m in reversed(msgs) if m.get("sender_type") == "contact"), None)
         last_text = (last_inbound or {}).get("body", "") if last_inbound else ""
 
-        # Pre-LLM hard rules
         forced_handoff_reason = None
         if _RX_SENSITIVE.search(last_text):
             forced_handoff_reason = "Datos sensibles detectados (DNI/CBU/tarjeta)"
         elif _RX_HUMAN_REQ.search(last_text):
-            forced_handoff_reason = "El cliente solicit\u00f3 hablar con un humano"
+            forced_handoff_reason = "El cliente solicitó hablar con un humano"
         elif cs.detect_negotiation(last_text):
-            # Hard rule: pricing/negotiation goes straight to a human, no LLM call.
             event["catalog_intent"] = "negotiation"
             human_reason = "Negociación o pricing — necesita asesor humano"
             await db.conversations.update_one(
@@ -280,7 +305,6 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             return await _finish(db, event, decision="require_human",
                                  reason=human_reason)
 
-        # Catalog hook — inject real product data when the message looks commercial and catalog reading is enabled
         cat_intent = cs.detect_commercial_intent(last_text)
         catalog_block = ""
         products_returned = 0
@@ -294,7 +318,6 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         event["catalog_products_returned"] = products_returned
         event["raw_input_excerpt"] = (last_text or "")[:240]
 
-        # Call LLM unless forced handoff (still call for summary)
         block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
         base = (ai_cfg.get("system_prompt_base") or "").strip()
         cc = settings.get("company_context") or settings.get("business_instructions") or ""
@@ -307,20 +330,25 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             from utils.scheduling import build_appointment_context
             appointment_context = await build_appointment_context(db, conv, settings)
 
-        sp = build_system_prompt(tone=settings["tone"],
-                                 company_context=merged_cc,
-                                 response_instructions=settings.get("response_instructions") or "",
-                                 faqs=settings["faqs"],
-                                 handoff_rules=settings["handoff_rules"],
-                                 bot_name=settings.get("bot_name", "Bot"),
-                                 client_info=client_info,
-                                 auto_reply_enabled=ai_cfg.get("whatsapp_auto_reply_enabled", True),
-                                 work_areas=work_areas,
-                                 appointment_context=appointment_context if appointment_context else None)
+        sp = build_system_prompt(
+            tone=settings["tone"],
+            company_context=merged_cc,
+            response_instructions=settings.get("response_instructions") or "",
+            faqs=settings["faqs"],
+            handoff_rules=settings["handoff_rules"],
+            bot_name=settings.get("bot_name", "Bot"),
+            client_info=client_info,
+            auto_reply_enabled=ai_cfg.get("whatsapp_auto_reply_enabled", True),
+            work_areas=work_areas,
+            appointment_context=appointment_context if appointment_context else None,
+            tone_dialect=settings.get("tone_dialect") or "cordobes",
+            response_length_limit=settings.get("response_length_limit") or "conciso",
+            writing_rules=settings.get("writing_rules"),
+            company_workflow_steps=settings.get("company_workflow_steps"),
+            custom_client_fields=settings.get("custom_client_fields"),
+        )
         parsed: dict = {}
         raw = ""
-        # Provider and model are platform-owned. Tenant bot settings only
-        # control behaviour and business context.
         bot_provider = ai_cfg.get("provider", "built_in")
         bot_model = ai_cfg.get("model", "gpt-4o-mini")
         try:
@@ -336,6 +364,21 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                                  reason=f"LLM no disponible: {e}",
                                  error_message=str(e), status="error")
 
+        # Process extracted client profile data (Ficha Personalizada)
+        extracted_profile = parsed.get("extracted_client_profile")
+        if isinstance(extracted_profile, dict) and extracted_profile:
+            clean_profile = {k: str(v) for k, v in extracted_profile.items() if v is not None and str(v).strip()}
+            if clean_profile:
+                event["extracted_client_profile"] = clean_profile
+                cid = conv.get("contact_id")
+                if cid:
+                    sets = {f"custom_fields.{k}": v for k, v in clean_profile.items()}
+                    await db.contacts.update_one({"id": cid}, {"$set": sets})
+                lid = conv.get("lead_id")
+                if lid:
+                    lead_sets = {f"custom_fields.{k}": v for k, v in clean_profile.items()}
+                    await db.leads.update_one({"id": lid}, {"$set": lead_sets})
+
         decision = parsed.get("decision") or "no_action"
         confidence = float(parsed.get("confidence") or 0.0)
         reply = (parsed.get("reply") or "").strip()
@@ -347,15 +390,11 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         evidence = (parsed.get("evidence_for_status_change") or "").strip()
         human_reason = (parsed.get("human_required_reason") or "").strip() or forced_handoff_reason
 
-        # Force handoff overrides
         if forced_handoff_reason:
             decision = "require_human"
             reply = ""
             human_reason = forced_handoff_reason
 
-        # Apply confidence floor: reply requires confidence >= threshold.
-        # Prefer the global ai_provider.min_confidence_for_auto_reply if set,
-        # fallback to bot_settings.confidence_threshold for backwards compat.
         thresh = float(
             ai_cfg.get("min_confidence_for_auto_reply")
             if ai_cfg.get("min_confidence_for_auto_reply") is not None
@@ -365,20 +404,17 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             decision = "require_human"
             human_reason = human_reason or f"Confianza baja ({confidence:.2f} < {thresh:.2f})"
 
-        # Enforce classification-only if whatsapp_auto_reply_enabled is False
         if decision == "reply_with_bot" and not ai_cfg.get("whatsapp_auto_reply_enabled", True):
             event["auto_reply_suppressed"] = True
             decision = "update_status_only"
             reply = ""
 
-        # Execute decision
         conv_set: dict[str, Any] = {"detected_intent": intent or None,
                                     "confidence": confidence,
                                     "next_best_action": nba}
         notif_payload = None
 
         if decision == "reply_with_bot" and reply and wa_send is not None:
-            # This block won't execute because of the suppression above, kept for structure
             try:
                 await wa_send(conv, reply)
                 await db.messages.insert_one({
@@ -417,20 +453,19 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                     conv_set["assigned_work_area"] = target_work_area
                     conv_set["assigned_to"] = None
                 else:
-                    # Route handoff to the configured default user if specified
                     handoff_uid = settings.get("default_handoff_user_id")
                     if handoff_uid:
                         conv_set["assigned_to"] = handoff_uid
                     if conv.get("lead_id"):
                         await db.leads.update_one({"id": conv["lead_id"]}, {"$set": {"assigned_to": handoff_uid}})
             else:
-                # Auto-handoff disabled — just notify, keep bot armed
                 event["auto_handoff_suppressed"] = True
                 conv_set["human_required_reason"] = human_reason or "Derivación sugerida por el bot"
             notif_payload = ("handoff_required",
                              f"Derivación a humano · {conv.get('contact_id','')}",
                              (conv_set.get("human_required_reason") or "")[:160])
             event["decision"] = "require_human"
+            event["human_required_reason"] = human_reason or conv_set.get("human_required_reason")
         elif decision == "update_status_only":
             event["decision"] = "update_status_only"
         elif decision == "schedule_appointment":
@@ -504,8 +539,6 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                     if mode == "people" and assigned_to and not conv.get("assigned_to"):
                         conv_set["assigned_to"] = assigned_to
                     
-                    # Send notification to assigned agent or generic
-                    target_uid = conv.get("assigned_to")
                     cname = client_info.splitlines()[0] if client_info else "un cliente"
                     notif_payload = (
                         "appointment_created",
@@ -513,7 +546,6 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                         f"El bot agendó una cita para el {start_dt.astimezone(ZoneInfo(slot['timezone'])).strftime('%d/%m %H:%M')}"
                     )
                     
-                    # If we need to send a confirmation reply
                     if reply and wa_send is not None:
                         try:
                             await wa_send(conv, reply)
@@ -677,7 +709,6 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         else:
             event["decision"] = "no_action"
 
-        # Status changes (if evidence present)
         if evidence and bot_status_suggested in BOT_STATUSES \
                 and bot_status_suggested != conv.get("bot_status"):
             event["bot_status_change"] = {"from": conv.get("bot_status"),
@@ -713,12 +744,10 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                     event["sale_close_blocked"] = True
                     event["error_message"] = f"sale close blocked: {exc}"
 
-        # Summary
         if summary_new:
             conv_set["summary"] = summary_new
             conv_set["last_summary_at"] = _now_iso()
 
-        # Persist conversation updates
         if conv_set:
             await db.conversations.update_one({"id": conv_id}, {"$set": conv_set})
             if conv_set.get("bot_enabled") is False and conv.get("bot_enabled", True) is True:
@@ -736,7 +765,6 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                     "channel": "whatsapp",
                 })
 
-        # Notifications
         if notif_payload:
             kind, title, msg = notif_payload
             target_uid = conv_set.get("assigned_to") or conv.get("assigned_to")
@@ -744,74 +772,77 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             targets = []
             assigned_wa = conv_set.get("assigned_work_area") or conv.get("assigned_work_area")
             if assigned_wa:
-                from utils.tenancy import get_organization_id
-                all_active = await db.memberships.find({
-                    "organization_id": get_organization_id(),
-                    "status": "active",
-                }, {"_id": 0, "user_id": 1, "work_areas": 1}).to_list(100)
-                if not all_active:
-                    all_active = await db.users.find({
-                        "active": True, "deleted_at": None,
-                    }, {"_id": 0, "user_id": 1, "work_areas": 1}).to_list(100)
-                targets = [
-                    u["user_id"] for u in all_active
-                    if u.get("work_areas") and assigned_wa in u["work_areas"]
-                ]
+                try:
+                    from utils.tenancy import get_organization_id
+                    all_active = await db.memberships.find({
+                        "organization_id": get_organization_id(),
+                        "status": "active",
+                    }, {"_id": 0}).to_list(500)
+                    active_uids = [m["user_id"] for m in all_active]
+                except Exception:
+                    active_uids = []
+                
+                wa_coll = getattr(db, "work_area_members", None)
+                if wa_coll is not None and active_uids:
+                    wa_members = await wa_coll.find({
+                        "work_area_id": assigned_wa,
+                        "user_id": {"$in": active_uids}
+                    }, {"_id": 0}).to_list(500)
+                    targets = [m["user_id"] for m in wa_members]
+                
+                if not targets:
+                    user_coll = getattr(db, "users", None)
+                    if user_coll is not None:
+                        wa_users = await user_coll.find({
+                            "work_areas": assigned_wa,
+                            "active": True
+                        }, {"_id": 0}).to_list(500)
+                        targets = [u["user_id"] for u in wa_users if u.get("user_id")]
+            
+            if not targets and target_uid:
+                targets = [target_uid]
             
             if not targets:
-                if not target_uid:
-                    from utils.tenancy import get_organization_id
-                    admins = await db.memberships.find(
-                        {"organization_id": get_organization_id(),
-                         "role": {"$in": ["admin", "supervisor"]},
-                         "status": "active"}, {"_id": 0, "user_id": 1}).to_list(20)
-                    if not admins:
-                        admins = await db.users.find(
-                            {"role": {"$in": ["admin", "supervisor"]},
-                             "active": True, "deleted_at": None},
-                            {"_id": 0, "user_id": 1},
-                        ).to_list(20)
-                    targets = [a["user_id"] for a in admins] or [None]
-                else:
-                    targets = [target_uid]
+                user_coll = getattr(db, "users", None)
+                if user_coll is not None:
+                    all_users = await user_coll.find({"active": True}, {"_id": 0}).to_list(500)
+                    targets = [u["user_id"] for u in all_users if u.get("user_id")]
+            
+            if not targets:
+                targets = [target_uid or "unassigned"]
+
             for uid in targets:
-                await db.notifications.insert_one({
-                    "id": "ntf_" + uuid.uuid4().hex[:10],
-                    "type": kind, "title": title, "message": msg,
-                    "entity_type": "conversation", "entity_id": conv_id,
-                    "assigned_user_id": uid, "priority": "high",
-                    "read": False, "created_at": _now_iso(),
-                })
+                if uid:
+                    await db.notifications.insert_one({
+                        "id": f"notif_{uuid.uuid4().hex[:12]}",
+                        "type": kind,
+                        "title": title,
+                        "message": msg,
+                        "user_id": uid,
+                        "assigned_user_id": uid,
+                        "is_read": False,
+                        "link": f"/conversaciones?id={conv_id}",
+                        "created_at": _now_iso(),
+                    })
 
-        # Finalize event
-        event.update({
-            "model": settings["model"],
-            "confidence": confidence,
-            "intent": intent,
-            "reply_text": reply if event.get("decision") == "reply_with_bot" else None,
-            "summary_after": summary_new,
-            "human_required_reason": human_reason,
-            "next_best_action": nba,
-            "raw_input_excerpt": block[-3000:],
-            "raw_llm_response": (raw or "")[:8000],
-            "status": event.get("status", "done"),
-        })
-        await db.bot_events.update_one({"event_id": event["event_id"]},
-                                       {"$set": event}, upsert=True)
-        return event
+        return await _finish(db, event, decision=decision, status="completed")
+
     except Exception as e:
-        logger.exception("bot pipeline failed")
-        event.update({"status": "error", "error_message": str(e)[:500],
-                      "decision": "no_action"})
-        await db.bot_events.update_one({"event_id": event["event_id"]},
-                                       {"$set": event}, upsert=True)
-        return event
+        logger.exception("bot pipeline error for conv=%s", conv_id)
+        return await _finish(db, event, decision="no_action",
+                             reason=f"Excepción interna: {e}",
+                             error_message=str(e), status="error")
 
 
-async def _finish(db, event: dict, *, decision: str, reason: str,
-                  error_message: str | None = None, status: str = "done") -> dict:
-    event.update({"decision": decision, "human_required_reason": reason,
-                  "status": status, "error_message": error_message})
-    await db.bot_events.update_one({"event_id": event["event_id"]},
-                                   {"$set": event}, upsert=True)
+async def _finish(db, event: dict, *, decision: str, reason: str = "",
+                  error_message: str = "", status: str = "completed") -> dict:
+    event["status"] = status
+    event["decision"] = decision
+    if reason:
+        event["reason"] = reason
+        event["human_required_reason"] = reason
+    if error_message: event["error_message"] = error_message
+    event["completed_at"] = _now_iso()
+    await db.bot_events.update_one(
+        {"event_id": event["event_id"]}, {"$set": event})
     return event

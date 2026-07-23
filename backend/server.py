@@ -5490,6 +5490,11 @@ class BotSettingsUpdate(BaseModel):
     faqs: Optional[List[dict]] = None
     handoff_rules: Optional[str] = None
     tone: Optional[str] = None
+    tone_dialect: Optional[str] = None
+    response_length_limit: Optional[str] = None
+    writing_rules: Optional[dict] = None
+    company_workflow_steps: Optional[List[str]] = None
+    custom_client_fields: Optional[List[dict]] = None
     provider: Optional[str] = None
     model: Optional[str] = None
     bot_name: Optional[str] = None

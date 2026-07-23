@@ -117,8 +117,8 @@ def extract_product_query(text: str) -> str:
 
 _FIELDS = ("name", "sku", "category", "price", "currency", "promo_price",
            "stock_status", "description", "commercial_conditions",
-           "image_url", "external_link", "tags", "promo_status",
-           "promo_units_remaining", "effective_price")
+           "image_url", "external_link", "tags", "keywords", "aliases",
+           "promo_status", "promo_units_remaining", "effective_price")
 
 
 def _trim(p: dict) -> dict:
@@ -135,25 +135,32 @@ def _trim(p: dict) -> dict:
 async def search_catalog(db, query: str, limit: int = 5) -> list[dict]:
     """Look up active, non-deleted products matching ``query``.
 
-    Strategy: SKU exact (case-insensitive) → regex on name/tags/description → top by
-    category-popularity fallback when query is empty.
+    Strategy: SKU exact → Multi-field match (name, SKU, category, tags, keywords, aliases, description).
     """
     base = {"deleted_at": None, "active": True}
     q = (query or "").strip()
 
     if q:
-        sku_doc = await db.products.find_one(
-            {**base, "sku": q.upper()}, {"_id": 0})
+        # SKU exact
+        sku_doc = await db.products.find_one({**base, "sku": q.upper()}, {"_id": 0})
         if sku_doc:
             return [_trim(sku_doc)]
-        rx = re.compile(re.escape(q.split()[0]) if " " in q else re.escape(q),
-                        re.IGNORECASE)
-        cursor = db.products.find(
-            {**base, "$or": [
+
+        tokens = [t for t in q.split() if len(t) >= 2]
+        or_clauses = []
+        for tok in (tokens if tokens else [q]):
+            rx = re.compile(re.escape(tok), re.IGNORECASE)
+            or_clauses.extend([
                 {"name": {"$regex": rx}},
+                {"sku": {"$regex": rx}},
+                {"category": {"$regex": rx}},
                 {"tags": {"$regex": rx}},
+                {"keywords": {"$regex": rx}},
+                {"aliases": {"$regex": rx}},
                 {"description": {"$regex": rx}},
-            ]}, {"_id": 0}).sort("name", 1)
+            ])
+
+        cursor = db.products.find({**base, "$or": or_clauses}, {"_id": 0}).sort("name", 1)
         rows = await cursor.to_list(limit)
         if rows:
             return [_trim(r) for r in rows]
@@ -201,6 +208,9 @@ def format_catalog_for_llm(products: list[dict]) -> str:
             lines.append(f"   Stock: {p['stock_status']}")
         if p.get("tags"):
             lines.append(f"   Tags: {', '.join(p['tags'])}")
+        if p.get("keywords") or p.get("aliases"):
+            kw_alias = (p.get("keywords") or []) + (p.get("aliases") or [])
+            lines.append(f"   Sinónimos / Términos clave: {', '.join(kw_alias)}")
         if p.get("commercial_conditions"):
             lines.append(f"   Condiciones: {p['commercial_conditions'][:160]}")
         if p.get("description"):
