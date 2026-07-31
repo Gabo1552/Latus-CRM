@@ -221,6 +221,124 @@ class TestAIVariableSettlement:
         assert amounts["ai_amount_ars"] == 4_125
         assert amounts["total_amount_ars"] == 49_125
 
+    def test_simulation_matches_real_variable_charge_without_side_effects(self, srv, monkeypatch):
+        server, fake, client = srv
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        organization_id = organization["organization_id"]
+        _run(fake.organizations.update_one(
+            {"organization_id": organization_id},
+            {"$set": {
+                "plan_code": "starter",
+                "ai_variable_billing": {
+                    "state": "simulation",
+                    "billing_start_date": "2026-07-01T00:00:00+00:00",
+                },
+            }},
+        ))
+        _run(fake.ai_usage_logs.insert_one({
+            "organization_id": organization_id,
+            "created_at": "2026-07-10T12:00:00+00:00",
+            "status": "success", "total_tokens": 1_000,
+            "provider_cost_usd": 1.0, "base_cost_usd": 1.0,
+            "ai_fee_percent": 20.0, "ai_fee_usd": 0.2,
+            "billable_cost_usd": 1.2, "cost_source": "provider_response",
+        }))
+        configured = client.put(
+            "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
+            json={"usd_to_ars_rate": 1000, "fx_buffer_percent": 10},
+        )
+        assert configured.status_code == 200
+
+        provider_calls = []
+        async def fail_if_called(*args, **kwargs):
+            provider_calls.append((args, kwargs))
+            raise AssertionError("La simulación no debe llamar a Mercado Pago")
+        monkeypatch.setattr(server, "_mercadopago_request", fail_if_called)
+        before_statements = len(fake.ai_billing_statements.docs)
+        before_events = len(fake.billing_events.docs)
+        before_org = dict(_run(fake.organizations.find_one({"organization_id": organization_id})))
+
+        response = client.post(
+            "/api/platform/ai-billing/simulate", headers=_h("T-ADMIN"),
+            json={
+                "organization_id": organization_id,
+                "period_start": "2026-07-01",
+                "period_end": "2026-07-31",
+            },
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["simulation"] is True
+        assert result["side_effects"] == {
+            "database_writes": False,
+            "provider_calls": False,
+            "mercadopago_charges": False,
+        }
+        assert result["usage"]["total_tokens"] == 1_000
+        assert result["usage"]["operational_token_limit"] == 250_000
+        assert result["usage"]["base_cost_usd"] == pytest.approx(1.0)
+        assert result["usage"]["ai_fee_usd"] == pytest.approx(0.2)
+        assert result["usage"]["effective_fee_percent"] == pytest.approx(20.0)
+        assert result["usage"]["billable_cost_usd"] == pytest.approx(1.2)
+        assert result["amounts"]["ai_amount_ars"] == 1_320
+        assert result["amounts"]["total_amount_ars"] == 46_320
+        assert result["rates"]["buffer_source"] == "global"
+        assert provider_calls == []
+        assert len(fake.ai_billing_statements.docs) == before_statements
+        assert len(fake.billing_events.docs) == before_events
+        assert _run(fake.organizations.find_one({"organization_id": organization_id})) == before_org
+
+    def test_simulation_filters_an_inclusive_date_range(self, srv):
+        _, fake, client = srv
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        organization_id = organization["organization_id"]
+        for created_at, cost in (
+            ("2026-07-05T12:00:00+00:00", 1.2),
+            ("2026-07-12T12:00:00+00:00", 2.4),
+        ):
+            _run(fake.ai_usage_logs.insert_one({
+                "organization_id": organization_id,
+                "created_at": created_at, "status": "success", "total_tokens": 100,
+                "base_cost_usd": cost / 1.2, "ai_fee_usd": cost / 6,
+                "billable_cost_usd": cost,
+            }))
+        assert client.put(
+            "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
+            json={"usd_to_ars_rate": 1000},
+        ).status_code == 200
+        response = client.post(
+            "/api/platform/ai-billing/simulate", headers=_h("T-ADMIN"),
+            json={
+                "organization_id": organization_id,
+                "period_start": "2026-07-01",
+                "period_end": "2026-07-10",
+            },
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["usage"]["calls"] == 1
+        assert result["usage"]["billable_cost_usd"] == pytest.approx(1.2)
+        assert result["period"]["start"] == "2026-07-01T00:00:00+00:00"
+        assert result["period"]["end"] == "2026-07-11T00:00:00+00:00"
+
+    def test_simulation_rejects_invalid_period_and_non_platform_user(self, srv):
+        _, _, client = srv
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        payload = {"organization_id": organization["organization_id"]}
+        assert client.post(
+            "/api/platform/ai-billing/simulate", headers=_h("T-AGENT"), json=payload,
+        ).status_code == 403
+        invalid = client.post(
+            "/api/platform/ai-billing/simulate", headers=_h("T-ADMIN"),
+            json={**payload, "period_start": "fecha-invalida"},
+        )
+        assert invalid.status_code == 400
+        reversed_period = client.post(
+            "/api/platform/ai-billing/simulate", headers=_h("T-ADMIN"),
+            json={**payload, "period_start": "2026-07-20", "period_end": "2026-07-10"},
+        )
+        assert reversed_period.status_code == 400
+
     def test_policy_requires_exchange_rate_before_enabling(self, srv):
         _, _, client = srv
         default = client.get("/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"))

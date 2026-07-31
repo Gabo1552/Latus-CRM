@@ -345,86 +345,149 @@ function CreateCompanyModal({ onClose, onCreate, creating }) {
 }
 
 function SimulationModal({ organizationId, orgName, onClose }) {
+  const [periodStart, setPeriodStart] = useState("");
+  const [periodEnd, setPeriodEnd] = useState("");
   const simulationQ = useQuery({
-    queryKey: ["ai-simulation", organizationId],
-    queryFn: () => api.post("/platform/ai-billing/simulate", { organization_id: organizationId }).then((r) => r.data),
+    queryKey: ["ai-simulation", organizationId, periodStart, periodEnd],
+    queryFn: () => api.post("/platform/ai-billing/simulate", {
+      organization_id: organizationId,
+      period_start: periodStart || undefined,
+      period_end: periodEnd || undefined,
+    }).then((r) => r.data),
   });
 
   const sim = simulationQ.data;
+  const usage = sim?.usage || {};
+  const rates = sim?.rates || {};
+  const amounts = sim?.amounts || {};
+  const profitability = sim?.profitability || {};
+  const state = AI_BILLING_STATES[sim?.organization_billing_state] || AI_BILLING_STATES.disabled;
+  const money = (value) => Number(value || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const dateLabel = (value, endExclusive = false) => {
+    if (!value) return "—";
+    const parsed = new Date(value);
+    if (endExclusive) parsed.setMilliseconds(parsed.getMilliseconds() - 1);
+    return parsed.toLocaleDateString("es-AR", { timeZone: "UTC" });
+  };
+  const errorMessage = simulationQ.error?.response?.data?.detail || "No se pudo obtener la simulación de liquidación.";
 
   return (
     <div className="fixed inset-0 z-[100] grid place-items-center bg-latus-ink/55 p-4" role="dialog" aria-modal="true">
-      <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-[24px] border border-white/10 bg-latus-cream shadow-2xl">
+      <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-[24px] border border-white/10 bg-latus-cream shadow-2xl">
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-latus-warm-border bg-white px-6 py-5">
           <div>
             <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-0.5 text-xs font-black text-amber-800">
-              ⚡ MODO SIMULACIÓN DE PRUEBA
+              MODO SIMULACIÓN · SIN CARGOS
             </span>
-            <h2 className="mt-1 text-xl font-extrabold text-latus-ink">Simulación de Liquidación - {orgName}</h2>
+            <h2 className="mt-1 text-xl font-extrabold text-latus-ink">Proyección de liquidación · {orgName}</h2>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-2 text-latus-muted hover:bg-latus-cream"><X className="h-5 w-5" /></button>
         </div>
 
         <div className="p-6 space-y-5">
-          <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-4 text-xs text-amber-900 leading-relaxed">
-            <strong>💡 Nota de Simulación:</strong> Este cálculo previo muestra el período facturado, consumo de IA, costo del proveedor, fee de Latus y cotización oficial sin realizar ningún cambio ni cargo en Mercado Pago.
+          <div className="flex gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-xs leading-relaxed text-emerald-900">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+            <p><strong>Simulación aislada.</strong> Consulta el consumo ya registrado y aplica las reglas vigentes. No guarda liquidaciones, no llama a proveedores y no genera cargos en Mercado Pago.</p>
+          </div>
+
+          <div className="grid gap-3 rounded-xl border border-latus-warm-border bg-white p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+            <label className="text-xs font-bold text-latus-ink">Desde
+              <Input type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} max={periodEnd || undefined} className="mt-1 h-9 border-latus-warm-border" />
+            </label>
+            <label className="text-xs font-bold text-latus-ink">Hasta, inclusive
+              <Input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} min={periodStart || undefined} className="mt-1 h-9 border-latus-warm-border" />
+            </label>
+            <Button type="button" variant="outline" onClick={() => simulationQ.refetch()} disabled={simulationQ.isFetching} className="h-9 border-latus-warm-border">
+              <RefreshCw className={`h-4 w-4 ${simulationQ.isFetching ? "animate-spin" : ""}`} />Actualizar
+            </Button>
+            <p className="text-[11px] text-latus-muted sm:col-span-3">Sin fechas manuales se proyecta el ciclo actual pendiente de la empresa.</p>
           </div>
 
           {simulationQ.isLoading ? (
             <div className="grid min-h-[200px] place-items-center"><div className="h-8 w-8 animate-spin rounded-full border-2 border-latus-blue border-t-transparent" /></div>
           ) : sim ? (
             <div className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-xl border border-latus-warm-border bg-white p-4">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-latus-muted">Período Facturado</p>
-                  <p className="mt-1 text-sm font-extrabold text-latus-ink">{sim.period_start?.slice(0, 10)} → {sim.period_end?.slice(0, 10)}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-latus-muted">Período proyectado</p>
+                  <p className="mt-1 text-sm font-extrabold text-latus-ink">{dateLabel(sim.period?.start)} → {dateLabel(sim.period?.end, true)}</p>
                 </div>
                 <div className="rounded-xl border border-latus-warm-border bg-white p-4">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-latus-muted">Consumo Consolidado</p>
-                  <p className="mt-1 text-sm font-extrabold text-latus-ink">{sim.usage_summary?.calls || 0} llamadas ({Number(sim.usage_summary?.total_tokens || 0).toLocaleString()} tokens)</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-latus-muted">Consumo consolidado</p>
+                  <p className="mt-1 text-sm font-extrabold text-latus-ink">{usage.calls || 0} llamadas</p>
+                  <p className="mt-0.5 text-xs text-latus-muted">{Number(usage.total_tokens || 0).toLocaleString("es-AR")} tokens</p>
                 </div>
                 <div className="rounded-xl border border-latus-warm-border bg-white p-4">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-latus-muted">Cotización USD → ARS</p>
-                  <p className="mt-1 text-sm font-extrabold text-latus-ink">$ {Number(sim.usd_to_ars_rate || 0).toLocaleString("es-AR")} <span className="text-xs text-latus-muted">(+{sim.fx_buffer_percent}% colchón)</span></p>
+                  <p className="mt-1 text-sm font-extrabold text-latus-ink">$ {Number(rates.usd_to_ars_rate || 0).toLocaleString("es-AR")}</p>
+                  <p className="mt-0.5 text-xs text-latus-muted">{rates.exchange_rate_source || "manual"} · +{rates.fx_buffer_percent || 0}% colchón</p>
+                </div>
+                <div className="rounded-xl border border-latus-warm-border bg-white p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-latus-muted">Estado de la empresa</p>
+                  <span className={`mt-1 inline-flex rounded-full border px-2.5 py-1 text-xs font-extrabold ${state.tone}`}>{state.label}</span>
+                  <p className="mt-1 text-[10px] text-latus-muted">Buffer: {rates.buffer_source === "organization" ? "propio" : "global"}</p>
                 </div>
               </div>
 
               <div className="rounded-xl border border-latus-warm-border bg-white overflow-hidden text-xs">
-                <div className="border-b border-latus-warm-border bg-latus-cream/40 px-4 py-3 font-extrabold text-latus-ink">Desglose Financiero Estimado</div>
-                <div className="divide-y divide-latus-warm-border p-4 space-y-2.5">
+                <div className="border-b border-latus-warm-border bg-latus-cream/40 px-4 py-3 font-extrabold text-latus-ink">Desglose económico estimado</div>
+                <div className="space-y-2.5 p-4">
                   <div className="flex justify-between">
-                    <span className="text-latus-muted">Precio del Plan Comercial ({sim.plan_name}):</span>
-                    <span className="font-extrabold text-latus-ink">$ {Number(sim.plan_amount_ars || 0).toLocaleString("es-AR")} ARS</span>
+                    <span className="text-latus-muted">Plan comercial ({sim.plan_name})</span>
+                    <span className="font-extrabold text-latus-ink">$ {money(amounts.plan_amount_ars)} ARS</span>
                   </div>
                   <div className="flex justify-between pt-2">
-                    <span className="text-latus-muted">Costo Base del Proveedor (USD):</span>
-                    <span className="font-mono text-slate-600">USD ${Number(sim.usage_summary?.base_cost_usd || 0).toFixed(4)}</span>
+                    <span className="text-latus-muted">Costo directo del proveedor</span>
+                    <span className="font-mono text-slate-600">USD {Number(usage.base_cost_usd || 0).toFixed(6)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-latus-muted">Fee Latus (%) Ganancia Bruta:</span>
-                    <span className="font-mono text-emerald-700 font-bold">+ USD ${Number(sim.usage_summary?.ai_fee_usd || 0).toFixed(4)}</span>
+                    <span className="text-latus-muted">Fee Latus congelado en los consumos ({usage.effective_fee_percent || 0}% efectivo)</span>
+                    <span className="font-mono font-bold text-emerald-700">+ USD {Number(usage.ai_fee_usd || 0).toFixed(6)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-latus-muted">Total Excedente IA (USD Facturable):</span>
-                    <span className="font-mono font-bold text-latus-ink">USD ${Number(sim.billable_cost_usd || 0).toFixed(4)}</span>
+                    <span className="text-latus-muted">Consumo IA facturable</span>
+                    <span className="font-mono font-bold text-latus-ink">USD {Number(usage.billable_cost_usd || 0).toFixed(6)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-latus-muted">Total Excedente IA Convertido a ARS:</span>
-                    <span className="font-mono font-extrabold text-violet-700">$ {Number(sim.ai_amount_ars || 0).toLocaleString("es-AR")} ARS</span>
+                    <span className="text-latus-muted">Consumo IA convertido + colchón</span>
+                    <span className="font-mono font-extrabold text-violet-700">$ {money(amounts.ai_amount_ars)} ARS</span>
                   </div>
                   <div className="flex justify-between pt-3 border-t border-latus-warm-border text-sm font-black">
-                    <span className="text-latus-ink">Total a Recibir del Cliente (Plan + IA):</span>
-                    <span className="text-latus-blue text-base">$ {Number(sim.total_amount_ars || 0).toLocaleString("es-AR")} ARS</span>
+                    <span className="text-latus-ink">Total proyectado al cliente</span>
+                    <span className="text-base text-latus-blue">$ {money(amounts.total_amount_ars)} ARS</span>
                   </div>
-                  <div className="flex justify-between pt-1 text-xs text-emerald-700 font-bold">
-                    <span>Ganancia Neta Estimada de Latus (en esta liquidación):</span>
-                    <span>$ {Number(sim.estimated_latus_net_profit_ars || 0).toLocaleString("es-AR")} ARS</span>
+                  <div className="mt-3 grid gap-2 rounded-lg bg-slate-50 p-3 sm:grid-cols-3">
+                    <div><p className="text-[10px] uppercase text-latus-muted">Costo proveedor ARS</p><p className="font-bold text-latus-ink">$ {money(profitability.provider_cost_ars)}</p></div>
+                    <div><p className="text-[10px] uppercase text-latus-muted">Costo Mercado Pago estimado</p><p className="font-bold text-latus-ink">$ {money(profitability.mp_fee_ars)}</p></div>
+                    <div><p className="text-[10px] uppercase text-latus-muted">Impuestos estimados</p><p className="font-bold text-latus-ink">$ {money(profitability.tax_ars)}</p></div>
+                  </div>
+                  <div className={`mt-3 flex items-center justify-between rounded-lg border p-3 font-bold ${profitability.is_profitable ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
+                    <span>Margen neto estimado de esta liquidación</span>
+                    <span>$ {money(profitability.net_profit_ars)} · {profitability.net_margin_percent || 0}%</span>
                   </div>
                 </div>
               </div>
+
+              <div className="grid gap-3 text-[11px] sm:grid-cols-2">
+                <div className="rounded-xl border border-latus-warm-border bg-white p-4 text-latus-muted">
+                  <p className="font-extrabold text-latus-ink">Trazabilidad del cálculo</p>
+                  <p className="mt-1">Fee configurado actual: {usage.configured_fee_percent ?? 0}% ({usage.fee_source === "organization" ? "empresa" : "global"}). El fee efectivo se calcula con los valores congelados en cada consumo.</p>
+                  <p className="mt-1">Fuentes de costo: {Object.entries(usage.cost_sources || {}).map(([source, count]) => `${source}: ${count}`).join(" · ") || "sin consumos"}.</p>
+                </div>
+                <div className="rounded-xl border border-latus-warm-border bg-white p-4 text-latus-muted">
+                  <p className="font-extrabold text-latus-ink">Supuestos</p>
+                  <p className="mt-1">El límite de {Number(usage.operational_token_limit || 0).toLocaleString("es-AR")} tokens es operativo: no se descuenta como consumo gratuito. El margen no incluye otros costos operativos del plan.</p>
+                </div>
+              </div>
+
+              {profitability.warning && (
+                <div className="flex gap-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs font-bold text-rose-800">
+                  <ShieldAlert className="h-4 w-4 shrink-0" />{profitability.warning}
+                </div>
+              )}
             </div>
           ) : (
-            <p className="text-xs text-rose-600 font-bold">No se pudo obtener la simulación de liquidación.</p>
+            <p className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs font-bold text-rose-700">{errorMessage}</p>
           )}
         </div>
 

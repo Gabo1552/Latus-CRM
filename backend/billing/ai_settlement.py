@@ -160,13 +160,16 @@ def previous_cycle_start(charge_at: datetime) -> datetime:
 
 def summarize_logs(logs: list[dict]) -> dict:
     summary = {"calls": 0, "tokens": 0, "base_cost_usd": 0.0,
-               "ai_fee_usd": 0.0, "billable_cost_usd": 0.0}
+               "ai_fee_usd": 0.0, "billable_cost_usd": 0.0,
+               "cost_sources": {}}
     for log in logs:
         breakdown = billing_breakdown(log)
         summary["calls"] += 1
         summary["tokens"] += int(log.get("total_tokens") or 0)
         for field in ("base_cost_usd", "ai_fee_usd", "billable_cost_usd"):
             summary[field] = round(summary[field] + float(breakdown[field]), 8)
+        source = str(log.get("cost_source") or breakdown.get("cost_source") or "estimated")
+        summary["cost_sources"][source] = summary["cost_sources"].get(source, 0) + 1
     return summary
 
 
@@ -242,22 +245,28 @@ def simulate_settlement(*,
                         usd_to_ars_rate: float,
                         fx_buffer_percent: float = 10.0,
                         included_tokens: int = 250_000,
+                        period_start: str | None = None,
+                        period_end: str | None = None,
+                        exchange_rate_source: str = "not_configured",
+                        exchange_rate_observed_at: str | None = None,
+                        configured_fee_percent: float | None = None,
+                        fee_source: str = "global",
+                        buffer_source: str = "global",
                         mp_fee_percent: float = 4.5,
                         tax_percent: float = 0.0,
                         min_margin_percent: float = 15.0) -> dict:
     """Simulate a settlement statement without modifying Mercado Pago or DB.
 
-    Handles excess token calculation: tokens <= included_tokens are free;
-    excess tokens are converted to USD and ARS.
+    The simulation deliberately uses the same frozen billable cost as the real
+    settlement engine. The plan token limit is operational (it limits calls),
+    not a free monetary allowance to subtract from the variable charge.
     """
     summary = summarize_logs(logs)
     total_tokens = summary["tokens"]
-    excess_tokens = max(0, total_tokens - included_tokens)
-
-    # Ratio of excess tokens to total tokens to calculate billable USD cost
-    excess_ratio = (excess_tokens / total_tokens) if total_tokens > 0 else 0.0
-    billable_cost_usd = round(summary["billable_cost_usd"] * excess_ratio, 6)
-    base_cost_usd = round(summary["base_cost_usd"] * excess_ratio, 6)
+    billable_cost_usd = round(summary["billable_cost_usd"], 8)
+    base_cost_usd = round(summary["base_cost_usd"], 8)
+    ai_fee_usd = round(summary["ai_fee_usd"], 8)
+    effective_fee_percent = round(ai_fee_usd / base_cost_usd * 100.0, 4) if base_cost_usd else 0.0
 
     amounts = calculate_amounts(
         plan_amount_ars=plan_amount_ars,
@@ -278,22 +287,54 @@ def simulate_settlement(*,
 
     return {
         "simulation": True,
+        "side_effects": {
+            "database_writes": False,
+            "provider_calls": False,
+            "mercadopago_charges": False,
+        },
         "organization_id": organization_id,
         "plan_name": plan_name,
+        "period": {
+            "start": period_start,
+            "end": period_end,
+            "timezone": "UTC",
+            "end_exclusive": True,
+        },
+        "usage": {
+            "calls": summary["calls"],
+            "total_tokens": total_tokens,
+            "operational_token_limit": included_tokens,
+            "base_cost_usd": base_cost_usd,
+            "ai_fee_usd": ai_fee_usd,
+            "billable_cost_usd": billable_cost_usd,
+            "configured_fee_percent": configured_fee_percent,
+            "effective_fee_percent": effective_fee_percent,
+            "fee_source": fee_source,
+            "cost_sources": summary["cost_sources"],
+        },
         "period_summary": {
             "calls": summary["calls"],
             "total_tokens": total_tokens,
             "included_tokens": included_tokens,
-            "excess_tokens": excess_tokens,
             "base_cost_usd": base_cost_usd,
+            "ai_fee_usd": ai_fee_usd,
             "billable_cost_usd": billable_cost_usd,
         },
         "rates": {
             "usd_to_ars_rate": usd_to_ars_rate,
+            "exchange_rate_source": exchange_rate_source,
+            "exchange_rate_observed_at": exchange_rate_observed_at,
             "fx_buffer_percent": fx_buffer_percent,
+            "buffer_source": buffer_source,
         },
         "amounts": amounts,
         "profitability": profitability,
+        "assumptions": {
+            "variable_charge_uses_all_frozen_usage": True,
+            "operational_token_limit_is_not_a_free_allowance": True,
+            "plan_operating_costs_are_not_included": True,
+            "mercadopago_fee_percent": mp_fee_percent,
+            "tax_percent": tax_percent,
+        },
         "generated_at": now_iso(),
     }
-

@@ -2,7 +2,7 @@
 
 Covers:
 - Simulation mode
-- Excess token calculation & monthly allowances
+- Operational token limits and full variable-cost projection
 - Profitability margin safety rules
 - Settlement reference format
 - Per-tenant billing policies & state filters
@@ -60,7 +60,7 @@ def test_profitability_calculation_unprofitable_margin_warning():
     assert breakdown["warning"] is not None
 
 
-def test_simulate_settlement_excess_tokens_only():
+def test_simulate_settlement_charges_all_frozen_variable_usage():
     logs = [
         {
             "total_tokens": 300_000,
@@ -76,15 +76,15 @@ def test_simulate_settlement_excess_tokens_only():
         logs=logs,
         usd_to_ars_rate=1200.0,
         fx_buffer_percent=10.0,
-        included_tokens=250_000,  # 50,000 excess tokens out of 300,000 = 1/6
+        included_tokens=250_000,
     )
 
     assert sim["simulation"] is True
     assert sim["period_summary"]["total_tokens"] == 300_000
-    assert sim["period_summary"]["excess_tokens"] == 50_000
-    # 1/6 of 3.6 USD = 0.6 USD billable
-    assert round(sim["period_summary"]["billable_cost_usd"], 2) == 0.60
-    assert sim["amounts"]["ai_amount_ars"] > 0
+    assert sim["usage"]["operational_token_limit"] == 250_000
+    # The plan limit controls availability; it is not a free monetary allowance.
+    assert sim["period_summary"]["billable_cost_usd"] == pytest.approx(3.6)
+    assert sim["amounts"]["ai_amount_ars"] == 4_752
     assert sim["profitability"]["is_profitable"] is True
 
 

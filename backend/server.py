@@ -6608,7 +6608,7 @@ async def platform_simulate_ai_billing(
     payload: AISimulationRequest,
     platform_admin: User = Depends(require_platform_admin),
 ):
-    """Point 2: Simulation Mode engine endpoint."""
+    """Project the next AI settlement without writing data or calling providers."""
     from billing import ai_settlement
     org = await _raw_collection("organizations").find_one({"organization_id": payload.organization_id}, {"_id": 0})
     if not org:
@@ -6629,16 +6629,49 @@ async def platform_simulate_ai_billing(
     if rate <= 0:
         raise HTTPException(400, "Configurá una cotización USD/ARS antes de simular")
 
-    query: dict[str, Any] = {"organization_id": payload.organization_id, "status": "success"}
-    period_start = payload.period_start or org_billing.get("billing_start_date")
-    if period_start:
-        query["created_at"] = {"$gte": period_start}
-    if payload.period_end:
-        query.setdefault("created_at", {})["$lt"] = payload.period_end
+    now = datetime.now(timezone.utc)
 
-    logs = await _raw_collection("ai_usage_logs").find(query, {"_id": 0}).to_list(10_000)
+    def parse_period_boundary(value: Optional[str], *, end: bool = False) -> Optional[datetime]:
+        if not value:
+            return None
+        parsed = ai_settlement.parse_datetime(value)
+        if not parsed:
+            raise HTTPException(400, "El período indicado no tiene una fecha válida")
+        if end and len(str(value).strip()) == 10:
+            parsed += timedelta(days=1)
+        return parsed
+
+    explicit_start = parse_period_boundary(payload.period_start)
+    explicit_end = parse_period_boundary(payload.period_end, end=True)
+    charge_at = _parse_billing_datetime(org.get("current_period_end"))
+    period_end = explicit_end or (min(now, charge_at) if charge_at else now)
+    period_start = explicit_start \
+        or ai_settlement.parse_datetime(org.get("last_ai_settlement_end")) \
+        or ai_settlement.parse_datetime(org.get("provider_last_payment_at")) \
+        or ai_settlement.previous_cycle_start(charge_at or period_end)
+    billing_start = ai_settlement.parse_datetime(org_billing.get("billing_start_date"))
+    if billing_start and billing_start > period_start:
+        period_start = billing_start
+    if period_start >= period_end:
+        raise HTTPException(400, "La fecha desde debe ser anterior a la fecha hasta")
+    if period_end - period_start > timedelta(days=366):
+        raise HTTPException(400, "La simulación admite un período máximo de 366 días")
+
+    query: dict[str, Any] = {
+        "organization_id": payload.organization_id,
+        "status": "success",
+        "created_at": {"$gte": period_start.isoformat(), "$lt": period_end.isoformat()},
+    }
+
+    logs = await _raw_collection("ai_usage_logs").find(query, {"_id": 0}).to_list(100_000)
+    from ai import usage as ai_usage
     from ai.usage import PLAN_MONTHLY_AI_TOKENS
     included_tokens = PLAN_MONTHLY_AI_TOKENS.get(plan_code, 250_000)
+    fee_policy = await ai_usage.load_billing_policy(db)
+    fee_override = org_billing.get("ai_fee_percent")
+    configured_fee = float(
+        fee_override if fee_override is not None else fee_policy["default_fee_percent"]
+    )
 
     simulation = ai_settlement.simulate_settlement(
         organization_id=payload.organization_id,
@@ -6648,9 +6681,17 @@ async def platform_simulate_ai_billing(
         usd_to_ars_rate=rate,
         fx_buffer_percent=fx_buffer,
         included_tokens=included_tokens,
+        period_start=period_start.isoformat(),
+        period_end=period_end.isoformat(),
+        exchange_rate_source=str(policy.get("exchange_rate_source") or "not_configured"),
+        exchange_rate_observed_at=policy.get("exchange_rate_observed_at"),
+        configured_fee_percent=configured_fee,
+        fee_source="organization" if fee_override is not None else "global",
+        buffer_source="organization" if organization_buffer is not None else "global",
     )
     return {
         **simulation,
+        "organization_name": org.get("name") or payload.organization_id,
         "organization_billing_state": org_billing["state"],
         "organization_billing_start_date": org_billing.get("billing_start_date"),
         "organization_fx_buffer_override": organization_buffer,
