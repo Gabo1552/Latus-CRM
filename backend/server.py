@@ -6,9 +6,12 @@ from pymongo.errors import DuplicateKeyError
 import os
 import base64
 import asyncio
+import csv
+import io
 import logging
 import uuid
 import httpx
+import html
 import ssl
 import smtplib
 import hashlib
@@ -6965,9 +6968,7 @@ async def platform_list_ai_settlements(
     platform_admin: User = Depends(require_platform_admin),
 ):
     query = {"organization_id": organization_id} if organization_id else {}
-    items = await _raw_collection("ai_billing_statements").find(
-        query, {"_id": 0}
-    ).sort("created_at", -1).to_list(limit)
+    items = await _billing_statement_items(query, limit)
     from billing import ai_settlement
     policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
     return {
@@ -7298,55 +7299,272 @@ async def platform_retry_ai_settlement(
     return await _retry_failed_ai_statement(stmt, org, policy, platform_admin)
 
 
+AI_STATEMENT_STATUSES = {
+    "pending", "applying", "applied", "paid", "payment_failed", "failed",
+    "retrying", "retry_exhausted", "blocked_margin", "closed_no_charge",
+}
+
+AI_STATEMENT_STATUS_LABELS = {
+    "pending": "Pendiente", "applying": "Aplicando",
+    "applied": "Incluida en la próxima renovación", "paid": "Cobrada",
+    "payment_failed": "Pago rechazado", "failed": "Error técnico",
+    "retrying": "Reintentando", "retry_exhausted": "Reintentos agotados",
+    "blocked_margin": "Bloqueada por rentabilidad",
+    "closed_no_charge": "Cerrada sin saldo",
+}
+
+
+def _billing_statement_query(*, organization_id: str, status: Optional[str] = None,
+                             start_date: Optional[str] = None,
+                             end_date: Optional[str] = None) -> dict:
+    query: dict[str, Any] = {"organization_id": organization_id}
+    if status:
+        if status not in AI_STATEMENT_STATUSES:
+            raise HTTPException(400, "Estado de liquidación inválido")
+        query["status"] = status
+    created_at: dict[str, str] = {}
+    if start_date:
+        if len(start_date.strip()) == 10:
+            try:
+                start = datetime.fromisoformat(start_date.strip()).replace(
+                    tzinfo=ZoneInfo("America/Argentina/Buenos_Aires"),
+                ).astimezone(timezone.utc)
+            except ValueError:
+                start = None
+        else:
+            start = _parse_billing_datetime(start_date)
+        if not start:
+            raise HTTPException(400, "Fecha desde inválida")
+        created_at["$gte"] = start.isoformat()
+    if end_date:
+        if len(end_date.strip()) == 10:
+            try:
+                end = (
+                    datetime.fromisoformat(end_date.strip()).replace(
+                        tzinfo=ZoneInfo("America/Argentina/Buenos_Aires"),
+                    ) + timedelta(days=1)
+                ).astimezone(timezone.utc)
+            except ValueError:
+                end = None
+        else:
+            end = _parse_billing_datetime(end_date)
+        if not end:
+            raise HTTPException(400, "Fecha hasta inválida")
+        created_at["$lt"] = end.isoformat()
+    if created_at:
+        if created_at.get("$gte") and created_at.get("$lt") \
+                and created_at["$gte"] >= created_at["$lt"]:
+            raise HTTPException(400, "La fecha desde debe ser anterior a la fecha hasta")
+        query["created_at"] = created_at
+    return query
+
+
+async def _billing_statement_items(query: dict, limit: int) -> list[dict]:
+    statements = await _raw_collection("ai_billing_statements").find(
+        query, {"_id": 0},
+    ).sort("created_at", -1).to_list(limit)
+    organization_ids = list({
+        statement.get("organization_id") for statement in statements
+        if statement.get("organization_id")
+    })
+    organizations = await _raw_collection("organizations").find(
+        {"organization_id": {"$in": organization_ids}},
+        {"_id": 0},
+    ).to_list(len(organization_ids) or 1)
+    names = {item["organization_id"]: item.get("name") for item in organizations}
+    return [
+        {**statement, "organization_name": names.get(statement.get("organization_id"))}
+        for statement in statements
+    ]
+
+
+def _billing_statements_csv(statements: list[dict]) -> str:
+    def safe_cell(value: Any) -> Any:
+        if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")):
+            return "'" + value
+        return value
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow([
+        "liquidacion_id", "empresa_id", "empresa", "plan", "periodo_desde",
+        "periodo_hasta", "llamadas", "tokens", "costo_proveedor_usd",
+        "fee_latus_usd", "total_ia_usd", "cotizacion_usd_ars",
+        "colchon_cambiario_pct", "plan_ars", "ia_ars", "total_ars", "estado",
+        "intentos", "creada", "aplicada", "cobrada", "pago_id",
+    ])
+    for statement in statements:
+        writer.writerow([safe_cell(value) for value in [
+            statement.get("statement_id"), statement.get("organization_id"),
+            statement.get("organization_name"), statement.get("plan_code"),
+            statement.get("period_start"), statement.get("period_end"),
+            statement.get("calls", 0), statement.get("tokens", 0),
+            statement.get("base_cost_usd", 0), statement.get("ai_fee_usd", 0),
+            statement.get("billable_cost_usd", 0), statement.get("usd_to_ars_rate", 0),
+            statement.get("fx_buffer_percent", 0), statement.get("plan_amount_ars", 0),
+            statement.get("ai_amount_ars", 0), statement.get("total_amount_ars", 0),
+            AI_STATEMENT_STATUS_LABELS.get(statement.get("status"), statement.get("status")),
+            statement.get("retry_count", 0), statement.get("created_at"),
+            statement.get("applied_at"), statement.get("paid_at"),
+            statement.get("provider_payment_id"),
+        ]])
+    return "\ufeff" + output.getvalue()
+
+
+@api_router.get("/billing/statements")
+async def list_billing_statements(
+    status: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    user: User = Depends(get_current_user),
+):
+    """Tenant-scoped billing history; platform access never widens this route."""
+    query = _billing_statement_query(
+        organization_id=user.organization_id, status=status,
+        start_date=start_date, end_date=end_date,
+    )
+    items = await _billing_statement_items(query, limit)
+    return {"items": items, "count": len(items)}
+
+
 @api_router.get("/billing/statements/export")
 async def export_billing_statements(
-    user: User = Depends(require_perm("settings_use")),
+    status: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user: User = Depends(get_current_user),
 ):
-    """Point 5: CSV export endpoint for billing statements."""
-    query = {} if is_platform_admin(user) else {"organization_id": user.organization_id}
-    statements = await _raw_collection("ai_billing_statements").find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    """Export only the current tenant's frozen billing statements."""
+    query = _billing_statement_query(
+        organization_id=user.organization_id, status=status,
+        start_date=start_date, end_date=end_date,
+    )
+    statements = await _billing_statement_items(query, 5000)
+    safe_org = "".join(c for c in str(user.organization_id or "empresa") if c.isalnum() or c in "-_")
+    return Response(
+        content=_billing_statements_csv(statements),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="liquidaciones-{safe_org}.csv"',
+            "Cache-Control": "private, no-store",
+        },
+    )
 
-    lines = ["statement_id,organization_id,plan_code,total_tokens,billable_cost_usd,total_amount_ars,status,created_at"]
-    for s in statements:
-        lines.append(f"{s.get('statement_id')},{s.get('organization_id')},{s.get('plan_code')},{s.get('tokens',0)},{s.get('billable_cost_usd',0.0)},{s.get('total_amount_ars',0.0)},{s.get('status')},{s.get('created_at')}")
 
-    from fastapi.responses import Response
-    return Response(content="\n".join(lines), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="liquidaciones.csv"'})
+@api_router.get("/platform/ai-settlements/export")
+async def platform_export_ai_settlements(
+    organization_id: Optional[str] = None,
+    status: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    query: dict[str, Any] = {}
+    if organization_id and organization_id != "__all__":
+        query = _billing_statement_query(
+            organization_id=organization_id, status=status,
+            start_date=start_date, end_date=end_date,
+        )
+    else:
+        if status:
+            if status not in AI_STATEMENT_STATUSES:
+                raise HTTPException(400, "Estado de liquidación inválido")
+            query["status"] = status
+        date_query = _billing_statement_query(
+            organization_id="__all__", start_date=start_date, end_date=end_date,
+        ).get("created_at")
+        if date_query:
+            query["created_at"] = date_query
+    statements = await _billing_statement_items(query, 10_000)
+    suffix = organization_id if organization_id and organization_id != "__all__" else "global"
+    safe_suffix = "".join(c for c in suffix if c.isalnum() or c in "-_")
+    return Response(
+        content=_billing_statements_csv(statements),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="liquidaciones-{safe_suffix}.csv"',
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @api_router.get("/billing/statements/{statement_id}/receipt")
 async def get_statement_receipt_html(
     statement_id: str,
-    user: User = Depends(require_perm("settings_use")),
+    user: User = Depends(get_current_user),
 ):
-    """Point 5: Printable HTML Receipt for a settlement."""
+    """Printable, non-fiscal statement detail with strict tenant isolation."""
     stmt = await _raw_collection("ai_billing_statements").find_one({"statement_id": statement_id}, {"_id": 0})
     if not stmt:
         raise HTTPException(404, "Liquidación no encontrada")
-    if not is_platform_admin(user) and stmt.get("organization_id") != user.organization_id:
+    if not user.is_platform_admin and stmt.get("organization_id") != user.organization_id:
         raise HTTPException(403, "No tenés permiso para ver esta liquidación")
+    organization = await _raw_collection("organizations").find_one(
+        {"organization_id": stmt.get("organization_id")}, {"_id": 0},
+    ) or {}
 
-    html = f"""<!DOCTYPE html>
-<html>
-<head><title>Comprobante de Liquidación {stmt.get('statement_id')}</title>
-<style>body {{ font-family: sans-serif; padding: 40px; color: #1e293b; }} .box {{ border: 1px solid #e2e8f0; padding: 24px; border-radius: 8px; max-width: 600px; margin: auto; }} h2 {{ color: #0f172a; }} .row {{ display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }} .total {{ font-weight: bold; font-size: 1.2em; color: #2563eb; }}</style>
-</head>
-<body>
-<div class="box">
-  <h2>Comprobante de Liquidación Latus CRM</h2>
-  <p><strong>ID Liquidación:</strong> {stmt.get('statement_id')}</p>
-  <p><strong>Organización:</strong> {stmt.get('organization_id')}</p>
-  <p><strong>Fecha:</strong> {stmt.get('created_at')}</p>
-  <hr/>
-  <div class="row"><span>Plan ({stmt.get('plan_code')}):</span><span>${stmt.get('plan_amount_ars', 0):,.2f} ARS</span></div>
-  <div class="row"><span>Consumo IA Excedente:</span><span>${stmt.get('ai_amount_ars', 0):,.2f} ARS</span></div>
-  <div class="row"><span>Cotización USD/ARS:</span><span>${stmt.get('usd_to_ars_rate', 0):,.2f}</span></div>
-  <div class="row total"><span>Total Liquidado:</span><span>${stmt.get('total_amount_ars', 0):,.2f} ARS</span></div>
-  <p style="margin-top:20px; font-size:0.85em; color:#64748b;">Estado: {stmt.get('status', 'pending').upper()}</p>
+    def esc(value: Any) -> str:
+        return html.escape(str(value or "—"), quote=True)
+
+    def amount(value: Any, currency: str = "ARS") -> str:
+        try:
+            raw = f"{float(value or 0):,.2f}"
+        except (TypeError, ValueError):
+            raw = "0.00"
+        localized = raw.replace(",", "_").replace(".", ",").replace("_", ".")
+        return f"{currency} {localized}"
+
+    status_label = AI_STATEMENT_STATUS_LABELS.get(
+        stmt.get("status"), str(stmt.get("status") or "Pendiente"),
+    )
+    receipt_html = f"""<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'">
+<title>Detalle de liquidación {esc(stmt.get('statement_id'))}</title>
+<style>
+*{{box-sizing:border-box}} body{{margin:0;background:#f7f4ee;color:#102733;font-family:Inter,Segoe UI,Arial,sans-serif;padding:32px}}
+.sheet{{max-width:780px;margin:auto;background:#fff;border:1px solid #e7dfd3;border-radius:22px;overflow:hidden;box-shadow:0 18px 45px rgba(16,39,51,.1)}}
+header{{background:#102733;color:#fff;padding:30px}} h1{{font-size:24px;margin:8px 0}} .eyebrow{{color:#79b9ee;font-size:12px;font-weight:800;letter-spacing:.13em;text-transform:uppercase}}
+.notice{{margin:22px 28px 0;padding:12px 14px;border:1px solid #f1d49b;background:#fff8e8;border-radius:12px;color:#785515;font-size:12px}}
+.content{{padding:28px}} .meta{{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:24px}} .card{{border:1px solid #eee7dc;border-radius:14px;padding:14px}}
+.label{{color:#687b84;font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}} .value{{font-size:14px;font-weight:750;margin-top:5px;word-break:break-word}}
+.row{{display:flex;justify-content:space-between;gap:20px;padding:12px 2px;border-bottom:1px solid #eee7dc;font-size:14px}} .row span:last-child{{font-weight:750;text-align:right}}
+.total{{margin-top:18px;padding:18px;border-radius:14px;background:#eaf5ff;color:#145b91;font-size:18px;font-weight:900;display:flex;justify-content:space-between}}
+.status{{display:inline-block;margin-top:20px;padding:8px 12px;border-radius:999px;background:#eef1f2;font-size:12px;font-weight:800}}
+footer{{padding:18px 28px;border-top:1px solid #eee7dc;color:#687b84;font-size:11px}} @media(max-width:600px){{body{{padding:12px}}.meta{{grid-template-columns:1fr}}.content{{padding:20px}}}}
+@media print{{body{{background:#fff;padding:0}}.sheet{{box-shadow:none;border:0;max-width:none}}}}
+</style></head><body><main class="sheet">
+<header><div class="eyebrow">Latus CRM · Suscripciones</div><h1>Detalle de liquidación</h1><div>{esc(status_label)}</div></header>
+<div class="notice"><strong>Documento informativo no fiscal.</strong> Resume cómo se calculó la liquidación y no reemplaza una factura emitida conforme a ARCA.</div>
+<section class="content"><div class="meta">
+<div class="card"><div class="label">Empresa</div><div class="value">{esc(organization.get('name') or stmt.get('organization_id'))}</div></div>
+<div class="card"><div class="label">Liquidación</div><div class="value">{esc(stmt.get('statement_id'))}</div></div>
+<div class="card"><div class="label">Período de consumo</div><div class="value">{esc(str(stmt.get('period_start') or '')[:10])} al {esc(str(stmt.get('period_end') or '')[:10])}</div></div>
+<div class="card"><div class="label">Fecha de creación</div><div class="value">{esc(stmt.get('created_at'))}</div></div>
 </div>
-</body></html>"""
+<div class="row"><span>Plan ({esc(stmt.get('plan_code'))})</span><span>{amount(stmt.get('plan_amount_ars'))}</span></div>
+<div class="row"><span>Costo del proveedor de IA</span><span>{amount(stmt.get('base_cost_usd'), 'USD')}</span></div>
+<div class="row"><span>Fee de Latus</span><span>{amount(stmt.get('ai_fee_usd'), 'USD')}</span></div>
+<div class="row"><span>Consumo facturable de IA</span><span>{amount(stmt.get('billable_cost_usd'), 'USD')}</span></div>
+<div class="row"><span>Cotización aplicada</span><span>{amount(stmt.get('usd_to_ars_rate'), 'ARS/USD')}</span></div>
+<div class="row"><span>Colchón cambiario</span><span>{esc(stmt.get('fx_buffer_percent') or 0)}%</span></div>
+<div class="row"><span>Consumo de IA convertido</span><span>{amount(stmt.get('ai_amount_ars'))}</span></div>
+<div class="total"><span>Total de la liquidación</span><span>{amount(stmt.get('total_amount_ars'))}</span></div>
+<div class="status">Estado: {esc(status_label)}</div></section>
+<footer>Identificador de empresa: {esc(stmt.get('organization_id'))} · Intentos técnicos: {esc(stmt.get('retry_count') or 0)} · Pago: {esc(stmt.get('provider_payment_id'))}</footer>
+</main></body></html>"""
     from fastapi.responses import HTMLResponse
-    return HTMLResponse(content=html)
+    safe_statement = "".join(c for c in statement_id if c.isalnum() or c in "-_")
+    return HTMLResponse(
+        content=receipt_html,
+        headers={
+            "Content-Disposition": f'inline; filename="liquidacion-{safe_statement}.html"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'self'",
+        },
+    )
 
 
 def _resolve_dashboard_date_range(period: Optional[str], start_date: Optional[str], end_date: Optional[str]):

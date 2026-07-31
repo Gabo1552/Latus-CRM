@@ -193,6 +193,10 @@ El backend de Latus CRM incluye verificaciones de seguridad automáticas al inic
 - La política global permite configurar entre 1 y 10 intentos manuales y una espera de hasta 1440 minutos entre intentos. Cada resultado conserva usuario, email, fecha, número de intento, respuesta del proveedor y error para auditoría.
 - Al alcanzar el máximo, la liquidación queda en **Reintentos agotados** y tampoco puede ser retomada por el scheduler. Los estados de pago rechazado, cobrado, aplicado o bloqueado por rentabilidad no admiten esta recuperación técnica.
 - Un reintento exitoso resuelve las alertas abiertas de actualización de Mercado Pago para esa empresa. Un intento repetido o simultáneo se rechaza de forma idempotente para evitar aplicar el importe dos veces.
+- Cada empresa dispone en **Suscripción > Historial de liquidaciones** de sus períodos congelados, importes de plan e IA, estado del cobro y detalle imprimible. La consulta y el CSV siempre quedan limitados a la empresa de la sesión, incluso si la cuenta también administra la plataforma.
+- El administrador de plataforma puede filtrar el historial por empresa desde **Plataforma** y exportar un CSV global mediante la ruta reservada de plataforma. El archivo incluye costo del proveedor, fee de Latus, conversión, importes, intentos y referencias de pago.
+- El detalle de liquidación es un documento informativo no fiscal y lo indica expresamente. No reemplaza la factura que corresponda emitir por el circuito impositivo de Latus ante ARCA.
+- Los documentos se entregan sin caché, con contenido HTML escapado y política de contenido restrictiva. Una persona de otra empresa recibe acceso denegado aunque conozca el identificador de la liquidación.
 - Los webhooks de pago aprobado o rechazado concilian la liquidación por empresa e importe. El detalle aparece tanto en **Plataforma** como en **Suscripción**.
 - Con la liquidación variable activa, una cancelación se programa al cierre del período: se cobra únicamente el consumo de IA pendiente —sin sumar un nuevo mes del plan— y luego el webhook cancela la renovación. Si no hay saldo de IA, se cancela sin generar un cobro.
 

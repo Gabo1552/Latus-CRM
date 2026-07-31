@@ -2,14 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BadgeDollarSign, Building2, CheckCircle2, FileText, KeyRound, Pencil, RefreshCw,
-  Search, ShieldAlert, Sparkles, Users, X,
+  BadgeDollarSign, Building2, CheckCircle2, Download, FileText, KeyRound, Pencil,
+  ReceiptText, RefreshCw, Search, ShieldAlert, Sparkles, Users, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import AppLayout from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import api from "@/lib/api";
+import { downloadBillingStatements, openBillingStatement } from "@/lib/billingDocuments";
 
 const PLAN_NAMES = { base: "Base heredado", starter: "Inicial", growth: "Crecimiento", scale: "Escala" };
 const SUBSCRIPTION_LABELS = {
@@ -56,19 +57,26 @@ const SETTLEMENT_STATUS = {
   retry_exhausted: "Reintentos agotados",
 };
 
-function AIVariableBillingPanel() {
+function AIVariableBillingPanel({ organizationId = "__all__" }) {
   const qc = useQueryClient();
   const policyQ = useQuery({
     queryKey: ["ai-settlement-policy"],
     queryFn: () => api.get("/platform/ai-settlement-policy").then((r) => r.data),
   });
   const statementsQ = useQuery({
-    queryKey: ["ai-settlements"],
-    queryFn: () => api.get("/platform/ai-settlements?limit=8").then((r) => r.data),
+    queryKey: ["ai-settlements", organizationId],
+    queryFn: () => api.get("/platform/ai-settlements", {
+      params: {
+        limit: 24,
+        organization_id: organizationId !== "__all__" ? organizationId : undefined,
+      },
+    }).then((r) => r.data),
   });
   const [draft, setDraft] = useState(null);
   const [retryStatement, setRetryStatement] = useState(null);
   const [retryConfirmed, setRetryConfirmed] = useState(false);
+  const [exportingStatements, setExportingStatements] = useState(false);
+  const [openingStatementId, setOpeningStatementId] = useState(null);
   useEffect(() => { if (policyQ.data) setDraft(policyQ.data); }, [policyQ.data]);
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["ai-settlement-policy"] });
@@ -126,6 +134,31 @@ function AIVariableBillingPanel() {
       invalidate();
     },
   });
+  const exportStatements = async () => {
+    try {
+      setExportingStatements(true);
+      await downloadBillingStatements(
+        "/platform/ai-settlements/export",
+        { organization_id: organizationId !== "__all__" ? organizationId : undefined },
+        `liquidaciones-${organizationId !== "__all__" ? organizationId : "global"}.csv`,
+      );
+      toast.success("Historial de liquidaciones descargado");
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "No se pudo descargar el historial");
+    } finally {
+      setExportingStatements(false);
+    }
+  };
+  const openStatement = async (statementId) => {
+    try {
+      setOpeningStatementId(statementId);
+      await openBillingStatement(statementId);
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "No se pudo abrir el detalle");
+    } finally {
+      setOpeningStatementId(null);
+    }
+  };
   if (!draft) return null;
   const invalid = Number(draft.usd_to_ars_rate) <= 0 || Number(draft.fx_buffer_percent) < 0
     || Number(draft.settlement_lead_hours) < 1 || Number(draft.max_rate_age_hours) < 12
@@ -194,26 +227,26 @@ function AIVariableBillingPanel() {
       </div>
       <div className="flex flex-col gap-3 border-t border-latus-warm-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <div><p className={`text-xs font-extrabold ${draft.rate_is_fresh ? "text-emerald-700" : "text-amber-700"}`}>{draft.rate_is_fresh ? "Cotización vigente" : "Cotización vencida o no configurada"}</p><p className="mt-1 text-[11px] text-latus-muted">Observada: {draft.exchange_rate_observed_at || "—"} · actualizada: {draft.exchange_rate_updated_at ? new Date(draft.exchange_rate_updated_at).toLocaleString("es-AR") : "—"}</p></div>
-        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => refreshRate.mutate()} disabled={refreshRate.isPending} className="rounded-lg border-latus-warm-border"><RefreshCw className={`h-4 w-4 ${refreshRate.isPending ? "animate-spin" : ""}`} />Actualizar desde BCRA</Button><Button variant="outline" onClick={() => run.mutate()} disabled={!draft.enabled || run.isPending} className="rounded-lg border-latus-warm-border"><FileText className="h-4 w-4" />Procesar empresas activas</Button><Button onClick={() => save.mutate()} disabled={invalid || save.isPending} className="rounded-lg bg-latus-blue text-white hover:bg-latus-blue/90">Guardar política</Button></div>
+        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={exportStatements} disabled={exportingStatements || !rows.length} className="rounded-lg border-latus-warm-border"><Download className="h-4 w-4" />{exportingStatements ? "Preparando..." : "Exportar historial"}</Button><Button variant="outline" onClick={() => refreshRate.mutate()} disabled={refreshRate.isPending} className="rounded-lg border-latus-warm-border"><RefreshCw className={`h-4 w-4 ${refreshRate.isPending ? "animate-spin" : ""}`} />Actualizar desde BCRA</Button><Button variant="outline" onClick={() => run.mutate()} disabled={!draft.enabled || run.isPending} className="rounded-lg border-latus-warm-border"><FileText className="h-4 w-4" />Procesar empresas activas</Button><Button onClick={() => save.mutate()} disabled={invalid || save.isPending} className="rounded-lg bg-latus-blue text-white hover:bg-latus-blue/90">Guardar política</Button></div>
       </div>
       {rows.length > 0 && (
         <div className="overflow-x-auto border-t border-latus-warm-border">
           <table className="w-full min-w-[1120px] text-left text-xs">
-            <thead className="bg-latus-cream text-[10px] font-extrabold uppercase tracking-wider text-latus-muted"><tr><th className="px-5 py-3">Empresa</th><th className="px-4 py-3">Período</th><th className="px-4 py-3 text-right">IA USD</th><th className="px-4 py-3 text-right">IA ARS</th><th className="px-4 py-3 text-right">Plan + IA</th><th className="px-4 py-3">Estado</th><th className="px-4 py-3">Intentos</th><th className="px-5 py-3 text-right">Recuperación</th></tr></thead>
+            <thead className="bg-latus-cream text-[10px] font-extrabold uppercase tracking-wider text-latus-muted"><tr><th className="px-5 py-3">Empresa</th><th className="px-4 py-3">Período</th><th className="px-4 py-3 text-right">IA USD</th><th className="px-4 py-3 text-right">IA ARS</th><th className="px-4 py-3 text-right">Plan + IA</th><th className="px-4 py-3">Estado</th><th className="px-4 py-3">Intentos</th><th className="px-5 py-3 text-right">Acciones</th></tr></thead>
             <tbody className="divide-y divide-latus-warm-border">
               {rows.map((row) => {
                 const attempts = Number(row.retry_count || 0);
                 const canRetry = row.status === "failed" && attempts < Number(retryPolicy.max_attempts || 3);
                 return (
                   <tr key={row.statement_id}>
-                    <td className="px-5 py-3 font-mono">{row.organization_id}</td>
+                    <td className="px-5 py-3"><p className="font-bold text-latus-ink">{row.organization_name || row.organization_id}</p><p className="mt-1 font-mono text-[10px] text-latus-muted">{row.organization_id}</p></td>
                     <td className="px-4 py-3 text-latus-muted">{String(row.period_start).slice(0, 10)} → {String(row.period_end).slice(0, 10)}</td>
                     <td className="px-4 py-3 text-right font-mono">USD {Number(row.billable_cost_usd || 0).toFixed(4)}</td>
                     <td className="px-4 py-3 text-right font-mono">$ {Number(row.ai_amount_ars || 0).toLocaleString("es-AR")}</td>
                     <td className="px-4 py-3 text-right font-extrabold">$ {Number(row.total_amount_ars || 0).toLocaleString("es-AR")}</td>
                     <td className="px-4 py-3"><span className={`rounded-full px-2.5 py-1 font-extrabold ${row.status === "failed" || row.status === "retry_exhausted" ? "bg-rose-100 text-rose-700" : row.status === "retrying" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{SETTLEMENT_STATUS[row.status] || row.status}</span>{row.error && <p className="mt-2 max-w-[240px] truncate text-[10px] text-rose-700" title={row.error}>{row.error}</p>}</td>
                     <td className="px-4 py-3"><span className="font-bold text-latus-ink">{attempts} / {retryPolicy.max_attempts}</span>{row.last_retry_at && <p className="mt-1 text-[10px] text-latus-muted">{new Date(row.last_retry_at).toLocaleString("es-AR")}</p>}</td>
-                    <td className="px-5 py-3 text-right">{canRetry ? <Button type="button" variant="outline" size="sm" onClick={() => { setRetryStatement(row); setRetryConfirmed(false); }} className="border-rose-300 bg-rose-50 text-xs font-bold text-rose-800 hover:bg-rose-100"><RefreshCw className="h-3.5 w-3.5" />Reintentar</Button> : row.status === "payment_failed" ? <span className="text-[10px] font-bold text-amber-700">Revisar pago en Mercado Pago</span> : "—"}</td>
+                    <td className="px-5 py-3"><div className="flex justify-end gap-2"><Button type="button" variant="outline" size="sm" disabled={openingStatementId === row.statement_id} onClick={() => openStatement(row.statement_id)} className="border-latus-warm-border text-xs font-bold"><ReceiptText className="h-3.5 w-3.5" />{openingStatementId === row.statement_id ? "Abriendo..." : "Detalle"}</Button>{canRetry && <Button type="button" variant="outline" size="sm" onClick={() => { setRetryStatement(row); setRetryConfirmed(false); }} className="border-rose-300 bg-rose-50 text-xs font-bold text-rose-800 hover:bg-rose-100"><RefreshCw className="h-3.5 w-3.5" />Reintentar</Button>}</div>{row.status === "payment_failed" && <p className="mt-2 text-right text-[10px] font-bold text-amber-700">Revisar pago en Mercado Pago</p>}</td>
                   </tr>
                 );
               })}
@@ -1002,7 +1035,7 @@ export default function Plataforma() {
           <Button asChild className="shrink-0 bg-latus-blue text-white hover:bg-latus-blue/90"><Link to="/configuracion?tab=ai"><KeyRound className="h-4 w-4" />Configurar IA global</Link></Button>
         </section>
 
-        <AIVariableBillingPanel />
+        <AIVariableBillingPanel organizationId={selectedOrgId} />
 
         <section className="overflow-hidden rounded-[24px] border border-latus-warm-border bg-white shadow-sm">
           <div className="flex flex-col gap-4 border-b border-latus-warm-border p-5 md:flex-row md:items-center md:justify-between">

@@ -888,6 +888,136 @@ class TestAIVariableSettlement:
         ).status_code == 409
         assert len(calls) == 1
 
+    def test_statement_history_is_tenant_scoped_and_filters_local_dates(self, srv):
+        _, fake, client = srv
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        organization_id = organization["organization_id"]
+        _run(fake.organizations.insert_one({
+            "organization_id": "org_other", "name": "Otra empresa", "status": "active",
+        }))
+        for statement_id, target_org, created_at, status in (
+            ("stmt_own_day", organization_id, "2026-07-10T12:00:00+00:00", "paid"),
+            ("stmt_own_next", organization_id, "2026-07-11T12:00:00+00:00", "applied"),
+            ("stmt_other", "org_other", "2026-07-10T12:00:00+00:00", "paid"),
+        ):
+            _run(fake.ai_billing_statements.insert_one({
+                "statement_id": statement_id, "organization_id": target_org,
+                "plan_code": "starter", "status": status, "created_at": created_at,
+                "period_start": "2026-07-01T00:00:00+00:00",
+                "period_end": "2026-07-10T12:00:00+00:00",
+                "total_amount_ars": 46_320,
+            }))
+
+        history = client.get(
+            "/api/billing/statements?end_date=2026-07-10", headers=_h("T-ADMIN"),
+        )
+        assert history.status_code == 200, history.text
+        assert [item["statement_id"] for item in history.json()["items"]] == ["stmt_own_day"]
+        assert history.json()["items"][0]["organization_name"] == organization["name"]
+        assert client.get(
+            "/api/billing/statements?status=no_existe", headers=_h("T-ADMIN"),
+        ).status_code == 400
+        assert client.get(
+            "/api/billing/statements?start_date=2026-07-12&end_date=2026-07-10",
+            headers=_h("T-ADMIN"),
+        ).status_code == 400
+
+    def test_csv_exports_are_escaped_and_platform_export_is_explicit(self, srv):
+        _, fake, client = srv
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        organization_id = organization["organization_id"]
+        special_name = '=HYPERLINK("https://example.invalid"), Estética "Luz" Norte'
+        _run(fake.organizations.update_one(
+            {"organization_id": organization_id}, {"$set": {"name": special_name}},
+        ))
+        _run(fake.organizations.insert_one({
+            "organization_id": "org_csv_other", "name": "Empresa externa", "status": "active",
+        }))
+        common = {
+            "plan_code": "starter", "status": "paid", "calls": 3, "tokens": 1200,
+            "base_cost_usd": 1.0, "ai_fee_usd": 0.2, "billable_cost_usd": 1.2,
+            "usd_to_ars_rate": 1000, "fx_buffer_percent": 10,
+            "plan_amount_ars": 45_000, "ai_amount_ars": 1320,
+            "total_amount_ars": 46_320, "created_at": "2026-07-10T12:00:00+00:00",
+        }
+        _run(fake.ai_billing_statements.insert_one({
+            **common, "statement_id": "stmt_csv_own", "organization_id": organization_id,
+        }))
+        _run(fake.ai_billing_statements.insert_one({
+            **common, "statement_id": "stmt_csv_other", "organization_id": "org_csv_other",
+        }))
+
+        tenant_csv = client.get("/api/billing/statements/export", headers=_h("T-ADMIN"))
+        assert tenant_csv.status_code == 200, tenant_csv.text
+        assert tenant_csv.content.startswith(b"\xef\xbb\xbf")
+        assert "stmt_csv_own" in tenant_csv.text
+        assert "stmt_csv_other" not in tenant_csv.text
+        assert '"\'=HYPERLINK(""https://example.invalid""), Estética ""Luz"" Norte"' in tenant_csv.text
+        assert '"=HYPERLINK' not in tenant_csv.text
+        assert "liquidacion_id,empresa_id,empresa" in tenant_csv.text
+        assert "no-store" in tenant_csv.headers["cache-control"]
+
+        global_csv = client.get(
+            "/api/platform/ai-settlements/export", headers=_h("T-ADMIN"),
+        )
+        assert global_csv.status_code == 200, global_csv.text
+        assert "stmt_csv_own" in global_csv.text
+        assert "stmt_csv_other" in global_csv.text
+        filtered = client.get(
+            "/api/platform/ai-settlements/export?organization_id=org_csv_other",
+            headers=_h("T-ADMIN"),
+        )
+        assert "stmt_csv_other" in filtered.text
+        assert "stmt_csv_own" not in filtered.text
+        assert client.get(
+            "/api/platform/ai-settlements/export", headers=_h("T-AGENT"),
+        ).status_code == 403
+
+    def test_printable_statement_escapes_content_and_enforces_access(self, srv):
+        _, fake, client = srv
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        organization_id = organization["organization_id"]
+        _run(fake.organizations.update_one(
+            {"organization_id": organization_id},
+            {"$set": {"name": "Estética <script>alert(1)</script>"}},
+        ))
+        _run(fake.organizations.insert_one({
+            "organization_id": "org_receipt_other", "name": "Otra", "status": "active",
+        }))
+        detail = {
+            "plan_code": "starter", "status": "paid",
+            "period_start": "2026-07-01T00:00:00+00:00",
+            "period_end": "2026-07-31T00:00:00+00:00",
+            "base_cost_usd": 1, "ai_fee_usd": .2, "billable_cost_usd": 1.2,
+            "usd_to_ars_rate": 1000, "fx_buffer_percent": 10,
+            "plan_amount_ars": 45000, "ai_amount_ars": 1320,
+            "total_amount_ars": 46320, "created_at": "2026-07-31T12:00:00+00:00",
+        }
+        _run(fake.ai_billing_statements.insert_one({
+            **detail, "statement_id": "stmt_receipt", "organization_id": organization_id,
+        }))
+        _run(fake.ai_billing_statements.insert_one({
+            **detail, "statement_id": "stmt_receipt_other",
+            "organization_id": "org_receipt_other",
+        }))
+
+        receipt = client.get(
+            "/api/billing/statements/stmt_receipt/receipt", headers=_h("T-AGENT"),
+        )
+        assert receipt.status_code == 200, receipt.text
+        assert "Documento informativo no fiscal" in receipt.text
+        assert "ARS 46.320,00" in receipt.text
+        assert "Estética &lt;script&gt;alert(1)&lt;/script&gt;" in receipt.text
+        assert "Estética <script>" not in receipt.text
+        assert "default-src 'none'" in receipt.headers["content-security-policy"]
+        assert "no-store" in receipt.headers["cache-control"]
+        assert client.get(
+            "/api/billing/statements/stmt_receipt_other/receipt", headers=_h("T-AGENT"),
+        ).status_code == 403
+        assert client.get(
+            "/api/billing/statements/stmt_receipt_other/receipt", headers=_h("T-ADMIN"),
+        ).status_code == 200
+
     def test_bcra_rate_refresh_parses_official_response(self, srv, monkeypatch):
         _, _, client = srv
         from billing import ai_settlement

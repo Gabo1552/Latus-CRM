@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowRight, BadgeDollarSign, Building2, Check, CheckCircle2, Clock3, CreditCard, RefreshCw,
-  ShieldCheck, Sparkles, Users, UserRoundCheck, XCircle,
+  ArrowRight, BadgeDollarSign, Building2, Check, CheckCircle2, Clock3, CreditCard, Download,
+  ReceiptText, RefreshCw, ShieldCheck, Sparkles, Users, UserRoundCheck, XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import AppLayout from "@/components/AppLayout";
@@ -11,6 +11,9 @@ import { Input } from "@/components/ui/input";
 import api from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { hasPermission } from "@/lib/permissions";
+import {
+  billingStatementStatus, downloadBillingStatements, openBillingStatement,
+} from "@/lib/billingDocuments";
 
 const STATUS = {
   not_configured: { label: "Acceso heredado", tone: "bg-slate-100 text-slate-700" },
@@ -64,6 +67,8 @@ export default function Suscripcion() {
   const qc = useQueryClient();
   const [notes, setNotes] = useState("");
   const [billingEmail, setBillingEmail] = useState(user?.email || "");
+  const [exportingStatements, setExportingStatements] = useState(false);
+  const [openingStatementId, setOpeningStatementId] = useState(null);
   const returnHandled = useRef(false);
   const canManage = user?.role === "admin" || hasPermission(user, "settings_admin");
   const subscriptionQ = useQuery({
@@ -73,6 +78,11 @@ export default function Suscripcion() {
   const plansQ = useQuery({
     queryKey: ["billing-plans"],
     queryFn: () => api.get("/billing/plans").then((response) => response.data),
+  });
+  const statementsQ = useQuery({
+    queryKey: ["billing-statements", user?.organization_id],
+    queryFn: () => api.get("/billing/statements?limit=24").then((response) => response.data),
+    enabled: !!user?.organization_id,
   });
   const requestPlan = useMutation({
     mutationFn: (planCode) => api.post("/billing/plan-requests", { plan_code: planCode, notes }),
@@ -120,7 +130,31 @@ export default function Suscripcion() {
     onError: (error) => toast.error(error.response?.data?.detail || "No se pudo cancelar la suscripción"),
   });
 
+  const exportStatements = async () => {
+    try {
+      setExportingStatements(true);
+      await downloadBillingStatements("/billing/statements/export");
+      toast.success("Historial de liquidaciones descargado");
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "No se pudo descargar el historial");
+    } finally {
+      setExportingStatements(false);
+    }
+  };
+
+  const openStatement = async (statementId) => {
+    try {
+      setOpeningStatementId(statementId);
+      await openBillingStatement(statementId);
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "No se pudo abrir el detalle");
+    } finally {
+      setOpeningStatementId(null);
+    }
+  };
+
   const data = subscriptionQ.data;
+  const statements = statementsQ.data?.items || [];
   const latestAIStatement = data?.ai_billing?.latest_statement;
   const status = STATUS[data?.organization?.subscription_status] || STATUS.not_configured;
   const limits = data?.plan?.limits || {};
@@ -210,6 +244,45 @@ export default function Suscripcion() {
               <p className="text-lg font-black text-latus-ink">Próximo total: {money.format(Number(latestAIStatement.total_amount_ars || 0))}</p>
             </div>
           )}
+        </section>
+
+        <section className="overflow-hidden rounded-[24px] border border-latus-warm-border bg-white shadow-sm" data-testid="billing-statements-history">
+          <div className="flex flex-col gap-3 border-b border-latus-warm-border bg-latus-cream/35 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+            <div className="flex items-center gap-3">
+              <span className="grid h-10 w-10 place-items-center rounded-xl bg-sky-50 text-sky-700"><ReceiptText className="h-5 w-5" /></span>
+              <div><p className="font-extrabold text-latus-ink">Historial de liquidaciones</p><p className="mt-0.5 text-xs text-latus-muted">Importes congelados, estados de cobro y detalle del cálculo de IA.</p></div>
+            </div>
+            <Button type="button" variant="outline" onClick={exportStatements} disabled={exportingStatements || !statements.length} className="rounded-lg border-latus-warm-border bg-white">
+              <Download className="h-4 w-4" />{exportingStatements ? "Preparando..." : "Descargar CSV"}
+            </Button>
+          </div>
+          {statementsQ.isLoading ? (
+            <div className="grid min-h-[150px] place-items-center"><div className="h-8 w-8 animate-spin rounded-full border-2 border-latus-blue border-t-transparent" /></div>
+          ) : statements.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[880px] text-left text-xs">
+                <thead className="bg-white text-[10px] font-extrabold uppercase tracking-wider text-latus-muted"><tr><th className="px-5 py-3">Período</th><th className="px-4 py-3">Estado</th><th className="px-4 py-3 text-right">Consumo IA</th><th className="px-4 py-3 text-right">Plan</th><th className="px-4 py-3 text-right">Total</th><th className="px-5 py-3 text-right">Documento</th></tr></thead>
+                <tbody className="divide-y divide-latus-warm-border">
+                  {statements.map((statement) => {
+                    const meta = billingStatementStatus(statement.status);
+                    return (
+                      <tr key={statement.statement_id} className="hover:bg-latus-cream/35">
+                        <td className="px-5 py-4"><p className="font-bold text-latus-ink">{String(statement.period_start || "").slice(0, 10)} → {String(statement.period_end || "").slice(0, 10)}</p><p className="mt-1 font-mono text-[10px] text-latus-muted">{statement.statement_id}</p></td>
+                        <td className="px-4 py-4"><span className={`inline-flex rounded-full px-2.5 py-1 font-extrabold ${meta.tone}`}>{meta.label}</span></td>
+                        <td className="px-4 py-4 text-right"><p className="font-extrabold text-latus-ink">{money.format(Number(statement.ai_amount_ars || 0))}</p><p className="mt-1 text-[10px] text-latus-muted">{usd.format(Number(statement.billable_cost_usd || 0))}</p></td>
+                        <td className="px-4 py-4 text-right font-bold text-latus-ink">{money.format(Number(statement.plan_amount_ars || 0))}</td>
+                        <td className="px-4 py-4 text-right text-sm font-black text-latus-ink">{money.format(Number(statement.total_amount_ars || 0))}</td>
+                        <td className="px-5 py-4 text-right"><Button type="button" variant="outline" size="sm" disabled={openingStatementId === statement.statement_id} onClick={() => openStatement(statement.statement_id)} className="rounded-lg border-latus-warm-border"><ReceiptText className="h-3.5 w-3.5" />{openingStatementId === statement.statement_id ? "Abriendo..." : "Ver detalle"}</Button></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="px-6 py-10 text-center"><ReceiptText className="mx-auto h-8 w-8 text-latus-muted/45" /><p className="mt-3 font-extrabold text-latus-ink">Todavía no hay liquidaciones</p><p className="mt-1 text-sm text-latus-muted">Cuando se cierre un período de IA, el detalle aparecerá acá.</p></div>
+          )}
+          <div className="border-t border-latus-warm-border bg-sky-50/45 px-5 py-3 text-[11px] text-sky-900 sm:px-6">Los detalles son documentos informativos de liquidación. La factura fiscal correspondiente debe emitirse por el circuito impositivo de Latus.</div>
         </section>
 
         <section>
