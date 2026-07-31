@@ -50,13 +50,17 @@ def _matches(doc, query):
             elif "$ne" in v:
                 if doc.get(k) == v["$ne"]:
                     return False
-            elif "$gte" in v or "$lte" in v:
+            elif "$gte" in v or "$lte" in v or "$gt" in v or "$lt" in v:
                 value = doc.get(k)
                 if value is None:
                     return False
                 if "$gte" in v and value < v["$gte"]:
                     return False
                 if "$lte" in v and value > v["$lte"]:
+                    return False
+                if "$gt" in v and value <= v["$gt"]:
+                    return False
+                if "$lt" in v and value >= v["$lt"]:
                     return False
             elif "$regex" in v:
                 import re
@@ -656,16 +660,96 @@ class TestBillingFoundation:
         server, fake, client = srv
         monkeypatch.setenv("PLATFORM_ADMIN_EMAILS", "admin@latus.test")
 
-        res = client.get("/api/platform/financial-dashboard", headers=_h())
+        current = client.get("/api/organizations/current", headers=_h()).json()
+        organization_id = current["organization_id"]
+        _run(fake.organizations.update_one(
+            {"organization_id": organization_id},
+            {"$set": {
+                "name": "Estética Central", "plan_code": "starter",
+                "subscription_status": "active", "license_status": "active",
+            }},
+        ))
+        _run(fake.organizations.insert_one({
+            "organization_id": "org_fin_other", "name": '=SUM(1,2), Otra empresa',
+            "plan_code": "growth", "subscription_status": "active",
+            "license_status": "active", "status": "active",
+        }))
+        configured = client.put(
+            "/api/platform/ai-settlement-policy", headers=_h(),
+            json={"usd_to_ars_rate": 2000, "fx_buffer_percent": 10},
+        )
+        assert configured.status_code == 200, configured.text
+        _run(fake.ai_usage_logs.insert_one({
+            "organization_id": organization_id, "created_at": "2026-07-15T12:00:00+00:00",
+            "status": "success", "total_tokens": 1000, "provider_cost_usd": 1.0,
+            "ai_fee_usd": .2, "billable_cost_usd": 1.2,
+        }))
+        _run(fake.ai_usage_logs.insert_one({
+            "organization_id": organization_id, "created_at": "2026-08-01T03:00:00+00:00",
+            "status": "success", "total_tokens": 999999, "provider_cost_usd": 100,
+            "ai_fee_usd": 20, "billable_cost_usd": 120,
+        }))
+        _run(fake.ai_billing_statements.insert_one({
+            "statement_id": "stmt_fin_paid", "organization_id": organization_id,
+            "status": "paid", "paid_at": "2026-07-15T12:00:00+00:00",
+            "created_at": "2026-07-14T12:00:00+00:00", "plan_code": "starter",
+            "plan_amount_ars": 45000, "ai_amount_ars": 1320,
+            "total_amount_ars": 46320, "base_cost_usd": 1.0,
+            "ai_fee_usd": .2, "billable_cost_usd": 1.2,
+            "usd_to_ars_rate": 1000, "mp_fee_percent": 5, "tax_percent": 2,
+            "profitability": {
+                "provider_cost_ars": 1000, "mp_fee_ars": 2316,
+                "tax_ars": 926.4, "net_profit_ars": 42077.6,
+            },
+        }))
+        _run(fake.ai_billing_statements.insert_one({
+            "statement_id": "stmt_fin_pending", "organization_id": organization_id,
+            "status": "applied", "created_at": "2026-07-20T12:00:00+00:00",
+            "plan_amount_ars": 45000, "ai_amount_ars": 999999,
+            "total_amount_ars": 1044999,
+        }))
+        _run(fake.ai_billing_statements.insert_one({
+            "statement_id": "stmt_fin_other", "organization_id": "org_fin_other",
+            "status": "paid", "paid_at": "2026-07-18T12:00:00+00:00",
+            "created_at": "2026-07-17T12:00:00+00:00", "plan_code": "growth",
+            "plan_amount_ars": 95000, "ai_amount_ars": 5000,
+            "total_amount_ars": 100000, "base_cost_usd": 2,
+            "ai_fee_usd": .4, "billable_cost_usd": 2.4,
+            "usd_to_ars_rate": 1000,
+            "profitability": {
+                "provider_cost_ars": 2000, "mp_fee_ars": 5000,
+                "tax_ars": 0, "net_profit_ars": 93000,
+            },
+        }))
+
+        res = client.get(
+            f"/api/platform/financial-dashboard?organization_id={organization_id}"
+            "&period=custom&start_date=2026-07-01&end_date=2026-07-31",
+            headers=_h(),
+        )
         assert res.status_code == 200, res.text
         data = res.json()
         assert "summary" in data
         assert "organizations" in data
         summary = data["summary"]
-        assert summary["total_organizations"] >= 1
+        assert summary["total_organizations"] == 1
         assert "total_revenue_ars" in summary
         assert "estimated_net_profit_ars" in summary
         assert "monthly_ai_fee_gross_profit_usd" in summary
+        assert summary["realized_scope"] == "paid_ai_statements"
+        assert summary["realized_statements"] == 1
+        assert summary["realized_total_revenue_ars"] == 46320
+        assert summary["realized_plan_revenue_ars"] == 45000
+        assert summary["realized_ai_revenue_ars"] == 1320
+        assert summary["realized_provider_cost_ars"] == 1000
+        assert summary["realized_mp_fee_ars"] == 2316
+        assert summary["realized_tax_ars"] == 926.4
+        assert summary["realized_net_profit_ars"] == 42077.6
+        assert summary["current_active_mrr_ars"] == 45000
+        assert summary["mrr_active_organizations"] == 1
+        assert summary["projected_ai_revenue_ars"] == 2640
+        assert summary["monthly_ai_provider_cost_usd"] == 1.0
+        assert data["organizations"][0]["realized"]["statements"] == 1
 
         # Test period and company filter
         filtered_res = client.get(
@@ -674,15 +758,28 @@ class TestBillingFoundation:
         )
         assert filtered_res.status_code == 200
         assert filtered_res.json()["summary"]["period"] == "last_30"
+        assert client.get(
+            "/api/platform/financial-dashboard?period=custom&start_date=2026-07-01",
+            headers=_h(),
+        ).status_code == 400
+        assert client.get(
+            "/api/platform/financial-dashboard?period=desconocido", headers=_h(),
+        ).status_code == 400
 
         # Test CSV export endpoint
         csv_res = client.get(
-            "/api/platform/financial-dashboard/export?period=this_month",
+            "/api/platform/financial-dashboard/export?period=custom"
+            "&start_date=2026-07-01&end_date=2026-07-31",
             headers=_h()
         )
         assert csv_res.status_code == 200
         assert "text/csv" in csv_res.headers["content-type"]
-        assert "organization_id,name,plan_name" in csv_res.text
+        assert csv_res.content.startswith(b"\xef\xbb\xbf")
+        assert "empresa_id,empresa,plan" in csv_res.text
+        assert "total_realizado_ars" in csv_res.text
+        assert '"\'=SUM(1,2), Otra empresa"' in csv_res.text
+        assert '"=SUM' not in csv_res.text
+        assert "no-store" in csv_res.headers["cache-control"]
 
     def test_mercadopago_checkout_creates_pending_preapproval(self, srv, monkeypatch):
         server, fake, client = srv

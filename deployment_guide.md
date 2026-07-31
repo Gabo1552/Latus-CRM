@@ -200,6 +200,15 @@ El backend de Latus CRM incluye verificaciones de seguridad automáticas al inic
 - Los webhooks de pago aprobado o rechazado concilian la liquidación por empresa e importe. El detalle aparece tanto en **Plataforma** como en **Suscripción**.
 - Con la liquidación variable activa, una cancelación se programa al cierre del período: se cobra únicamente el consumo de IA pendiente —sin sumar un nuevo mes del plan— y luego el webhook cancela la renovación. Si no hay saldo de IA, se cancela sin generar un cobro.
 
+### Tablero financiero de plataforma
+
+- **Realizado** suma solamente liquidaciones de IA conciliadas como cobradas dentro del período elegido. Usa los importes, la cotización y los costos congelados en cada liquidación; una actualización posterior de precios o tipo de cambio no revaloriza el historial.
+- **MRR activo actual** es una foto de las suscripciones activas al consultar el tablero. No representa caja histórica ni se mezcla con los cobros realizados del período.
+- **IA proyectada** aplica la política y cotización vigentes al consumo registrado en el rango. Es una estimación operativa y se muestra separada de los ingresos cobrados.
+- Los rangos usan días completos de Argentina: la fecha “hasta” es inclusiva para quien consulta y el backend utiliza internamente un límite final exclusivo para evitar dobles conteos entre períodos consecutivos.
+- El CSV conserva la misma separación entre proyección y realizado, incluye costos y margen congelados, se entrega sin caché y neutraliza valores que una planilla podría interpretar como fórmulas.
+- El alcance realizado actual son las liquidaciones variables de IA cobradas. El tablero no sustituye la contabilidad fiscal ni pretende reconocer otros cobros del plan que todavía no tengan un registro conciliado propio.
+
 ---
 
 ## ✅ Lista de Comprobación de Aislamiento (Checklist)

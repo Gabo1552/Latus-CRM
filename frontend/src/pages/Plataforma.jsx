@@ -798,6 +798,7 @@ function SuperadminExecutiveDashboardPanel({
       };
       return api.get("/platform/financial-dashboard", { params }).then((r) => r.data);
     },
+    enabled: period !== "custom" || (!!startDate && !!endDate),
   });
 
   const d = dashQ.data?.summary;
@@ -811,17 +812,17 @@ function SuperadminExecutiveDashboardPanel({
             <span className="text-xs font-extrabold uppercase tracking-widest text-emerald-400">Dashboard de Gestión Financiera & Cobros</span>
           </div>
           <h2 className="mt-1 text-xl font-black text-white">Resumen Ejecutivo Superadmin</h2>
-          <p className="mt-1 text-xs text-slate-300">Monitoreo consolidado de ingresos por suscripción, consumo variable de IA, costo de proveedores y margen neto.</p>
+          <p className="mt-1 text-xs text-slate-300">Separa liquidaciones efectivamente cobradas de la proyección operativa para evitar revalorizar períodos cerrados.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {d && (
             <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-right">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cotización BCRA Aplicada</p>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cotización para proyección</p>
               <p className="font-mono text-sm font-extrabold text-emerald-400">$ {Number(d.usd_to_ars_rate || 0).toLocaleString("es-AR")} <span className="text-xs text-slate-300">(+{d.fx_buffer_percent}% buffer)</span></p>
             </div>
           )}
-          <Button onClick={onExportCSV} disabled={isExporting} variant="outline" className="rounded-xl border-white/20 bg-white/10 text-white hover:bg-white/20 text-xs font-bold">
-            {isExporting ? "Generando CSV..." : "Exportar Registro CSV"}
+          <Button onClick={onExportCSV} disabled={isExporting || (period === "custom" && (!startDate || !endDate))} variant="outline" className="rounded-xl border-white/20 bg-white/10 text-white hover:bg-white/20 text-xs font-bold">
+            {isExporting ? "Generando CSV..." : "Exportar tablero CSV"}
           </Button>
         </div>
       </div>
@@ -873,33 +874,39 @@ function SuperadminExecutiveDashboardPanel({
 
       {dashQ.isLoading ? (
         <div className="grid min-h-[160px] place-items-center"><div className="h-8 w-8 animate-spin rounded-full border-2 border-latus-blue border-t-transparent" /></div>
+      ) : period === "custom" && (!startDate || !endDate) ? (
+        <div className="px-6 py-10 text-center"><p className="font-extrabold text-latus-ink">Elegí ambas fechas para calcular el período</p><p className="mt-1 text-sm text-latus-muted">El rango usa días completos de Argentina.</p></div>
+      ) : dashQ.isError ? (
+        <div className="border-t border-rose-200 bg-rose-50 px-6 py-5 text-sm font-bold text-rose-800">{dashQ.error?.response?.data?.detail || "No se pudo calcular el tablero financiero"}</div>
       ) : d ? (
-        <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4 sm:p-6 bg-latus-cream/20">
-          <div className="rounded-2xl border border-latus-warm-border bg-white p-5 shadow-sm">
-            <p className="text-xs font-bold uppercase tracking-wider text-latus-muted">Facturación Bruta Estimada</p>
-            <p className="mt-2 text-3xl font-black tracking-tight text-latus-ink">$ {Number(d.total_revenue_ars || 0).toLocaleString("es-AR")} <span className="text-xs text-latus-muted font-normal">ARS</span></p>
-            <p className="mt-1 text-[11px] text-latus-muted">Planes $ {Number(d.monthly_subscriptions_ars || 0).toLocaleString("es-AR")} + IA $ {Number(d.monthly_ai_billable_ars || 0).toLocaleString("es-AR")}</p>
-          </div>
+        <>
+          <div className="grid gap-4 bg-latus-cream/20 p-5 md:grid-cols-2 xl:grid-cols-4 sm:p-6">
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50/55 p-5 shadow-sm">
+              <p className="text-xs font-bold uppercase tracking-wider text-emerald-800">Liquidaciones cobradas</p>
+              <p className="mt-2 text-3xl font-black tracking-tight text-emerald-700">$ {Number(d.realized_total_revenue_ars || 0).toLocaleString("es-AR")} <span className="text-xs font-normal">ARS</span></p>
+              <p className="mt-1 text-[11px] text-emerald-800">{Number(d.realized_statements || 0).toLocaleString("es-AR")} cierres · Planes $ {Number(d.realized_plan_revenue_ars || 0).toLocaleString("es-AR")} · IA $ {Number(d.realized_ai_revenue_ars || 0).toLocaleString("es-AR")}</p>
+            </div>
 
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-5 shadow-sm">
-            <p className="text-xs font-bold uppercase tracking-wider text-emerald-800">Ganancia Neta Estimada Latus</p>
-            <p className="mt-2 text-3xl font-black tracking-tight text-emerald-700">$ {Number(d.estimated_net_profit_ars || 0).toLocaleString("es-AR")} <span className="text-xs font-normal">ARS</span></p>
-            <p className="mt-1 text-[11px] font-bold text-emerald-700">Margen Neto: {d.net_margin_percent}%</p>
-            <p className="mt-1 text-[10px] text-emerald-800">{d.healthy_organizations || 0} rentables · {d.at_risk_organizations || 0} ajustadas · {d.blocked_organizations || 0} no rentables</p>
-          </div>
+            <div className={`rounded-2xl border p-5 shadow-sm ${Number(d.realized_net_profit_ars || 0) < 0 ? "border-rose-200 bg-rose-50/60" : "border-sky-200 bg-sky-50/60"}`}>
+              <p className={`text-xs font-bold uppercase tracking-wider ${Number(d.realized_net_profit_ars || 0) < 0 ? "text-rose-800" : "text-sky-800"}`}>Resultado neto realizado</p>
+              <p className={`mt-2 text-3xl font-black tracking-tight ${Number(d.realized_net_profit_ars || 0) < 0 ? "text-rose-700" : "text-sky-700"}`}>$ {Number(d.realized_net_profit_ars || 0).toLocaleString("es-AR")} <span className="text-xs font-normal">ARS</span></p>
+              <p className="mt-1 text-[11px] font-bold text-latus-muted">Margen {Number(d.realized_net_margin_percent || 0).toFixed(1)}% · MP $ {Number(d.realized_mp_fee_ars || 0).toLocaleString("es-AR")} · impuestos $ {Number(d.realized_tax_ars || 0).toLocaleString("es-AR")}</p>
+            </div>
 
-          <div className="rounded-2xl border border-violet-200 bg-violet-50/50 p-5 shadow-sm">
-            <p className="text-xs font-bold uppercase tracking-wider text-violet-800">Fee Comercial IA Bruto</p>
-            <p className="mt-2 text-3xl font-black tracking-tight text-violet-700">USD ${Number(d.monthly_ai_fee_gross_profit_usd || 0).toFixed(2)}</p>
-            <p className="mt-1 text-[11px] text-violet-700 font-medium">Facturable clientes: USD ${Number(d.monthly_ai_billable_usd || 0).toFixed(2)}</p>
-          </div>
+            <div className="rounded-2xl border border-latus-warm-border bg-white p-5 shadow-sm">
+              <p className="text-xs font-bold uppercase tracking-wider text-latus-muted">MRR activo actual</p>
+              <p className="mt-2 text-3xl font-black tracking-tight text-latus-ink">$ {Number(d.current_active_mrr_ars || 0).toLocaleString("es-AR")} <span className="text-xs font-normal text-latus-muted">ARS</span></p>
+              <p className="mt-1 text-[11px] text-latus-muted">Foto actual de {Number(d.mrr_active_organizations || 0).toLocaleString("es-AR")} suscripciones activas; no se presenta como cobro histórico.</p>
+            </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-600">Costo Proveedores IA (Directo)</p>
-            <p className="mt-2 text-3xl font-black tracking-tight text-slate-800">USD ${Number(d.monthly_ai_provider_cost_usd || 0).toFixed(2)}</p>
-            <p className="mt-1 text-[11px] text-slate-500">Anthropic / OpenAI / Google</p>
+            <div className="rounded-2xl border border-violet-200 bg-violet-50/55 p-5 shadow-sm">
+              <p className="text-xs font-bold uppercase tracking-wider text-violet-800">IA proyectada del período</p>
+              <p className="mt-2 text-3xl font-black tracking-tight text-violet-700">$ {Number(d.projected_ai_revenue_ars || 0).toLocaleString("es-AR")} <span className="text-xs font-normal">ARS</span></p>
+              <p className="mt-1 text-[11px] text-violet-700">Facturable USD {Number(d.monthly_ai_billable_usd || 0).toFixed(2)} · costo proveedor USD {Number(d.monthly_ai_provider_cost_usd || 0).toFixed(2)}</p>
+            </div>
           </div>
-        </div>
+          <div className="border-t border-sky-200 bg-sky-50/55 px-5 py-3 text-[11px] leading-5 text-sky-900 sm:px-6"><strong>Lectura del tablero:</strong> “Realizado” usa exclusivamente importes congelados de liquidaciones cobradas y conserva su cotización histórica. El MRR es una foto de las licencias activas; la IA proyectada usa el consumo del período y la cotización vigente.</div>
+        </>
       ) : null}
     </section>
   );

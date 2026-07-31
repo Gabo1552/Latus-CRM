@@ -7378,12 +7378,13 @@ async def _billing_statement_items(query: dict, limit: int) -> list[dict]:
     ]
 
 
-def _billing_statements_csv(statements: list[dict]) -> str:
-    def safe_cell(value: Any) -> Any:
-        if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")):
-            return "'" + value
-        return value
+def _safe_csv_cell(value: Any) -> Any:
+    if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + value
+    return value
 
+
+def _billing_statements_csv(statements: list[dict]) -> str:
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow([
@@ -7394,7 +7395,7 @@ def _billing_statements_csv(statements: list[dict]) -> str:
         "intentos", "creada", "aplicada", "cobrada", "pago_id",
     ])
     for statement in statements:
-        writer.writerow([safe_cell(value) for value in [
+        writer.writerow([_safe_csv_cell(value) for value in [
             statement.get("statement_id"), statement.get("organization_id"),
             statement.get("organization_name"), statement.get("plan_code"),
             statement.get("period_start"), statement.get("period_end"),
@@ -7567,31 +7568,105 @@ footer{{padding:18px 28px;border-top:1px solid #eee7dc;color:#687b84;font-size:1
     )
 
 
-def _resolve_dashboard_date_range(period: Optional[str], start_date: Optional[str], end_date: Optional[str]):
-    now = datetime.now(timezone.utc)
-    today = now.date()
-    p_start, p_end = None, None
+def _resolve_dashboard_date_range(period: Optional[str], start_date: Optional[str],
+                                  end_date: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Return an inclusive-start/exclusive-end range using Argentina local dates."""
+    selected = str(period or "this_month")
+    if selected not in {"this_month", "prev_month", "last_30", "custom", "all"}:
+        raise HTTPException(400, "Período financiero inválido")
+    argentina = ZoneInfo("America/Argentina/Buenos_Aires")
+    now_local = datetime.now(argentina)
+    first_this_month = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    if period == "prev_month":
-        first_this_month = today.replace(day=1)
-        last_month_end = first_this_month - timedelta(days=1)
-        p_start = datetime.combine(last_month_end.replace(day=1), datetime.min.time(), tzinfo=timezone.utc).isoformat()
-        p_end = datetime.combine(first_this_month, datetime.min.time(), tzinfo=timezone.utc).isoformat()
-    elif period == "last_30":
-        p_start = (now - timedelta(days=30)).isoformat()
-        p_end = now.isoformat()
-    elif period == "custom" and start_date:
-        parsed_s = _parse_billing_datetime(start_date)
-        parsed_e = _parse_billing_datetime(end_date) if end_date else None
-        p_start = datetime.combine(parsed_s.date() if parsed_s else today, datetime.min.time(), tzinfo=timezone.utc).isoformat()
-        p_end = datetime.combine(parsed_e.date() if parsed_e else today, datetime.max.time(), tzinfo=timezone.utc).isoformat()
-    elif period == "all":
-        p_start, p_end = None, None
-    else:  # "this_month" or default
-        p_start = datetime.combine(today.replace(day=1), datetime.min.time(), tzinfo=timezone.utc).isoformat()
-        p_end = now.isoformat()
+    if selected == "all":
+        return None, None
+    if selected == "this_month":
+        start_local, end_local = first_this_month, now_local
+    elif selected == "prev_month":
+        previous_day = first_this_month - timedelta(days=1)
+        start_local = previous_day.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_local = first_this_month
+    elif selected == "last_30":
+        start_local, end_local = now_local - timedelta(days=30), now_local
+    else:
+        if not start_date or not end_date:
+            raise HTTPException(400, "Indicá fecha desde y fecha hasta")
+        try:
+            start_day = datetime.strptime(start_date.strip(), "%Y-%m-%d").date()
+            end_day = datetime.strptime(end_date.strip(), "%Y-%m-%d").date()
+            start_local = datetime.combine(start_day, datetime.min.time(), tzinfo=argentina)
+            end_local = datetime.combine(
+                end_day + timedelta(days=1), datetime.min.time(), tzinfo=argentina,
+            )
+        except (TypeError, ValueError):
+            raise HTTPException(400, "El rango de fechas es inválido")
+        if start_local >= end_local:
+            raise HTTPException(400, "La fecha desde debe ser anterior o igual a la fecha hasta")
 
-    return p_start, p_end
+    return (
+        start_local.astimezone(timezone.utc).isoformat(),
+        end_local.astimezone(timezone.utc).isoformat(),
+    )
+
+
+def _paid_statement_financials(statement: dict) -> dict[str, float]:
+    """Read frozen economics from one paid statement without current-rate revaluation."""
+    profitability = statement.get("profitability") or {}
+    plan_revenue = float(statement.get("plan_amount_ars") or 0)
+    ai_revenue = float(statement.get("ai_amount_ars") or 0)
+    total_revenue = float(
+        statement.get("total_amount_ars")
+        if statement.get("total_amount_ars") is not None
+        else plan_revenue + ai_revenue
+    )
+    stored_rate = float(statement.get("usd_to_ars_rate") or 0)
+    provider_cost = float(
+        profitability.get("provider_cost_ars")
+        if profitability.get("provider_cost_ars") is not None
+        else float(statement.get("base_cost_usd") or 0) * stored_rate
+    )
+    mp_fee = float(
+        profitability.get("mp_fee_ars")
+        if profitability.get("mp_fee_ars") is not None
+        else total_revenue * float(statement.get("mp_fee_percent") or 0) / 100.0
+    )
+    tax = float(
+        profitability.get("tax_ars")
+        if profitability.get("tax_ars") is not None
+        else total_revenue * float(statement.get("tax_percent") or 0) / 100.0
+    )
+    net_profit = float(
+        profitability.get("net_profit_ars")
+        if profitability.get("net_profit_ars") is not None
+        else total_revenue - provider_cost - mp_fee - tax
+    )
+    return {
+        "statements": 1,
+        "plan_revenue_ars": round(plan_revenue, 2),
+        "ai_revenue_ars": round(ai_revenue, 2),
+        "total_revenue_ars": round(total_revenue, 2),
+        "provider_cost_ars": round(provider_cost, 2),
+        "mp_fee_ars": round(mp_fee, 2),
+        "tax_ars": round(tax, 2),
+        "net_profit_ars": round(net_profit, 2),
+        "base_cost_usd": round(float(statement.get("base_cost_usd") or 0), 6),
+        "ai_fee_usd": round(float(statement.get("ai_fee_usd") or 0), 6),
+        "billable_cost_usd": round(float(statement.get("billable_cost_usd") or 0), 6),
+    }
+
+
+def _empty_realized_financials() -> dict[str, float]:
+    return {
+        "statements": 0, "plan_revenue_ars": 0.0, "ai_revenue_ars": 0.0,
+        "total_revenue_ars": 0.0, "provider_cost_ars": 0.0,
+        "mp_fee_ars": 0.0, "tax_ars": 0.0, "net_profit_ars": 0.0,
+        "base_cost_usd": 0.0, "ai_fee_usd": 0.0, "billable_cost_usd": 0.0,
+    }
+
+
+def _add_realized_financials(target: dict, values: dict) -> None:
+    for field, value in values.items():
+        target[field] = round(float(target.get(field) or 0) + float(value or 0), 6)
 
 
 @api_router.get("/platform/financial-dashboard")
@@ -7627,7 +7702,7 @@ async def platform_financial_dashboard(
         if p_start:
             logs_query["created_at"]["$gte"] = p_start
         if p_end:
-            logs_query["created_at"]["$lte"] = p_end
+            logs_query["created_at"]["$lt"] = p_end
 
     usage_logs = await _raw_collection("ai_usage_logs").find(logs_query, {"_id": 0}).to_list(100_000)
 
@@ -7646,6 +7721,31 @@ async def platform_financial_dashboard(
         item["ai_fee_usd"] = round(item["ai_fee_usd"] + float(b["ai_fee_usd"]), 6)
         item["billable_cost_usd"] = round(item["billable_cost_usd"] + float(b["billable_cost_usd"]), 6)
 
+    paid_query: dict[str, Any] = {"status": "paid"}
+    if organization_id and organization_id not in ("__all__", ""):
+        paid_query["organization_id"] = organization_id
+    paid_statements = await _raw_collection("ai_billing_statements").find(
+        paid_query, {"_id": 0},
+    ).sort("paid_at", -1).to_list(10_000)
+    range_start = _parse_billing_datetime(p_start)
+    range_end = _parse_billing_datetime(p_end)
+    realized_by_org: dict[str, dict] = {}
+    for statement in paid_statements:
+        occurred_at = _parse_billing_datetime(
+            statement.get("paid_at") or statement.get("updated_at") or statement.get("created_at")
+        )
+        if not occurred_at:
+            continue
+        if range_start and occurred_at < range_start:
+            continue
+        if range_end and occurred_at >= range_end:
+            continue
+        org_id = statement.get("organization_id")
+        if not org_id:
+            continue
+        realized = realized_by_org.setdefault(org_id, _empty_realized_financials())
+        _add_realized_financials(realized, _paid_statement_financials(statement))
+
     org_matrix = []
     total_subscriptions_ars = 0.0
     total_ai_billable_usd = 0.0
@@ -7655,6 +7755,7 @@ async def platform_financial_dashboard(
     total_ai_provider_cost_ars = 0.0
     total_mp_fee_ars = 0.0
     total_tax_ars = 0.0
+    realized_totals = _empty_realized_financials()
 
     for org in organizations:
         org_id = org["organization_id"]
@@ -7664,13 +7765,19 @@ async def platform_financial_dashboard(
 
         access = subscription_access_state(org)
         allowed = access.get("allowed", False)
+        subscription_status = org.get("subscription_status") or "not_configured"
+        license_status = org.get("license_status") or "not_configured"
+        mrr_active = subscription_status == "active" and license_status not in {"suspended", "expired"}
+        projected_plan_amount_ars = plan_price if mrr_active else 0.0
 
         u = usage_by_org.get(org_id, {
             "calls": 0, "tokens": 0, "base_cost_usd": 0.0, "ai_fee_usd": 0.0, "billable_cost_usd": 0.0,
         })
+        realized = realized_by_org.get(org_id, _empty_realized_financials())
+        _add_realized_financials(realized_totals, realized)
 
-        if allowed:
-            total_subscriptions_ars += plan_price
+        if mrr_active:
+            total_subscriptions_ars += projected_plan_amount_ars
 
         total_ai_billable_usd += u["billable_cost_usd"]
         total_ai_provider_cost_usd += u["base_cost_usd"]
@@ -7680,9 +7787,9 @@ async def platform_financial_dashboard(
         effective_policy = _effective_ai_settlement_policy(org, policy)
         org_buffer = float(effective_policy["fx_buffer_percent"])
         ai_billable_ars = round(u["billable_cost_usd"] * rate * (1 + org_buffer / 100.0), 2)
-        total_monthly_ars = round(plan_price + ai_billable_ars, 2)
+        total_monthly_ars = round(projected_plan_amount_ars + ai_billable_ars, 2)
         profitability = ai_settlement.calculate_profitability_breakdown(
-            plan_amount_ars=plan_price,
+            plan_amount_ars=projected_plan_amount_ars,
             ai_amount_ars=ai_billable_ars,
             base_cost_usd=u["base_cost_usd"],
             usd_to_ars_rate=rate,
@@ -7693,7 +7800,7 @@ async def platform_financial_dashboard(
         )
         total_ai_billable_ars += ai_billable_ars
         total_ai_provider_cost_ars += profitability["provider_cost_ars"]
-        summary_revenue_ars = (plan_price if allowed else 0.0) + ai_billable_ars
+        summary_revenue_ars = projected_plan_amount_ars + ai_billable_ars
         total_mp_fee_ars += summary_revenue_ars * float(effective_policy["mp_fee_percent"]) / 100.0
         total_tax_ars += summary_revenue_ars * float(effective_policy["tax_percent"]) / 100.0
 
@@ -7703,9 +7810,10 @@ async def platform_financial_dashboard(
             "plan_code": plan_code,
             "plan_name": plan.get("name") or plan_code,
             "plan_price_ars": plan_price,
-            "subscription_status": org.get("subscription_status") or "not_configured",
-            "license_status": org.get("license_status") or "not_configured",
+            "subscription_status": subscription_status,
+            "license_status": license_status,
             "access_allowed": allowed,
+            "mrr_active": mrr_active,
             "ai_state": org_var_billing.get("state") or ("active" if allowed else "disabled"),
             "billing_email": org.get("billing_email"),
             "current_period_end": org.get("current_period_end"),
@@ -7717,6 +7825,12 @@ async def platform_financial_dashboard(
             "profitability": profitability,
             "profitability_enforcement": effective_policy["profitability_enforcement"],
             "total_monthly_ars": total_monthly_ars,
+            "realized": {
+                **realized,
+                "net_margin_percent": round(
+                    realized["net_profit_ars"] / realized["total_revenue_ars"] * 100.0, 1,
+                ) if realized["total_revenue_ars"] > 0 else 0.0,
+            },
         })
 
     total_ai_billable_ars = round(total_ai_billable_ars, 2)
@@ -7728,6 +7842,9 @@ async def platform_financial_dashboard(
         total_revenue_ars - total_ai_provider_cost_ars - total_mp_fee_ars - total_tax_ars, 2,
     )
     net_margin_percent = round((estimated_net_profit_ars / total_revenue_ars * 100.0), 1) if total_revenue_ars > 0 else 0.0
+    realized_margin_percent = round(
+        realized_totals["net_profit_ars"] / realized_totals["total_revenue_ars"] * 100.0, 1,
+    ) if realized_totals["total_revenue_ars"] > 0 else 0.0
 
     stmt_query = {}
     if organization_id and organization_id not in ("__all__", ""):
@@ -7739,11 +7856,32 @@ async def platform_financial_dashboard(
         "summary": {
             "total_organizations": len(organizations),
             "active_licenses": sum(1 for o in org_matrix if o["access_allowed"]),
+            "mrr_active_organizations": sum(1 for o in org_matrix if o["mrr_active"]),
             "usd_to_ars_rate": rate,
             "fx_buffer_percent": fx_buffer_default,
             "period": period,
             "period_start": p_start,
             "period_end": p_end,
+            "period_end_exclusive": True,
+            "realized_scope": "paid_ai_statements",
+            "realized_statements": int(realized_totals["statements"]),
+            "realized_plan_revenue_ars": round(realized_totals["plan_revenue_ars"], 2),
+            "realized_ai_revenue_ars": round(realized_totals["ai_revenue_ars"], 2),
+            "realized_total_revenue_ars": round(realized_totals["total_revenue_ars"], 2),
+            "realized_provider_cost_ars": round(realized_totals["provider_cost_ars"], 2),
+            "realized_mp_fee_ars": round(realized_totals["mp_fee_ars"], 2),
+            "realized_tax_ars": round(realized_totals["tax_ars"], 2),
+            "realized_net_profit_ars": round(realized_totals["net_profit_ars"], 2),
+            "realized_net_margin_percent": realized_margin_percent,
+            "realized_provider_cost_usd": round(realized_totals["base_cost_usd"], 4),
+            "realized_ai_fee_usd": round(realized_totals["ai_fee_usd"], 4),
+            "realized_ai_billable_usd": round(realized_totals["billable_cost_usd"], 4),
+            "current_active_mrr_ars": round(total_subscriptions_ars, 2),
+            "projected_ai_revenue_ars": total_ai_billable_ars,
+            "projected_ai_provider_cost_ars": total_ai_provider_cost_ars,
+            "projected_total_revenue_ars": total_revenue_ars,
+            "projected_net_profit_ars": estimated_net_profit_ars,
+            "projected_net_margin_percent": net_margin_percent,
             "monthly_subscriptions_ars": total_subscriptions_ars,
             "monthly_ai_billable_usd": round(total_ai_billable_usd, 4),
             "monthly_ai_billable_ars": total_ai_billable_ars,
@@ -7783,41 +7921,44 @@ async def platform_financial_dashboard_export(
         platform_admin=platform_admin,
     )
 
-    headers = [
-        "organization_id", "name", "plan_name", "plan_price_ars",
-        "subscription_status", "license_status", "access_allowed",
-        "calls", "tokens", "provider_cost_usd", "ai_fee_usd", "billable_cost_usd",
-        "ai_billable_ars", "total_monthly_ars", "billing_email"
-    ]
-
-    lines = [",".join(headers)]
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow([
+        "empresa_id", "empresa", "plan", "suscripcion", "licencia", "acceso",
+        "mrr_actual_ars", "llamadas_periodo", "tokens_periodo",
+        "ia_proveedor_proyectada_usd", "fee_ia_proyectado_usd",
+        "ia_facturable_proyectada_usd", "ia_proyectada_ars",
+        "margen_proyectado_pct", "liquidaciones_cobradas",
+        "planes_realizados_ars", "ia_realizada_ars", "total_realizado_ars",
+        "costo_proveedor_realizado_ars", "comision_mp_realizada_ars",
+        "impuestos_realizados_ars", "ganancia_realizada_ars",
+        "margen_realizado_pct", "email_facturacion",
+    ])
     for o in dashboard_data["organizations"]:
         u = o["ai_usage"]
-        row = [
-            f'"{o["organization_id"]}"',
-            f'"{o["name"]}"',
-            f'"{o["plan_name"]}"',
-            str(o["plan_price_ars"]),
-            f'"{o["subscription_status"]}"',
-            f'"{o["license_status"]}"',
-            str(o["access_allowed"]),
-            str(u.get("calls", 0)),
-            str(u.get("tokens", 0)),
-            str(u.get("base_cost_usd", 0.0)),
-            str(u.get("ai_fee_usd", 0.0)),
-            str(u.get("billable_cost_usd", 0.0)),
-            str(u.get("billable_cost_ars", 0.0)),
-            str(o.get("total_monthly_ars", 0.0)),
-            f'"{o.get("billing_email") or ""}"',
-        ]
-        lines.append(",".join(row))
+        realized = o.get("realized") or {}
+        writer.writerow([_safe_csv_cell(value) for value in [
+            o["organization_id"], o["name"], o["plan_name"],
+            o["subscription_status"], o["license_status"], o["access_allowed"],
+            o["plan_price_ars"] if o.get("mrr_active") else 0,
+            u.get("calls", 0), u.get("tokens", 0), u.get("base_cost_usd", 0.0),
+            u.get("ai_fee_usd", 0.0), u.get("billable_cost_usd", 0.0),
+            u.get("billable_cost_ars", 0.0),
+            (o.get("profitability") or {}).get("net_margin_percent", 0),
+            realized.get("statements", 0), realized.get("plan_revenue_ars", 0),
+            realized.get("ai_revenue_ars", 0), realized.get("total_revenue_ars", 0),
+            realized.get("provider_cost_ars", 0), realized.get("mp_fee_ars", 0),
+            realized.get("tax_ars", 0), realized.get("net_profit_ars", 0),
+            realized.get("net_margin_percent", 0), o.get("billing_email") or "",
+        ]])
 
-    from fastapi.responses import Response
-    csv_content = "\n".join(lines)
     return Response(
-        content=csv_content,
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="dashboard_financiero_latus.csv"'}
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="dashboard-financiero-latus.csv"',
+            "Cache-Control": "private, no-store",
+        },
     )
 
 
