@@ -34,6 +34,8 @@ DEFAULT_POLICY: dict[str, Any] = {
     "min_net_margin_percent": 15.0,
     "min_ai_margin_percent": 10.0,
     "profitability_enforcement": "block",
+    "max_retry_attempts": 3,
+    "retry_cooldown_minutes": 5,
 }
 
 
@@ -101,6 +103,16 @@ def validate_policy(patch: dict, current: dict | None = None) -> dict:
         if enforcement not in {"block", "warn"}:
             raise ValueError("La acción de rentabilidad debe ser bloquear o advertir")
         result["profitability_enforcement"] = enforcement
+    if "max_retry_attempts" in patch:
+        attempts = int(patch["max_retry_attempts"])
+        if attempts < 1 or attempts > 10:
+            raise ValueError("Los reintentos máximos deben estar entre 1 y 10")
+        result["max_retry_attempts"] = attempts
+    if "retry_cooldown_minutes" in patch:
+        cooldown = int(patch["retry_cooldown_minutes"])
+        if cooldown < 0 or cooldown > 1440:
+            raise ValueError("La espera entre reintentos debe estar entre 0 y 1440 minutos")
+        result["retry_cooldown_minutes"] = cooldown
     if result["enabled"] and float(result.get("usd_to_ars_rate") or 0) <= 0:
         raise ValueError("Configurá la cotización USD/ARS antes de activar la liquidación")
     return result

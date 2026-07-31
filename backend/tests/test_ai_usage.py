@@ -365,11 +365,21 @@ class TestAIVariableSettlement:
         assert configured.json()["mp_fee_percent"] == 5.2
         assert configured.json()["min_ai_margin_percent"] == 12
         assert configured.json()["profitability_enforcement"] == "block"
+        assert configured.json()["max_retry_attempts"] == 3
+        assert configured.json()["retry_cooldown_minutes"] == 5
         invalid_margin = client.put(
             "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
             json={"min_ai_margin_percent": 101},
         )
         assert invalid_margin.status_code == 400
+        assert client.put(
+            "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
+            json={"max_retry_attempts": 0},
+        ).status_code == 400
+        assert client.put(
+            "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
+            json={"retry_cooldown_minutes": 1441},
+        ).status_code == 400
         assert client.get(
             "/api/platform/ai-settlement-policy", headers=_h("T-AGENT")
         ).status_code == 403
@@ -711,6 +721,172 @@ class TestAIVariableSettlement:
             "transaction_amount": 46_320, "date_approved": now.isoformat(),
         }))
         assert len(calls) == 2, "A repeated payment webhook must not restore the base amount twice"
+
+    def test_failed_settlement_requires_audited_retry_of_frozen_amount(self, srv, monkeypatch):
+        server, fake, client = srv
+        from datetime import datetime, timedelta, timezone
+
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        organization_id = organization["organization_id"]
+        now = datetime.now(timezone.utc)
+        _run(fake.organizations.update_one(
+            {"organization_id": organization_id},
+            {"$set": {
+                "plan_code": "starter", "subscription_status": "active",
+                "provider_status": "authorized", "provider_preapproval_id": "pre_retry",
+                "current_period_end": (now + timedelta(hours=2)).isoformat(),
+                "provider_last_payment_at": (now - timedelta(days=29)).isoformat(),
+                "ai_variable_billing": {
+                    "state": "active",
+                    "billing_start_date": (now - timedelta(days=29)).isoformat(),
+                },
+            }},
+        ))
+        _run(fake.ai_usage_logs.insert_one({
+            "organization_id": organization_id,
+            "created_at": (now - timedelta(days=1)).isoformat(),
+            "status": "success", "total_tokens": 1000,
+            "provider_cost_usd": 1.0, "base_cost_usd": 1.0,
+            "ai_fee_percent": 20, "ai_fee_usd": 0.2,
+            "billable_cost_usd": 1.2,
+        }))
+        configured = client.put(
+            "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
+            json={
+                "usd_to_ars_rate": 1000, "fx_buffer_percent": 10,
+                "settlement_lead_hours": 24, "max_rate_age_hours": 72,
+                "max_retry_attempts": 3, "retry_cooldown_minutes": 0,
+                "enabled": True,
+            },
+        )
+        assert configured.status_code == 200, configured.text
+
+        calls = []
+
+        async def fake_mp(method, path, *, payload=None):
+            calls.append((method, path, payload))
+            if len(calls) == 1:
+                raise server.MercadoPagoAPIError("fallo temporal", status_code=503)
+            return {"id": "pre_retry", "status": "authorized"}
+
+        monkeypatch.setattr(server, "_mercadopago_request", fake_mp)
+        failed = client.post("/api/platform/ai-settlements/run", headers=_h("T-ADMIN"))
+        assert failed.status_code == 200, failed.text
+        assert failed.json()["items"][0]["status"] == "failed"
+        assert len(calls) == 1
+        statement = fake.ai_billing_statements.docs[-1]
+        statement_id = statement["statement_id"]
+        frozen_amount = statement["total_amount_ars"]
+        assert frozen_amount == 46_320
+        assert statement["retry_count"] == 0
+        alert = next(a for a in fake.system_alerts.docs if a["alert_type"] == "mp_update_error")
+        assert alert["status"] == "unread"
+        assert any(e["type"] == "ai_settlement_apply_failed" for e in fake.billing_events.docs)
+
+        # New usage must not be pulled into an already frozen failed statement.
+        _run(fake.ai_usage_logs.insert_one({
+            "organization_id": organization_id,
+            "created_at": now.isoformat(), "status": "success", "total_tokens": 99_999,
+            "base_cost_usd": 50.0, "ai_fee_usd": 10.0, "billable_cost_usd": 60.0,
+        }))
+        automatic = client.post("/api/platform/ai-settlements/run", headers=_h("T-ADMIN"))
+        assert automatic.status_code == 200
+        assert automatic.json()["items"][0]["status"] == "failed"
+        assert len(calls) == 1, "A failed settlement must never retry from the scheduler"
+
+        missing_confirmation = client.post(
+            f"/api/platform/ai-billing/statements/{statement_id}/retry",
+            headers=_h("T-ADMIN"), json={"confirmation": "NO"},
+        )
+        assert missing_confirmation.status_code == 400
+        retried = client.post(
+            f"/api/platform/ai-billing/statements/{statement_id}/retry",
+            headers=_h("T-ADMIN"), json={"confirmation": "REINTENTAR"},
+        )
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["status"] == "applied"
+        assert retried.json()["retry_count"] == 1
+        assert len(calls) == 2
+        assert calls[-1][2]["auto_recurring"]["transaction_amount"] == frozen_amount
+
+        stored = _run(fake.ai_billing_statements.find_one({"statement_id": statement_id}))
+        assert stored["status"] == "applied"
+        assert stored["last_retry_status"] == "succeeded"
+        assert stored["retried_by_user_id"] == "u_admin"
+        assert alert["status"] == "resolved"
+        event = next(e for e in fake.billing_events.docs if e["type"] == "ai_settlement_retry_succeeded")
+        assert event["retry_attempt"] == 1
+        assert event["actor_user_id"] == "u_admin"
+
+        repeated = client.post(
+            f"/api/platform/ai-billing/statements/{statement_id}/retry",
+            headers=_h("T-ADMIN"), json={"confirmation": "REINTENTAR"},
+        )
+        assert repeated.status_code == 409
+        assert len(calls) == 2
+
+        listed = client.get("/api/platform/ai-settlements", headers=_h("T-ADMIN"))
+        assert listed.status_code == 200
+        assert listed.json()["retry_policy"] == {"max_attempts": 3, "cooldown_minutes": 0}
+
+    def test_retry_exhaustion_and_nontechnical_failures_are_not_replayed(self, srv, monkeypatch):
+        server, fake, client = srv
+        from datetime import datetime, timezone
+
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        organization_id = organization["organization_id"]
+        _run(fake.organizations.update_one(
+            {"organization_id": organization_id},
+            {"$set": {
+                "subscription_status": "active", "provider_status": "authorized",
+                "provider_preapproval_id": "pre_exhaust",
+            }},
+        ))
+        assert client.put(
+            "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
+            json={
+                "usd_to_ars_rate": 1000, "max_retry_attempts": 1,
+                "retry_cooldown_minutes": 0,
+            },
+        ).status_code == 200
+        base_statement = {
+            "organization_id": organization_id, "plan_code": "starter",
+            "period_end": datetime.now(timezone.utc).isoformat(),
+            "provider_preapproval_id": "pre_exhaust",
+            "total_amount_ars": 50_000, "ai_amount_ars": 5_000,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _run(fake.ai_billing_statements.insert_one({
+            **base_statement, "statement_id": "stmt_exhaust", "status": "failed",
+            "retry_count": 0,
+        }))
+        _run(fake.ai_billing_statements.insert_one({
+            **base_statement, "statement_id": "stmt_payment", "status": "payment_failed",
+            "retry_count": 0,
+        }))
+        calls = []
+
+        async def always_fail(*args, **kwargs):
+            calls.append((args, kwargs))
+            raise server.MercadoPagoAPIError("continúa caído", status_code=503)
+
+        monkeypatch.setattr(server, "_mercadopago_request", always_fail)
+        exhausted = client.post(
+            "/api/platform/ai-billing/statements/stmt_exhaust/retry",
+            headers=_h("T-ADMIN"), json={"confirmation": "REINTENTAR"},
+        )
+        assert exhausted.status_code == 200, exhausted.text
+        assert exhausted.json()["status"] == "retry_exhausted"
+        assert len(calls) == 1
+        assert client.post(
+            "/api/platform/ai-billing/statements/stmt_exhaust/retry",
+            headers=_h("T-ADMIN"), json={"confirmation": "REINTENTAR"},
+        ).status_code == 409
+        assert client.post(
+            "/api/platform/ai-billing/statements/stmt_payment/retry",
+            headers=_h("T-ADMIN"), json={"confirmation": "REINTENTAR"},
+        ).status_code == 409
+        assert len(calls) == 1
 
     def test_bcra_rate_refresh_parses_official_response(self, srv, monkeypatch):
         _, _, client = srv

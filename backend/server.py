@@ -2102,6 +2102,203 @@ async def _record_profitability_alert(organization: dict, statement: dict, *, bl
     )
 
 
+async def _record_mp_update_error_alert(organization: dict, statement: dict, error: str) -> dict:
+    open_alerts = await _raw_collection("system_alerts").find({
+        "organization_id": organization["organization_id"],
+        "alert_type": "mp_update_error",
+        "status": {"$in": ["unread", "read"]},
+    }, {"_id": 0}).to_list(100)
+    existing = next(
+        (alert for alert in open_alerts
+         if (alert.get("metadata") or {}).get("statement_id") == statement.get("statement_id")),
+        None,
+    )
+    if existing:
+        return existing
+    from utils.alerts import create_system_alert
+    return await create_system_alert(
+        db,
+        alert_type="mp_update_error",
+        organization_id=organization["organization_id"],
+        severity="error",
+        title="Mercado Pago rechazó la actualización de una liquidación",
+        message=error[:500],
+        metadata={
+            "statement_id": statement.get("statement_id"),
+            "settlement_key": statement.get("settlement_key"),
+            "amount_ars": statement.get("total_amount_ars"),
+        },
+    )
+
+
+async def _resolve_mp_update_error_alerts(organization_id: str, statement_id: str,
+                                          user_id: str) -> None:
+    alerts = await _raw_collection("system_alerts").find({
+        "organization_id": organization_id,
+        "alert_type": "mp_update_error",
+        "status": {"$in": ["unread", "read"]},
+    }, {"_id": 0}).to_list(100)
+    resolved_at = now_iso()
+    for alert in alerts:
+        if (alert.get("metadata") or {}).get("statement_id") != statement_id:
+            continue
+        await _raw_collection("system_alerts").update_one(
+            {"alert_id": alert["alert_id"]},
+            {"$set": {
+                "status": "resolved", "resolved_at": resolved_at,
+                "resolved_by": user_id,
+            }},
+        )
+
+
+async def _retry_failed_ai_statement(statement: dict, organization: dict,
+                                     policy: dict, actor: User) -> dict:
+    """Retry the frozen Mercado Pago update without rebuilding the cycle."""
+    now = datetime.now(timezone.utc)
+    status = str(statement.get("status") or "")
+    retry_count = int(statement.get("retry_count") or 0)
+    max_attempts = int(policy.get("max_retry_attempts") or 3)
+    cooldown_minutes = int(policy.get("retry_cooldown_minutes") or 0)
+
+    if status == "retrying":
+        claimed_at = _parse_billing_datetime(statement.get("retry_claimed_at"))
+        if claimed_at and now - claimed_at < timedelta(minutes=15):
+            raise HTTPException(409, "La liquidación ya tiene un reintento en curso")
+    elif status != "failed":
+        messages = {
+            "payment_failed": "El pago fue rechazado por el cliente; no corresponde reenviar el importe",
+            "applied": "La liquidación ya fue aplicada al próximo cobro",
+            "paid": "La liquidación ya fue cobrada",
+            "blocked_margin": "La liquidación está bloqueada por rentabilidad, no por un error técnico",
+            "retry_exhausted": "La liquidación agotó sus reintentos manuales",
+        }
+        raise HTTPException(409, messages.get(status, "Esta liquidación no admite reintentos"))
+
+    if retry_count >= max_attempts:
+        raise HTTPException(409, "La liquidación agotó sus reintentos manuales")
+    last_retry = _parse_billing_datetime(statement.get("last_retry_at"))
+    if last_retry and cooldown_minutes > 0:
+        available_at = last_retry + timedelta(minutes=cooldown_minutes)
+        if now < available_at:
+            remaining = max(1, math.ceil((available_at - now).total_seconds() / 60))
+            raise HTTPException(429, f"Esperá {remaining} minuto(s) antes de volver a intentar")
+    if str(organization.get("subscription_status") or "").lower() != "active":
+        raise HTTPException(409, "La suscripción de la empresa ya no está activa")
+    provider_id = str(organization.get("provider_preapproval_id") or "")
+    if not provider_id or str(organization.get("provider_status") or "").lower() != "authorized":
+        raise HTTPException(409, "Mercado Pago no tiene una suscripción autorizada")
+    frozen_provider_id = str(statement.get("provider_preapproval_id") or "")
+    if frozen_provider_id and frozen_provider_id != provider_id:
+        raise HTTPException(409, "La empresa cambió de suscripción en Mercado Pago; revisá el caso manualmente")
+
+    attempt = retry_count + 1
+    claim_id = new_id("retry")
+    claimed_at = now_iso()
+    await _raw_collection("ai_billing_statements").update_one(
+        {
+            "statement_id": statement["statement_id"],
+            "status": status,
+        },
+        {"$set": {
+            "status": "retrying", "retry_claim_id": claim_id,
+            "retry_claimed_at": claimed_at, "updated_at": claimed_at,
+        }},
+    )
+    claimed = await _raw_collection("ai_billing_statements").find_one(
+        {"statement_id": statement["statement_id"]}, {"_id": 0},
+    )
+    if not claimed or claimed.get("retry_claim_id") != claim_id:
+        raise HTTPException(409, "Otro administrador inició el reintento")
+
+    try:
+        provider_result = await _mercadopago_request(
+            "PUT", f"/preapproval/{provider_id}",
+            payload={
+                "reason": (
+                    "Latus CRM - Liquidación final de consumo de IA"
+                    if statement.get("final_cancellation") else
+                    f"Latus CRM - Plan {PLAN_CATALOG.get(statement.get('plan_code'), PLAN_CATALOG['base'])['name']} + consumo de IA"
+                ),
+                "auto_recurring": {
+                    "transaction_amount": statement["total_amount_ars"],
+                    "currency_id": "ARS",
+                },
+            },
+        )
+    except MercadoPagoAPIError as exc:
+        failed_at = now_iso()
+        exhausted = attempt >= max_attempts
+        error_message = str(exc)[:500]
+        await _raw_collection("ai_billing_statements").update_one(
+            {"statement_id": statement["statement_id"], "retry_claim_id": claim_id},
+            {"$set": {
+                "status": "retry_exhausted" if exhausted else "failed",
+                "retry_count": attempt, "last_retry_at": failed_at,
+                "last_retry_status": "failed", "error": error_message,
+                "provider_error_status": exc.status_code,
+                "updated_at": failed_at,
+            }, "$unset": {"retry_claim_id": "", "retry_claimed_at": ""}},
+        )
+        await _record_mp_update_error_alert(organization, statement, error_message)
+        await _raw_collection("billing_events").insert_one({
+            "event_id": new_id("billevt"), "organization_id": organization["organization_id"],
+            "type": "ai_settlement_retry_failed", "provider": "mercadopago",
+            "statement_id": statement["statement_id"], "retry_attempt": attempt,
+            "provider_error_status": exc.status_code, "error": error_message,
+            "actor_user_id": actor.user_id, "actor_email": actor.email,
+            "created_at": failed_at,
+        })
+        return {
+            **statement,
+            "status": "retry_exhausted" if exhausted else "failed",
+            "retry_count": attempt, "last_retry_at": failed_at,
+            "error": error_message,
+        }
+
+    applied_at = now_iso()
+    await _raw_collection("ai_billing_statements").update_one(
+        {"statement_id": statement["statement_id"], "retry_claim_id": claim_id},
+        {"$set": {
+            "status": "applied", "retry_count": attempt,
+            "last_retry_at": applied_at, "last_retry_status": "succeeded",
+            "retried_by_user_id": actor.user_id, "retried_by_email": actor.email,
+            "applied_at": applied_at,
+            "provider_response_status": provider_result.get("status"),
+            "updated_at": applied_at,
+        }, "$unset": {
+            "error": "", "provider_error_status": "",
+            "retry_claim_id": "", "retry_claimed_at": "",
+        }},
+    )
+    await _raw_collection("organizations").update_one(
+        {"organization_id": organization["organization_id"]},
+        {"$set": {
+            "last_ai_settlement_end": statement["period_end"],
+            "next_billing_amount_ars": statement["total_amount_ars"],
+            "next_ai_amount_ars": statement["ai_amount_ars"],
+            "last_ai_statement_id": statement["statement_id"],
+            "updated_at": applied_at,
+        }},
+    )
+    await _raw_collection("billing_events").insert_one({
+        "event_id": new_id("billevt"), "organization_id": organization["organization_id"],
+        "type": "ai_settlement_retry_succeeded", "provider": "mercadopago",
+        "provider_resource_id": provider_id, "statement_id": statement["statement_id"],
+        "retry_attempt": attempt, "amount_ars": statement["total_amount_ars"],
+        "actor_user_id": actor.user_id, "actor_email": actor.email,
+        "created_at": applied_at,
+    })
+    await _resolve_mp_update_error_alerts(
+        organization["organization_id"], statement["statement_id"], actor.user_id,
+    )
+    return {
+        **statement, "status": "applied", "retry_count": attempt,
+        "last_retry_at": applied_at, "last_retry_status": "succeeded",
+        "retried_by_user_id": actor.user_id, "retried_by_email": actor.email,
+        "applied_at": applied_at,
+    }
+
+
 async def _apply_ai_settlement(organization: dict, policy: dict, *,
                                force: bool = False, manual: bool = False,
                                expected_preview_fingerprint: Optional[str] = None,
@@ -2231,7 +2428,10 @@ async def _apply_ai_settlement(organization: dict, policy: dict, *,
     existing = await _raw_collection("ai_billing_statements").find_one(
         {"settlement_key": draft["settlement_key"]}, {"_id": 0}
     )
-    if existing and existing.get("status") in {"applied", "paid", "payment_failed"}:
+    if existing and existing.get("status") in {
+        "applying", "applied", "paid", "payment_failed", "failed", "retrying",
+        "retry_exhausted",
+    }:
         return existing
     statement = draft if existing and existing.get("status") == "blocked_margin" else (existing or draft)
     if existing and existing.get("status") == "blocked_margin":
@@ -2276,12 +2476,32 @@ async def _apply_ai_settlement(organization: dict, policy: dict, *,
             },
         )
     except MercadoPagoAPIError as exc:
+        failed_at = now_iso()
+        error_message = str(exc)[:500]
         await _raw_collection("ai_billing_statements").update_one(
             {"statement_id": statement["statement_id"]},
-            {"$set": {"status": "failed", "error": str(exc)[:500],
-                      "updated_at": now_iso()}},
+            {"$set": {
+                "status": "failed", "error": error_message,
+                "provider_error_status": exc.status_code,
+                "failed_at": failed_at,
+                "retry_count": int(statement.get("retry_count") or 0),
+                "updated_at": failed_at,
+            }},
         )
-        return {**statement, "status": "failed", "error": str(exc)}
+        await _record_mp_update_error_alert(organization, statement, error_message)
+        await _raw_collection("billing_events").insert_one({
+            "event_id": new_id("billevt"), "organization_id": organization_id,
+            "type": "ai_settlement_apply_failed", "provider": "mercadopago",
+            "statement_id": statement["statement_id"],
+            "provider_error_status": exc.status_code,
+            "error": error_message, "created_at": failed_at,
+        })
+        return {
+            **statement, "status": "failed", "error": error_message,
+            "provider_error_status": exc.status_code,
+            "failed_at": failed_at,
+            "retry_count": int(statement.get("retry_count") or 0),
+        }
     applied_at = now_iso()
     await _raw_collection("ai_billing_statements").update_one(
         {"statement_id": statement["statement_id"]},
@@ -6654,6 +6874,8 @@ class AIVariableBillingPolicyUpdate(BaseModel):
     min_net_margin_percent: Optional[float] = None
     min_ai_margin_percent: Optional[float] = None
     profitability_enforcement: Optional[Literal["block", "warn"]] = None
+    max_retry_attempts: Optional[int] = None
+    retry_cooldown_minutes: Optional[int] = None
 
 
 @api_router.get("/platform/ai-billing")
@@ -6746,7 +6968,16 @@ async def platform_list_ai_settlements(
     items = await _raw_collection("ai_billing_statements").find(
         query, {"_id": 0}
     ).sort("created_at", -1).to_list(limit)
-    return {"items": items, "count": len(items)}
+    from billing import ai_settlement
+    policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
+    return {
+        "items": items,
+        "count": len(items),
+        "retry_policy": {
+            "max_attempts": policy["max_retry_attempts"],
+            "cooldown_minutes": policy["retry_cooldown_minutes"],
+        },
+    }
 
 
 class OrganizationAIBillingUpdate(BaseModel):
@@ -6774,6 +7005,10 @@ class AIPilotPreviewRequest(BaseModel):
 class AIPilotApprovalRequest(BaseModel):
     organization_id: str
     preview_fingerprint: str
+    confirmation: str
+
+
+class AISettlementRetryRequest(BaseModel):
     confirmation: str
 
 
@@ -7045,9 +7280,12 @@ async def platform_apply_pilot_ai_settlement(
 @api_router.post("/platform/ai-billing/statements/{statement_id}/retry")
 async def platform_retry_ai_settlement(
     statement_id: str,
+    payload: AISettlementRetryRequest,
     platform_admin: User = Depends(require_platform_admin),
 ):
-    """Point 4: Manual settlement retry endpoint."""
+    """Retry one frozen failed statement with an audited, idempotent claim."""
+    if payload.confirmation != "REINTENTAR":
+        raise HTTPException(400, "La confirmación explícita es obligatoria")
     stmt = await _raw_collection("ai_billing_statements").find_one({"statement_id": statement_id}, {"_id": 0})
     if not stmt:
         raise HTTPException(404, "Liquidación no encontrada")
@@ -7057,8 +7295,7 @@ async def platform_retry_ai_settlement(
 
     from billing import ai_settlement
     policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
-    result = await _apply_ai_settlement(org, policy, force=True, manual=True)
-    return result
+    return await _retry_failed_ai_statement(stmt, org, policy, platform_admin)
 
 
 @api_router.get("/billing/statements/export")

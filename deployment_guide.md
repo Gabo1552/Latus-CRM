@@ -188,6 +188,11 @@ El backend de Latus CRM incluye verificaciones de seguridad automáticas al inic
 - Dentro de la ventana previa a la renovación, el sistema cierra el consumo todavía no liquidado, congela costo base, fee, cotización, colchón cambiario e importe final, y actualiza el próximo monto mediante `PUT /preapproval/{id}`.
 - Cuando Mercado Pago confirma ese cobro, el importe recurrente vuelve de inmediato al precio base del plan. Así el variable anterior no puede repetirse si el siguiente cierre no llegara a ejecutarse.
 - Cada ciclo usa una clave única por empresa y fecha de cobro. Un reinicio o una ejecución manual repetida no genera una segunda liquidación ni vuelve a modificar Mercado Pago.
+- Si Mercado Pago rechaza técnicamente la actualización del importe, la liquidación queda en **Error técnico** y se genera una alerta operativa. El scheduler no vuelve a enviarla automáticamente.
+- Los reintentos se realizan únicamente desde **Plataforma > Cobro automático del consumo de IA**, requieren confirmación expresa de un administrador de plataforma y reutilizan el importe congelado. No incorporan consumo nuevo ni recalculan cotización, fee o margen.
+- La política global permite configurar entre 1 y 10 intentos manuales y una espera de hasta 1440 minutos entre intentos. Cada resultado conserva usuario, email, fecha, número de intento, respuesta del proveedor y error para auditoría.
+- Al alcanzar el máximo, la liquidación queda en **Reintentos agotados** y tampoco puede ser retomada por el scheduler. Los estados de pago rechazado, cobrado, aplicado o bloqueado por rentabilidad no admiten esta recuperación técnica.
+- Un reintento exitoso resuelve las alertas abiertas de actualización de Mercado Pago para esa empresa. Un intento repetido o simultáneo se rechaza de forma idempotente para evitar aplicar el importe dos veces.
 - Los webhooks de pago aprobado o rechazado concilian la liquidación por empresa e importe. El detalle aparece tanto en **Plataforma** como en **Suscripción**.
 - Con la liquidación variable activa, una cancelación se programa al cierre del período: se cobra únicamente el consumo de IA pendiente —sin sumar un nuevo mes del plan— y luego el webhook cancela la renovación. Si no hay saldo de IA, se cancela sin generar un cobro.
 

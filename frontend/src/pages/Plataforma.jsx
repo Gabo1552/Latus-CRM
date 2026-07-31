@@ -52,6 +52,8 @@ const SETTLEMENT_STATUS = {
   paid: "Cobrado", payment_failed: "Pago rechazado", failed: "Error",
   closed_no_charge: "Cerrado sin saldo",
   blocked_margin: "Bloqueada por margen",
+  retrying: "Reintentando",
+  retry_exhausted: "Reintentos agotados",
 };
 
 function AIVariableBillingPanel() {
@@ -65,6 +67,8 @@ function AIVariableBillingPanel() {
     queryFn: () => api.get("/platform/ai-settlements?limit=8").then((r) => r.data),
   });
   const [draft, setDraft] = useState(null);
+  const [retryStatement, setRetryStatement] = useState(null);
+  const [retryConfirmed, setRetryConfirmed] = useState(false);
   useEffect(() => { if (policyQ.data) setDraft(policyQ.data); }, [policyQ.data]);
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["ai-settlement-policy"] });
@@ -83,6 +87,8 @@ function AIVariableBillingPanel() {
         min_net_margin_percent: Number(draft.min_net_margin_percent),
         min_ai_margin_percent: Number(draft.min_ai_margin_percent),
         profitability_enforcement: draft.profitability_enforcement,
+        max_retry_attempts: Number(draft.max_retry_attempts),
+        retry_cooldown_minutes: Number(draft.retry_cooldown_minutes),
       };
       if (Number(draft.usd_to_ars_rate) !== Number(policyQ.data?.usd_to_ars_rate)) {
         payload.usd_to_ars_rate = Number(draft.usd_to_ars_rate);
@@ -102,14 +108,35 @@ function AIVariableBillingPanel() {
     onSuccess: (data) => { toast.success(data.applied ? `${data.applied} liquidación aplicada` : "No hay cobros dentro de la ventana de liquidación"); invalidate(); },
     onError: (e) => toast.error(e.response?.data?.detail || "No se pudo ejecutar la liquidación"),
   });
+  const retry = useMutation({
+    mutationFn: (statementId) => api.post(
+      `/platform/ai-billing/statements/${encodeURIComponent(statementId)}/retry`,
+      { confirmation: "REINTENTAR" },
+    ).then((r) => r.data),
+    onSuccess: (result) => {
+      if (result.status === "applied") toast.success("Liquidación recuperada y aplicada a Mercado Pago");
+      else toast.error(`El reintento volvió a fallar: ${result.error || "revisá la alerta operativa"}`);
+      setRetryStatement(null);
+      setRetryConfirmed(false);
+      invalidate();
+    },
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : detail?.message || "No se pudo reintentar");
+      invalidate();
+    },
+  });
   if (!draft) return null;
   const invalid = Number(draft.usd_to_ars_rate) <= 0 || Number(draft.fx_buffer_percent) < 0
     || Number(draft.settlement_lead_hours) < 1 || Number(draft.max_rate_age_hours) < 12
     || Number(draft.mp_fee_percent) < 0 || Number(draft.mp_fee_percent) > 30
     || Number(draft.tax_percent) < 0 || Number(draft.tax_percent) > 60
     || Number(draft.min_net_margin_percent) < 0 || Number(draft.min_net_margin_percent) > 100
-    || Number(draft.min_ai_margin_percent) < 0 || Number(draft.min_ai_margin_percent) > 100;
+    || Number(draft.min_ai_margin_percent) < 0 || Number(draft.min_ai_margin_percent) > 100
+    || Number(draft.max_retry_attempts) < 1 || Number(draft.max_retry_attempts) > 10
+    || Number(draft.retry_cooldown_minutes) < 0 || Number(draft.retry_cooldown_minutes) > 1440;
   const rows = statementsQ.data?.items || [];
+  const retryPolicy = statementsQ.data?.retry_policy || { max_attempts: draft.max_retry_attempts || 3, cooldown_minutes: draft.retry_cooldown_minutes || 5 };
   return (
     <section className="overflow-hidden rounded-[24px] border border-latus-warm-border bg-white shadow-sm" data-testid="ai-variable-billing-panel">
       <div className="flex flex-col gap-4 border-b border-latus-warm-border bg-latus-cream/35 p-5 sm:flex-row sm:items-start sm:justify-between sm:px-6">
@@ -154,11 +181,60 @@ function AIVariableBillingPanel() {
           </label>
         </div>
       </div>
+      <div className="mx-5 mb-5 rounded-2xl border border-rose-200 bg-rose-50/40 p-4 sm:mx-6 sm:mb-6">
+        <div className="flex items-start gap-3"><RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-rose-700" /><div><p className="text-xs font-extrabold uppercase tracking-[0.12em] text-rose-900">Recuperación de errores técnicos</p><p className="mt-1 text-xs leading-5 text-rose-800">Los reintentos usan el importe congelado de la liquidación fallida. Nunca recalculan el período ni se habilitan para pagos ya cobrados o rechazados por el cliente.</p></div></div>
+        <div className="mt-4 grid gap-4 sm:max-w-xl sm:grid-cols-2">
+          <label className="text-xs font-bold text-latus-ink">Máximo de intentos manuales
+            <Input type="number" min="1" max="10" value={draft.max_retry_attempts} onChange={(e) => setDraft((d) => ({ ...d, max_retry_attempts: e.target.value }))} className="mt-1.5 h-10 border-rose-200 bg-white" />
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Espera entre intentos
+            <div className="relative"><Input type="number" min="0" max="1440" value={draft.retry_cooldown_minutes} onChange={(e) => setDraft((d) => ({ ...d, retry_cooldown_minutes: e.target.value }))} className="mt-1.5 h-10 border-rose-200 bg-white pr-12" /><span className="absolute bottom-2.5 right-3 text-latus-muted">min</span></div>
+          </label>
+        </div>
+      </div>
       <div className="flex flex-col gap-3 border-t border-latus-warm-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <div><p className={`text-xs font-extrabold ${draft.rate_is_fresh ? "text-emerald-700" : "text-amber-700"}`}>{draft.rate_is_fresh ? "Cotización vigente" : "Cotización vencida o no configurada"}</p><p className="mt-1 text-[11px] text-latus-muted">Observada: {draft.exchange_rate_observed_at || "—"} · actualizada: {draft.exchange_rate_updated_at ? new Date(draft.exchange_rate_updated_at).toLocaleString("es-AR") : "—"}</p></div>
         <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => refreshRate.mutate()} disabled={refreshRate.isPending} className="rounded-lg border-latus-warm-border"><RefreshCw className={`h-4 w-4 ${refreshRate.isPending ? "animate-spin" : ""}`} />Actualizar desde BCRA</Button><Button variant="outline" onClick={() => run.mutate()} disabled={!draft.enabled || run.isPending} className="rounded-lg border-latus-warm-border"><FileText className="h-4 w-4" />Procesar empresas activas</Button><Button onClick={() => save.mutate()} disabled={invalid || save.isPending} className="rounded-lg bg-latus-blue text-white hover:bg-latus-blue/90">Guardar política</Button></div>
       </div>
-      {rows.length > 0 && <div className="overflow-x-auto border-t border-latus-warm-border"><table className="w-full min-w-[900px] text-left text-xs"><thead className="bg-latus-cream text-[10px] font-extrabold uppercase tracking-wider text-latus-muted"><tr><th className="px-5 py-3">Empresa</th><th className="px-4 py-3">Período</th><th className="px-4 py-3 text-right">IA USD</th><th className="px-4 py-3 text-right">IA ARS</th><th className="px-4 py-3 text-right">Plan + IA</th><th className="px-5 py-3">Estado</th></tr></thead><tbody className="divide-y divide-latus-warm-border">{rows.map((row) => <tr key={row.statement_id}><td className="px-5 py-3 font-mono">{row.organization_id}</td><td className="px-4 py-3 text-latus-muted">{String(row.period_start).slice(0, 10)} → {String(row.period_end).slice(0, 10)}</td><td className="px-4 py-3 text-right font-mono">USD {Number(row.billable_cost_usd || 0).toFixed(4)}</td><td className="px-4 py-3 text-right font-mono">$ {Number(row.ai_amount_ars || 0).toLocaleString("es-AR")}</td><td className="px-4 py-3 text-right font-extrabold">$ {Number(row.total_amount_ars || 0).toLocaleString("es-AR")}</td><td className="px-5 py-3"><span className="rounded-full bg-slate-100 px-2.5 py-1 font-extrabold text-slate-700">{SETTLEMENT_STATUS[row.status] || row.status}</span></td></tr>)}</tbody></table></div>}
+      {rows.length > 0 && (
+        <div className="overflow-x-auto border-t border-latus-warm-border">
+          <table className="w-full min-w-[1120px] text-left text-xs">
+            <thead className="bg-latus-cream text-[10px] font-extrabold uppercase tracking-wider text-latus-muted"><tr><th className="px-5 py-3">Empresa</th><th className="px-4 py-3">Período</th><th className="px-4 py-3 text-right">IA USD</th><th className="px-4 py-3 text-right">IA ARS</th><th className="px-4 py-3 text-right">Plan + IA</th><th className="px-4 py-3">Estado</th><th className="px-4 py-3">Intentos</th><th className="px-5 py-3 text-right">Recuperación</th></tr></thead>
+            <tbody className="divide-y divide-latus-warm-border">
+              {rows.map((row) => {
+                const attempts = Number(row.retry_count || 0);
+                const canRetry = row.status === "failed" && attempts < Number(retryPolicy.max_attempts || 3);
+                return (
+                  <tr key={row.statement_id}>
+                    <td className="px-5 py-3 font-mono">{row.organization_id}</td>
+                    <td className="px-4 py-3 text-latus-muted">{String(row.period_start).slice(0, 10)} → {String(row.period_end).slice(0, 10)}</td>
+                    <td className="px-4 py-3 text-right font-mono">USD {Number(row.billable_cost_usd || 0).toFixed(4)}</td>
+                    <td className="px-4 py-3 text-right font-mono">$ {Number(row.ai_amount_ars || 0).toLocaleString("es-AR")}</td>
+                    <td className="px-4 py-3 text-right font-extrabold">$ {Number(row.total_amount_ars || 0).toLocaleString("es-AR")}</td>
+                    <td className="px-4 py-3"><span className={`rounded-full px-2.5 py-1 font-extrabold ${row.status === "failed" || row.status === "retry_exhausted" ? "bg-rose-100 text-rose-700" : row.status === "retrying" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{SETTLEMENT_STATUS[row.status] || row.status}</span>{row.error && <p className="mt-2 max-w-[240px] truncate text-[10px] text-rose-700" title={row.error}>{row.error}</p>}</td>
+                    <td className="px-4 py-3"><span className="font-bold text-latus-ink">{attempts} / {retryPolicy.max_attempts}</span>{row.last_retry_at && <p className="mt-1 text-[10px] text-latus-muted">{new Date(row.last_retry_at).toLocaleString("es-AR")}</p>}</td>
+                    <td className="px-5 py-3 text-right">{canRetry ? <Button type="button" variant="outline" size="sm" onClick={() => { setRetryStatement(row); setRetryConfirmed(false); }} className="border-rose-300 bg-rose-50 text-xs font-bold text-rose-800 hover:bg-rose-100"><RefreshCw className="h-3.5 w-3.5" />Reintentar</Button> : row.status === "payment_failed" ? <span className="text-[10px] font-bold text-amber-700">Revisar pago en Mercado Pago</span> : "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {retryStatement && (
+        <div className="fixed inset-0 z-[120] grid place-items-center bg-latus-ink/60 p-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-lg rounded-[24px] border border-white/10 bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-latus-warm-border px-6 py-5"><div><span className="inline-flex rounded-full bg-rose-100 px-3 py-1 text-xs font-black text-rose-800">RECUPERACIÓN TÉCNICA</span><h3 className="mt-2 text-xl font-extrabold text-latus-ink">Reintentar liquidación</h3></div><button type="button" onClick={() => setRetryStatement(null)} className="rounded-lg p-2 text-latus-muted hover:bg-latus-cream"><X className="h-5 w-5" /></button></div>
+            <div className="space-y-4 p-6 text-sm">
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs leading-5 text-amber-900"><strong>Se reutilizará el importe congelado.</strong> No se incorporará consumo nuevo ni se recalculará la cotización. Esta acción vuelve a intentar actualizar el próximo cobro en Mercado Pago.</div>
+              <div className="grid gap-3 rounded-xl border border-latus-warm-border bg-latus-cream/40 p-4 sm:grid-cols-2"><div><p className="text-[10px] font-bold uppercase text-latus-muted">Empresa</p><p className="mt-1 font-mono text-xs font-bold text-latus-ink">{retryStatement.organization_id}</p></div><div><p className="text-[10px] font-bold uppercase text-latus-muted">Importe congelado</p><p className="mt-1 font-black text-latus-blue">$ {Number(retryStatement.total_amount_ars || 0).toLocaleString("es-AR")} ARS</p></div><div><p className="text-[10px] font-bold uppercase text-latus-muted">Intento siguiente</p><p className="mt-1 font-bold text-latus-ink">{Number(retryStatement.retry_count || 0) + 1} de {retryPolicy.max_attempts}</p></div><div><p className="text-[10px] font-bold uppercase text-latus-muted">Espera configurada</p><p className="mt-1 font-bold text-latus-ink">{retryPolicy.cooldown_minutes} minutos</p></div></div>
+              {retryStatement.error && <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800"><strong>Último error:</strong> {retryStatement.error}</div>}
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-rose-200 bg-rose-50/60 p-4 text-xs text-rose-900"><input type="checkbox" checked={retryConfirmed} onChange={(e) => setRetryConfirmed(e.target.checked)} className="mt-0.5 h-4 w-4 accent-rose-700" /><span>Verifiqué la suscripción y autorizo reintentar exactamente este importe.</span></label>
+            </div>
+            <div className="flex justify-end gap-3 border-t border-latus-warm-border px-6 py-4"><Button type="button" variant="outline" onClick={() => setRetryStatement(null)}>Cancelar</Button><Button type="button" disabled={!retryConfirmed || retry.isPending} onClick={() => retry.mutate(retryStatement.statement_id)} className="bg-rose-700 text-white hover:bg-rose-800">{retry.isPending ? "Reintentando..." : "Confirmar reintento"}</Button></div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
