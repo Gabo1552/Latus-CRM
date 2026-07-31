@@ -87,6 +87,12 @@ DEFAULT_BOT_SETTINGS = {
     "appointment_reminder_templates": [],
     "appointment_reminder_template_id": None,
     "appointment_rescheduling_enabled": True,
+    "webchat_enabled": True,
+    "webchat_auto_invite_whatsapp": False,
+    "webchat_title": "Asistente Latus",
+    "webchat_welcome_message": "¡Hola! ¿En qué puedo ayudarte hoy?",
+    "webchat_primary_color": "#0E8DDB",
+    "webchat_position": "right",
 }
 
 # Sensitive data patterns (Argentinian DNI, CBU, credit card-like)
@@ -330,10 +336,32 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             from utils.scheduling import build_appointment_context
             appointment_context = await build_appointment_context(db, conv, settings)
 
+        session_token = conv.get("webchat_session_token")
+        if not session_token:
+            session_token = f"cw_{uuid.uuid4().hex[:16]}"
+            await db.conversations.update_one({"id": conv_id}, {"$set": {"webchat_session_token": session_token}})
+
+        resp_instr = settings.get("response_instructions") or ""
+        if conv.get("channel") == "whatsapp" and settings.get("webchat_auto_invite_whatsapp"):
+            import os
+            app_url = os.environ.get("PUBLIC_APP_URL", "http://localhost:3000")
+            invite_url = f"{app_url}/c/{session_token}"
+            resp_instr += f"\n\nINVITACIÓN AL CHAT WEB (REDUCCIÓN DE COSTOS): Invitá amablemente al cliente a ingresar a su chat web interactivo sin límites ni demoras usando este link: {invite_url}"
+
+        if conv.get("channel") == "webchat":
+            contact = await db.contacts.find_one({"id": conv.get("contact_id")}, {"_id": 0}) or {}
+            phone = contact.get("phone", "")
+            if not phone or "cnt_" in phone or len(phone) < 8 or not phone.replace("+", "").isdigit():
+                resp_instr += (
+                    "\n\nREGISTRO DE TELÉFONO (CHAT WEB): Al saludar o al avanzar en la consulta, "
+                    "pedile amablemente su número de WhatsApp/Teléfono al cliente para registrar su legajo único "
+                    "y enviarle el resumen de atención al finalizar la charla."
+                )
+
         sp = build_system_prompt(
             tone=settings["tone"],
             company_context=merged_cc,
-            response_instructions=settings.get("response_instructions") or "",
+            response_instructions=resp_instr,
             faqs=settings["faqs"],
             handoff_rules=settings["handoff_rules"],
             bot_name=settings.get("bot_name", "Bot"),

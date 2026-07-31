@@ -6,6 +6,7 @@ import {
   Users as UsersIcon, MessageSquareText, Plus, MoreHorizontal, Search,
   Copy, RefreshCw, CheckCircle2, AlertTriangle, KeyRound, Trash2, Eye, EyeOff,
   Bot, CalendarClock, Sparkles, Lightbulb, Shield, CheckSquare, Package, Building2,
+  Globe, Code, ExternalLink,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import AppointmentSettingsPanel from "@/components/AppointmentSettingsPanel";
@@ -1625,6 +1626,226 @@ function BotIATab({ setTab }) {
 
 
 // =============================================================================
+// WEBCHAT TAB (Widget Integrable & Unique Customer Link)
+// =============================================================================
+function WebChatTab() {
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ["bot-settings"],
+    queryFn: () => api.get("/admin/bot-settings").then((r) => r.data),
+  });
+
+  const [draft, setDraft] = useState({});
+  const [pendingKeys, setPendingKeys] = useState({});
+
+  useEffect(() => {
+    if (q.data) {
+      setDraft(q.data);
+      setPendingKeys({});
+    }
+  }, [q.data]);
+
+  const set = (patch) => {
+    setDraft((prev) => ({ ...prev, ...patch }));
+    setPendingKeys((prev) => {
+      const next = { ...prev };
+      Object.keys(patch).forEach((k) => { next[k] = true; });
+      return next;
+    });
+  };
+
+  const save = useMutation({
+    mutationFn: (body) => api.patch("/admin/bot-settings", body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["bot-settings"] });
+      setPendingKeys({});
+      toast.success("Configuración del Chat Web guardada");
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "No se pudo guardar la configuración"),
+  });
+
+  const dirty = Object.keys(pendingKeys).length > 0;
+
+  if (q.isLoading) {
+    return <div className="p-8 text-center text-sm text-[#888888]">Cargando configuración de Chat Web…</div>;
+  }
+
+  const primaryColor = draft.webchat_primary_color || "#0E8DDB";
+  const embedCode = `<!-- Latus CRM Web Chat Widget -->\n<script src="${window.location.origin}/widget.js" data-org-id="default" data-color="${primaryColor}"></script>`;
+
+  const onSave = () => {
+    save.mutate({
+      webchat_enabled: draft.webchat_enabled !== undefined ? !!draft.webchat_enabled : true,
+      webchat_auto_invite_whatsapp: !!draft.webchat_auto_invite_whatsapp,
+      webchat_title: (draft.webchat_title || "Asistente Latus").trim(),
+      webchat_welcome_message: (draft.webchat_welcome_message || "¡Hola! ¿En qué puedo ayudarte hoy?").trim(),
+      webchat_primary_color: draft.webchat_primary_color || "#0E8DDB",
+      webchat_position: draft.webchat_position || "right",
+    });
+  };
+
+  return (
+    <div className="space-y-6" data-testid="webchat-tab">
+      <div className="bg-white border border-[#E9E6DC] rounded-sm p-5 space-y-6">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <Globe className="h-5 w-5 text-[#0E8DDB]" />
+            <h2 className="text-xl font-bold tracking-tight text-[#0B1B26]">Chat Web Integrable & Link Único</h2>
+          </div>
+          <p className="text-sm text-[#888888]">
+            Permite a tus clientes chatear directamente en la web sin costo por mensaje de WhatsApp Meta, usando un widget integrable en tu sitio o enviando un enlace único personalizado por WhatsApp.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {/* Webchat enabled */}
+          <div className="flex items-start justify-between gap-4 p-4 border border-[#E9E6DC] rounded-sm">
+            <div>
+              <Label className="text-sm font-bold text-[#0B1B26]">Habilitar Chat Web</Label>
+              <p className="text-xs text-[#888888] mt-0.5">
+                Permite la recepción de chats web y el funcionamiento de enlaces únicos de conversación.
+              </p>
+            </div>
+            <Switch
+              checked={draft.webchat_enabled !== undefined ? !!draft.webchat_enabled : true}
+              onCheckedChange={(v) => set({ webchat_enabled: v })}
+            />
+          </div>
+
+          {/* Auto invite WhatsApp */}
+          <div className="flex items-start justify-between gap-4 p-4 border border-[#E9E6DC] bg-blue-50/20 rounded-sm">
+            <div>
+              <Label className="text-sm font-bold text-[#0B1B26]">Auto-invitación en WhatsApp (Ahorro de Costos)</Label>
+              <p className="text-xs text-[#888888] mt-0.5">
+                Cuando un cliente escriba por WhatsApp, la IA incluirá automáticamente su enlace único de chat web para trasladar la charla sin costo por mensaje.
+              </p>
+            </div>
+            <Switch
+              checked={!!draft.webchat_auto_invite_whatsapp}
+              onCheckedChange={(v) => set({ webchat_auto_invite_whatsapp: v })}
+            />
+          </div>
+
+          {/* Title */}
+          <div className="p-4 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Título del Asistente Web</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
+              Nombre visible en el encabezado del widget web y la página del chat.
+            </p>
+            <Input
+              value={draft.webchat_title || ""}
+              onChange={(e) => set({ webchat_title: e.target.value })}
+              className="rounded-sm h-9 text-xs"
+              placeholder="Ej.: Asistente Latus, Soporte Web, etc."
+            />
+          </div>
+
+          {/* Color */}
+          <div className="p-4 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Color Primario / Marca</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
+              Color principal de los botones, burbujas y encabezado del chat.
+            </p>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                value={draft.webchat_primary_color || "#0E8DDB"}
+                onChange={(e) => set({ webchat_primary_color: e.target.value })}
+                className="h-9 w-12 rounded-sm border border-[#E9E6DC] cursor-pointer p-0.5"
+              />
+              <Input
+                value={draft.webchat_primary_color || "#0E8DDB"}
+                onChange={(e) => set({ webchat_primary_color: e.target.value })}
+                className="rounded-sm h-9 text-xs font-mono w-32"
+              />
+            </div>
+          </div>
+
+          {/* Welcome Message */}
+          <div className="p-4 border border-[#E9E6DC] rounded-sm md:col-span-2">
+            <Label className="text-sm font-bold text-[#0B1B26]">Mensaje de Bienvenida Inicial</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
+              Primer mensaje mostrado al visitante cuando ingresa a la sesión de chat web.
+            </p>
+            <Textarea
+              value={draft.webchat_welcome_message || ""}
+              onChange={(e) => set({ webchat_welcome_message: e.target.value })}
+              className="rounded-sm min-h-[80px] text-xs"
+              placeholder="Ej.: ¡Hola! Bienvenido a nuestra atención online. ¿En qué podemos ayudarte hoy?"
+            />
+          </div>
+
+          {/* Code Embed */}
+          <div className="p-4 border border-[#E9E6DC] bg-slate-50 rounded-sm md:col-span-2 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm font-bold text-[#0B1B26] flex items-center gap-1.5">
+                  <Code className="h-4 w-4 text-[#0E8DDB]" /> Código Embed para tu Sitio Web
+                </Label>
+                <p className="text-xs text-[#888888] mt-0.5">
+                  Copiá y pegá este fragmento antes de la etiqueta <code className="text-[#0E8DDB]">&lt;/body&gt;</code> en tu web para instalar el widget flotante.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  navigator.clipboard.writeText(embedCode);
+                  toast.success("Código de widget copiado al portapapeles");
+                }}
+                className="text-xs font-bold gap-1 bg-white"
+              >
+                <Copy className="h-3.5 w-3.5" /> Copiar Código
+              </Button>
+            </div>
+            <pre className="bg-slate-900 text-slate-100 p-3 rounded-sm text-xs font-mono overflow-x-auto">
+              {embedCode}
+            </pre>
+          </div>
+
+          {/* Public Preview Button */}
+          <div className="p-4 border border-[#E9E6DC] bg-latus-cream/40 rounded-sm md:col-span-2 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-bold text-[#0B1B26]">Probar Experiencia de Chat Web</p>
+              <p className="text-xs text-[#888888]">Abrí una vista previa interactiva del chat público en una nueva pestaña.</p>
+            </div>
+            <a
+              href="/c/demo_preview"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#0E8DDB] hover:bg-[#0a7ab8] text-white text-xs font-bold rounded-sm transition-all shrink-0"
+            >
+              Probar Chat Web <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 pt-4 border-t border-[#E9E6DC]">
+          <Button
+            variant="outline"
+            onClick={() => { setDraft({ ...q.data }); setPendingKeys({}); }}
+            disabled={!dirty}
+            className="rounded-sm"
+          >
+            Descartar cambios
+          </Button>
+          <Button
+            onClick={onSave}
+            disabled={!dirty || save.isPending}
+            className="bg-[#0E8DDB] hover:bg-[#0a7ab8] rounded-sm"
+          >
+            {save.isPending ? <RefreshCw className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+            Guardar cambios
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// =============================================================================
 // AI & AUTOMATIZACIÓN TAB (Phase 1 — multi-provider config)
 // =============================================================================
 const PROVIDER_LABELS = {
@@ -3127,6 +3348,7 @@ export default function Configuracion() {
   if (hasPerm("whatsapp_admin")) tabs.push({ key: "whatsapp", label: "WhatsApp", description: "Conexión, credenciales y webhook de la empresa", icon: MessageSquareText, testid: "tab-whatsapp", scope: "tenant" });
   if (hasPerm("calendar_admin")) tabs.push({ key: "agenda", label: "Agenda", description: "Horarios, personas, servicios y cupos de citas", icon: CalendarClock, testid: "tab-agenda", scope: "tenant" });
   if (hasPerm("ai_admin")) tabs.push({ key: "bot", label: "Bot IA (Empresa)", description: "Comportamiento y respuestas del asistente de tu empresa", icon: Bot, testid: "tab-bot-ia", scope: "tenant" });
+  if (hasPerm("ai_admin")) tabs.push({ key: "webchat", label: "Chat Web Integrable", description: "Widget web, link único por cliente y reducción de costos de WhatsApp", icon: Globe, testid: "tab-webchat", scope: "tenant" });
   if (hasPerm("users_admin")) tabs.push({ key: "roles", label: "Roles y accesos", description: "Permisos disponibles para cada rol en tu empresa", icon: Shield, testid: "tab-roles", scope: "tenant" });
   if (hasPerm("users_admin")) tabs.push({ key: "work-areas", label: "Áreas de trabajo", description: "Organización y distribución del equipo", icon: Building2, testid: "tab-work-areas", scope: "tenant" });
   if (hasPerm("settings_admin")) tabs.push({ key: "crm", label: "Tareas y catálogo", description: "Estados, categorías y opciones del CRM", icon: Package, testid: "tab-crm-config", scope: "tenant" });
@@ -3205,6 +3427,7 @@ export default function Configuracion() {
         {activeTab === "whatsapp" && <WhatsAppTab />}
         {activeTab === "agenda" && <AgendaTab />}
         {activeTab === "bot" && <BotIATab setTab={setTab} />}
+        {activeTab === "webchat" && <WebChatTab />}
         {activeTab === "ai" && <AIAutoTab />}
         {activeTab === "roles" && <RolesTab />}
         {activeTab === "work-areas" && <WorkAreasTab />}

@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Send, Bot, User as UserIcon, Sparkles, Search, Phone, Mail,
   MessageSquare, Zap, Copy, RefreshCw, AlertOctagon, ChevronRight, FileText,
-  Lightbulb, ExternalLink, ChevronLeft, Info, X
+  Lightbulb, ExternalLink, ChevronLeft, Info, X, Globe
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { hasPermission } from "@/lib/permissions";
@@ -370,6 +370,11 @@ export default function Inbox() {
                             WA
                           </span>
                         )}
+                        {c.channel === "webchat" && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-purple-700 bg-purple-50 border border-purple-200 rounded-sm px-1.5 py-0.5 leading-none">
+                            <Globe className="h-2.5 w-2.5 text-purple-600" /> WEB
+                          </span>
+                        )}
                         {!c.bot_enabled ? (
                           <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 bg-slate-100 border border-slate-200 rounded-sm px-1.5 py-0.5 leading-none">
                             <UserIcon className="h-2.5 w-2.5 text-slate-600" /> HUMANO
@@ -430,7 +435,12 @@ export default function Inbox() {
                       </p>
                       {active.channel === "whatsapp" && (
                         <span data-testid="channel-badge-whatsapp" className="inline-flex items-center gap-1 text-[10px] font-extrabold tracking-wider uppercase text-[#0E8DDB] bg-[#E0F2FE] border border-[#BAE6FD] rounded-sm px-1.5 py-0.5 leading-none shrink-0">
-                          WA
+                          WhatsApp
+                        </span>
+                      )}
+                      {active.channel === "webchat" && (
+                        <span data-testid="channel-badge-webchat" className="inline-flex items-center gap-1 text-[10px] font-extrabold tracking-wider uppercase text-purple-700 bg-purple-50 border border-purple-200 rounded-sm px-1.5 py-0.5 leading-none shrink-0">
+                          <Globe className="h-3 w-3 text-purple-600" /> Chat Web
                         </span>
                       )}
                     </div>

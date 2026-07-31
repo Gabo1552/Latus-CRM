@@ -17,6 +17,7 @@ import Catalogo from "@/pages/Catalogo";
 import Calendario from "@/pages/Calendario";
 import Suscripcion from "@/pages/Suscripcion";
 import Plataforma from "@/pages/Plataforma";
+import PublicWebChat from "@/pages/PublicWebChat";
 import { firstAllowedPath, hasConfigurationAccess, hasPermission } from "@/lib/permissions";
 
 function Protected({ children }) {
@@ -96,6 +97,8 @@ function AppRouter() {
       <Route path="/catalogo" element={<Permitted permission="catalog_view"><Catalogo /></Permitted>} />
       <Route path="/suscripcion" element={<Protected><Suscripcion /></Protected>} />
       <Route path="/plataforma" element={<PlatformAdminOnly><Plataforma /></PlatformAdminOnly>} />
+      <Route path="/c/:token" element={<PublicWebChat />} />
+      <Route path="/chat-web/:token" element={<PublicWebChat />} />
       <Route path="/sin-acceso" element={<Protected><NoAccess /></Protected>} />
       <Route path="*" element={<Navigate to={user ? firstAllowedPath(user) : "/"} replace />} />
     </Routes>

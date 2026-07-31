@@ -5598,6 +5598,12 @@ class BotSettingsUpdate(BaseModel):
     appointment_reminder_templates: Optional[List[dict]] = None
     appointment_reminder_template_id: Optional[str] = None
     appointment_rescheduling_enabled: Optional[bool] = None
+    webchat_enabled: Optional[bool] = None
+    webchat_auto_invite_whatsapp: Optional[bool] = None
+    webchat_title: Optional[str] = None
+    webchat_welcome_message: Optional[str] = None
+    webchat_primary_color: Optional[str] = None
+    webchat_position: Optional[str] = None
 
 
 async def _log_system_message(db, conv_id: str, text: str):
@@ -5792,6 +5798,193 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
     await db.bot_settings.update_one({"_id": "default"},
                                      {"$set": {"_id": "default", **update}}, upsert=True)
     return await admin_get_bot_settings(admin)
+
+
+# ---------------------------------------------------------------------------
+# Public Web Chat Endpoints (Unauthenticated / Token Driven)
+# ---------------------------------------------------------------------------
+
+class PublicWebChatSessionRequest(BaseModel):
+    session_token: Optional[str] = None
+    organization_id: Optional[str] = None
+    name: Optional[str] = None
+    phone: Optional[str] = None
+
+
+class PublicWebChatSendRequest(BaseModel):
+    body: str
+    sender_name: Optional[str] = None
+
+
+@api_router.post("/public/webchat/session")
+async def public_webchat_session(payload: PublicWebChatSessionRequest):
+    """Initializes or resumes a public web chat session by token or phone."""
+    from ai.pipeline import DEFAULT_BOT_SETTINGS, _load_bot_settings
+    bot_settings = await _load_bot_settings(db)
+    
+    session_token = (payload.session_token or "").strip()
+    conv_doc = None
+    existing_contact = None
+    
+    if session_token:
+        conv_doc = await db.conversations.find_one({
+            "$or": [
+                {"webchat_session_token": session_token},
+                {"id": session_token}
+            ]
+        })
+    
+    if payload.phone:
+        clean_phone = (payload.phone or "").strip()
+        existing_contact = await db.contacts.find_one({"phone": clean_phone})
+    
+    if not conv_doc and existing_contact:
+        conv_doc = await db.conversations.find_one({"contact_id": existing_contact["id"]})
+    
+    if not conv_doc:
+        import uuid
+        now = datetime.now(timezone.utc).isoformat()
+        if existing_contact:
+            contact_id = existing_contact["id"]
+        else:
+            clean_name = (payload.name or "Visitante Web").strip()
+            clean_phone = (payload.phone or f"+549{uuid.uuid4().hex[:8]}").strip()
+            contact_id = f"cnt_{uuid.uuid4().hex[:12]}"
+            contact_doc = {
+                "id": contact_id,
+                "name": clean_name,
+                "phone": clean_phone,
+                "company": "Web Chat",
+                "lead_source": "Web Chat",
+                "custom_fields": {},
+                "created_at": now,
+            }
+            await db.contacts.insert_one(contact_doc)
+        
+        conv_id = f"conv_{uuid.uuid4().hex[:12]}"
+        session_token = f"cw_{uuid.uuid4().hex[:16]}"
+        conv_doc = {
+            "id": conv_id,
+            "contact_id": contact_id,
+            "lead_id": None,
+            "channel": "webchat",
+            "status": "abierta",
+            "priority": "media",
+            "bot_enabled": bot_settings.get("bot_enabled_default", True),
+            "bot_status": "bot_activo" if bot_settings.get("bot_enabled_default", True) else "en_atencion_humana",
+            "last_message": "Sesión de Chat Web iniciada",
+            "last_message_at": now,
+            "unread": 0,
+            "webchat_session_token": session_token,
+            "created_at": now,
+        }
+        await db.conversations.insert_one(conv_doc)
+    else:
+        if not conv_doc.get("webchat_session_token"):
+            session_token = f"cw_{uuid.uuid4().hex[:16]}"
+            await db.conversations.update_one({"id": conv_doc["id"]}, {"$set": {"webchat_session_token": session_token}})
+        else:
+            session_token = conv_doc["webchat_session_token"]
+    
+    msgs = await db.messages.find({"conversation_id": conv_doc["id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    contact = await db.contacts.find_one({"id": conv_doc["contact_id"]}, {"_id": 0}) or {}
+    
+    return {
+        "session_token": session_token,
+        "conversation_id": conv_doc["id"],
+        "bot_enabled": bool(conv_doc.get("bot_enabled", True)),
+        "bot_status": conv_doc.get("bot_status", "bot_activo"),
+        "contact_name": contact.get("name", "Cliente"),
+        "bot_name": bot_settings.get("bot_name", "Bot"),
+        "webchat_title": bot_settings.get("webchat_title", "Asistente Latus"),
+        "webchat_welcome_message": bot_settings.get("webchat_welcome_message", "¡Hola! ¿En qué puedo ayudarte hoy?"),
+        "webchat_primary_color": bot_settings.get("webchat_primary_color", "#0E8DDB"),
+        "messages": msgs,
+    }
+
+
+@api_router.get("/public/webchat/{session_token}/messages")
+async def public_webchat_get_messages(session_token: str):
+    """Retrieves message history for a web chat session."""
+    conv = await db.conversations.find_one({
+        "$or": [
+            {"webchat_session_token": session_token},
+            {"id": session_token}
+        ]
+    }, {"_id": 0})
+    if not conv:
+        raise HTTPException(status_code=404, detail="Sesión de chat no encontrada")
+    
+    msgs = await db.messages.find({"conversation_id": conv["id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    return {
+        "conversation_id": conv["id"],
+        "bot_enabled": bool(conv.get("bot_enabled", True)),
+        "bot_status": conv.get("bot_status", "bot_activo"),
+        "messages": msgs
+    }
+
+
+@api_router.post("/public/webchat/{session_token}/messages")
+async def public_webchat_send_message(session_token: str, payload: PublicWebChatSendRequest):
+    """Receives an inbound message from the web chat visitor and triggers the AI bot pipeline."""
+    from ai import pipeline as bot_pipeline
+    conv = await db.conversations.find_one({
+        "$or": [
+            {"webchat_session_token": session_token},
+            {"id": session_token}
+        ]
+    }, {"_id": 0})
+    if not conv:
+        raise HTTPException(status_code=404, detail="Sesión de chat no encontrada")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    msg_id = f"msg_{uuid.uuid4().hex[:12]}"
+    clean_body = (payload.body or "").strip()
+    if not clean_body:
+        raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
+    
+    msg_doc = {
+        "id": msg_id,
+        "conversation_id": conv["id"],
+        "sender_type": "contact",
+        "sender_name": payload.sender_name or "Visitante Web",
+        "body": clean_body,
+        "created_at": now,
+        "direction": "inbound",
+        "delivery_status": "delivered",
+        "message_type": "text",
+        "channel": "webchat",
+    }
+    await db.messages.insert_one(msg_doc)
+    
+    update_fields = {"last_message": clean_body, "last_message_at": now}
+    if conv.get("status") == "cerrada":
+        from ai.pipeline import DEFAULT_BOT_SETTINGS, _load_bot_settings
+        bot_settings = await _load_bot_settings(db)
+        bot_default = bot_settings.get("bot_enabled_default", True)
+        update_fields["status"] = "abierta"
+        update_fields["bot_enabled"] = bot_default
+        update_fields["bot_status"] = "bot_activo" if bot_default else "en_atencion_humana"
+        update_fields["human_required_reason"] = None
+        await _log_system_message(db, conv["id"], "Conversación de Chat Web reabierta por nuevo mensaje del cliente")
+
+    await db.conversations.update_one(
+        {"id": conv["id"]},
+        {"$set": {"last_message": clean_body, "last_message_at": now}, "$inc": {"unread": 1}}
+    )
+    
+    event_res = await bot_pipeline.process_inbound(db, conv["id"], msg_id, wa_send=None)
+    
+    updated_msgs = await db.messages.find({"conversation_id": conv["id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    updated_conv = await db.conversations.find_one({"id": conv["id"]}, {"_id": 0}) or {}
+    
+    return {
+        "status": "ok",
+        "event": event_res,
+        "bot_enabled": bool(updated_conv.get("bot_enabled", True)),
+        "bot_status": updated_conv.get("bot_status", "bot_activo"),
+        "messages": updated_msgs
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -6479,7 +6672,7 @@ async def platform_retry_ai_settlement(
 
     from billing import ai_settlement
     policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
-    result = await _apply_ai_settlement(org, policy, force=True)
+    result = await _apply_ai_settlement(org, policy, force=True, manual=True)
     return result
 
 
@@ -7161,6 +7354,10 @@ async def update_conversation(conv_id: str, payload: ConversationUpdate, user: U
                 "El bot fue desactivado — un agente debe tomar control de este chat.",
                 "conversation", conv_id, "high",
             )
+
+    if update.get("status") == "cerrada" and current.get("channel") == "webchat":
+        await send_webchat_whatsapp_summary_internal(db, conv_id)
+
     doc = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
     doc["contact"] = await db.contacts.find_one({"id": doc["contact_id"]}, {"_id": 0})
     return doc
@@ -9023,6 +9220,7 @@ async def organization_context_middleware(request: Request, call_next):
     context_token = set_organization_id(None)
     try:
         session_token = _request_session_token(request)
+        organization_id = None
         if session_token:
             session = await _raw_collection("user_sessions").find_one(
                 {"session_token": session_token}, {"_id": 0}
@@ -9032,9 +9230,14 @@ async def organization_context_middleware(request: Request, call_next):
                     {"user_id": session.get("user_id")}, {"_id": 0}
                 )
                 organization_id = await _resolve_session_organization(session, user_doc)
-                if organization_id:
-                    set_organization_id(organization_id)
-                    request.state.organization_id = organization_id
+        
+        if not organization_id and (request.url.path.startswith("/api/public/") or request.url.path.startswith("/api/webhook/")):
+            organization_id = "default"
+
+        if organization_id:
+            set_organization_id(organization_id)
+            request.state.organization_id = organization_id
+
         return await call_next(request)
     finally:
         reset_organization_id(context_token)
