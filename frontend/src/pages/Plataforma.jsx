@@ -499,6 +499,110 @@ function SimulationModal({ organizationId, orgName, onClose }) {
   );
 }
 
+function PilotApprovalModal({ organization, onClose }) {
+  const qc = useQueryClient();
+  const [confirmed, setConfirmed] = useState(false);
+  const previewQ = useQuery({
+    queryKey: ["ai-pilot-preview", organization.organization_id],
+    queryFn: () => api.post("/platform/ai-billing/pilot-preview", {
+      organization_id: organization.organization_id,
+    }).then((r) => r.data),
+  });
+  const preview = previewQ.data;
+  const statement = preview?.statement;
+  const applyPilot = useMutation({
+    mutationFn: () => api.post("/platform/ai-billing/pilot-apply", {
+      organization_id: organization.organization_id,
+      preview_fingerprint: preview.preview_fingerprint,
+      confirmation: "APLICAR",
+    }).then((r) => r.data),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ["ai-settlements"] });
+      qc.invalidateQueries({ queryKey: ["platform-organizations"] });
+      toast.success(`Piloto aprobado: próximo importe $ ${Number(result.total_amount_ars || 0).toLocaleString("es-AR")}`);
+      onClose();
+    },
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message = typeof detail === "string" ? detail : detail?.message;
+      toast.error(message || "No se pudo aplicar la liquidación piloto");
+      setConfirmed(false);
+      previewQ.refetch();
+    },
+  });
+  const money = (value) => Number(value || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  return (
+    <div className="fixed inset-0 z-[110] grid place-items-center bg-latus-ink/60 p-4" role="dialog" aria-modal="true">
+      <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-[24px] border border-white/10 bg-latus-cream shadow-2xl">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-latus-warm-border bg-white px-6 py-5">
+          <div>
+            <span className="inline-flex rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-black text-violet-800">APROBACIÓN PILOTO</span>
+            <h2 className="mt-2 text-xl font-extrabold text-latus-ink">Revisar liquidación · {organization.name}</h2>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-lg p-2 text-latus-muted hover:bg-latus-cream"><X className="h-5 w-5" /></button>
+        </div>
+
+        <div className="space-y-4 p-6">
+          <div className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs leading-relaxed text-amber-900">
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+            <p><strong>Esta acción modifica Mercado Pago.</strong> Establece el próximo importe de la suscripción; no debita dinero inmediatamente. El cobro se realizará en la fecha de renovación.</p>
+          </div>
+
+          {previewQ.isLoading ? (
+            <div className="grid min-h-[220px] place-items-center"><div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-600 border-t-transparent" /></div>
+          ) : previewQ.isError ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">No se pudo preparar la revisión del piloto.</div>
+          ) : (
+            <>
+              {preview?.blockers?.length > 0 && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 p-4">
+                  <p className="text-sm font-extrabold text-rose-800">La liquidación todavía no puede aplicarse</p>
+                  <ul className="mt-2 space-y-1 text-xs text-rose-700">
+                    {preview.blockers.map((blocker) => <li key={blocker.code}>• {blocker.message}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              {statement && (
+                <div className="overflow-hidden rounded-xl border border-latus-warm-border bg-white">
+                  <div className="border-b border-latus-warm-border bg-latus-cream/50 px-4 py-3 text-xs font-extrabold text-latus-ink">Importe exacto a aprobar</div>
+                  <div className="space-y-3 p-4 text-sm">
+                    <div className="flex justify-between gap-4"><span className="text-latus-muted">Período de consumo</span><span className="font-bold text-latus-ink">{String(statement.period_start || "").slice(0, 10)} → {String(statement.period_end || "").slice(0, 10)}</span></div>
+                    <div className="flex justify-between gap-4"><span className="text-latus-muted">Llamadas y tokens</span><span className="font-bold text-latus-ink">{Number(statement.calls || 0).toLocaleString("es-AR")} · {Number(statement.tokens || 0).toLocaleString("es-AR")}</span></div>
+                    <div className="flex justify-between gap-4"><span className="text-latus-muted">Costo proveedor</span><span className="font-mono text-latus-ink">USD {Number(statement.base_cost_usd || 0).toFixed(6)}</span></div>
+                    <div className="flex justify-between gap-4"><span className="text-latus-muted">Fee Latus</span><span className="font-mono font-bold text-emerald-700">USD {Number(statement.ai_fee_usd || 0).toFixed(6)}</span></div>
+                    <div className="flex justify-between gap-4"><span className="text-latus-muted">Cotización y colchón</span><span className="font-bold text-latus-ink">$ {Number(statement.usd_to_ars_rate || 0).toLocaleString("es-AR")} · +{statement.fx_buffer_percent || 0}%</span></div>
+                    <div className="border-t border-latus-warm-border pt-3">
+                      <div className="flex justify-between gap-4"><span className="text-latus-muted">Plan</span><span className="font-bold text-latus-ink">$ {money(statement.plan_amount_ars)} ARS</span></div>
+                      <div className="mt-2 flex justify-between gap-4"><span className="text-latus-muted">Consumo IA</span><span className="font-bold text-violet-700">$ {money(statement.ai_amount_ars)} ARS</span></div>
+                    </div>
+                    <div className="flex justify-between gap-4 rounded-lg bg-latus-blue/10 p-3 text-base font-black text-latus-blue"><span>Próximo importe total</span><span>$ {money(statement.total_amount_ars)} ARS</span></div>
+                  </div>
+                </div>
+              )}
+
+              {preview?.ready && (
+                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-violet-200 bg-violet-50 p-4 text-xs text-violet-900">
+                  <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 accent-violet-600" />
+                  <span><strong>Revisé el período y el importe.</strong> Autorizo actualizar el próximo cobro de esta empresa en Mercado Pago.</span>
+                </label>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-3 border-t border-latus-warm-border bg-white px-6 py-4">
+          <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button type="button" disabled={!preview?.ready || !confirmed || applyPilot.isPending} onClick={() => applyPilot.mutate()} className="bg-violet-700 text-white hover:bg-violet-800">
+            {applyPilot.isPending ? "Verificando y aplicando..." : "Aprobar próximo importe"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SuperadminExecutiveDashboardPanel({
   selectedOrgId,
   setSelectedOrgId,
@@ -635,6 +739,7 @@ export default function Plataforma() {
   const [selected, setSelected] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [simulatingOrg, setSimulatingOrg] = useState(null);
+  const [pilotReviewOrg, setPilotReviewOrg] = useState(null);
 
   const [selectedOrgId, setSelectedOrgId] = useState("__all__");
   const [period, setPeriod] = useState("this_month");
@@ -674,17 +779,6 @@ export default function Plataforma() {
       toast.success("Licencia actualizada");
     },
     onError: (error) => toast.error(error.response?.data?.detail || "No se pudo actualizar la licencia"),
-  });
-  const processPilot = useMutation({
-    mutationFn: (organizationId) => api.post(`/platform/ai-settlements/run?organization_id=${encodeURIComponent(organizationId)}`).then((r) => r.data),
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ["ai-settlements"] });
-      qc.invalidateQueries({ queryKey: ["platform-organizations"] });
-      const result = data?.items?.[0];
-      if (result?.status === "applied") toast.success("Liquidación piloto aplicada a Mercado Pago");
-      else toast.info(`No se aplicó el piloto: ${result?.reason || result?.status || "sin vencimientos"}`);
-    },
-    onError: (error) => toast.error(error.response?.data?.detail || "No se pudo procesar el piloto"),
   });
   const organizations = useMemo(() => organizationsQ.data || [], [organizationsQ.data]);
   const filtered = useMemo(() => {
@@ -799,7 +893,7 @@ export default function Plataforma() {
                       <td className="px-4 py-4"><span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-extrabold ${statusTone(organization.access?.allowed)}`}>{organization.access?.allowed ? "Habilitado" : "Bloqueado"}</span></td>
                       <td className="px-5 py-4 text-right">
                         <Button type="button" variant="outline" size="sm" onClick={() => setSimulatingOrg(organization)} className="rounded-lg border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 text-xs font-bold mr-2">Simular</Button>
-                        {organization.ai_variable_billing?.state === "pilot" && <Button type="button" variant="outline" size="sm" disabled={processPilot.isPending} onClick={() => processPilot.mutate(organization.organization_id)} className="mr-2 rounded-lg border-violet-300 bg-violet-50 text-violet-900 hover:bg-violet-100 text-xs font-bold">Procesar piloto</Button>}
+                        {organization.ai_variable_billing?.state === "pilot" && <Button type="button" variant="outline" size="sm" onClick={() => setPilotReviewOrg(organization)} className="mr-2 rounded-lg border-violet-300 bg-violet-50 text-violet-900 hover:bg-violet-100 text-xs font-bold">Revisar piloto</Button>}
                         <Button type="button" variant="outline" size="sm" onClick={() => setSelected(organization)} className="rounded-lg border-latus-warm-border"><Pencil className="h-3.5 w-3.5 mr-1" />Administrar</Button>
                       </td>
                     </tr>
@@ -812,6 +906,7 @@ export default function Plataforma() {
         </section>
       </div>
       {simulatingOrg && <SimulationModal organizationId={simulatingOrg.organization_id} orgName={simulatingOrg.name} onClose={() => setSimulatingOrg(null)} />}
+      {pilotReviewOrg && <PilotApprovalModal organization={pilotReviewOrg} onClose={() => setPilotReviewOrg(null)} />}
       {showCreateModal && <CreateCompanyModal onClose={() => setShowCreateModal(false)} creating={createOrganization.isPending} onCreate={(body) => createOrganization.mutate(body)} />}
       {selected && <ManageModal organization={selected} onClose={() => setSelected(null)} saving={updateSubscription.isPending} onSave={(body) => updateSubscription.mutate({ organizationId: selected.organization_id, body })} />}
     </AppLayout>

@@ -455,13 +455,97 @@ class TestAIVariableSettlement:
         assert automatic.json()["processed"] == 0
         assert calls == []
 
-        manual = client.post(
+        legacy_manual = client.post(
             f"/api/platform/ai-settlements/run?organization_id={organization_id}",
             headers=_h("T-ADMIN"),
         )
-        assert manual.status_code == 200, manual.text
-        assert manual.json()["applied"] == 1
-        assert calls[-1][2]["auto_recurring"]["transaction_amount"] == 46_500
+        assert legacy_manual.status_code == 409
+        assert calls == []
+
+        preview = client.post(
+            "/api/platform/ai-billing/pilot-preview", headers=_h("T-ADMIN"),
+            json={"organization_id": organization_id},
+        )
+        assert preview.status_code == 200, preview.text
+        first_preview = preview.json()
+        assert first_preview["ready"] is True
+        assert first_preview["statement"]["total_amount_ars"] == 46_500
+        assert first_preview["side_effects"]["database_writes"] is False
+        assert fake.ai_billing_statements.docs == []
+        assert calls == []
+
+        _run(fake.ai_usage_logs.insert_one({
+            "organization_id": organization_id,
+            "created_at": (now - timedelta(hours=1)).isoformat(),
+            "status": "success", "total_tokens": 500,
+            "provider_cost_usd": 0.5, "ai_fee_percent": 20,
+            "ai_fee_usd": 0.1, "billable_cost_usd": 0.6,
+        }))
+        stale = client.post(
+            "/api/platform/ai-billing/pilot-apply", headers=_h("T-ADMIN"),
+            json={
+                "organization_id": organization_id,
+                "preview_fingerprint": first_preview["preview_fingerprint"],
+                "confirmation": "APLICAR",
+            },
+        )
+        assert stale.status_code == 409
+        assert stale.json()["detail"]["code"] == "preview_changed"
+        assert fake.ai_billing_statements.docs == []
+        assert calls == []
+
+        refreshed = client.post(
+            "/api/platform/ai-billing/pilot-preview", headers=_h("T-ADMIN"),
+            json={"organization_id": organization_id},
+        ).json()
+        approved = client.post(
+            "/api/platform/ai-billing/pilot-apply", headers=_h("T-ADMIN"),
+            json={
+                "organization_id": organization_id,
+                "preview_fingerprint": refreshed["preview_fingerprint"],
+                "confirmation": "APLICAR",
+            },
+        )
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["status"] == "applied"
+        assert calls[-1][2]["auto_recurring"]["transaction_amount"] == 47_250
+        statement = fake.ai_billing_statements.docs[-1]
+        assert statement["approved_by_user_id"] == "u_admin"
+        assert statement["approved_by_email"] == "admin@latus.test"
+        assert statement["approved_preview_fingerprint"] == refreshed["preview_fingerprint"]
+        applied_event = next(
+            item for item in reversed(fake.billing_events.docs)
+            if item.get("type") == "ai_settlement_applied"
+        )
+        assert applied_event["approved_by_user_id"] == "u_admin"
+        assert applied_event["approved_preview_fingerprint"] == refreshed["preview_fingerprint"]
+
+    def test_pilot_preview_is_platform_only_and_requires_explicit_confirmation(self, srv):
+        _, _, client = srv
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        organization_id = organization["organization_id"]
+        denied = client.post(
+            "/api/platform/ai-billing/pilot-preview", headers=_h("T-AGENT"),
+            json={"organization_id": organization_id},
+        )
+        assert denied.status_code == 403
+        preview = client.post(
+            "/api/platform/ai-billing/pilot-preview", headers=_h("T-ADMIN"),
+            json={"organization_id": organization_id},
+        )
+        assert preview.status_code == 200
+        assert preview.json()["ready"] is False
+        assert "not_pilot" in {item["code"] for item in preview.json()["blockers"]}
+        rejected = client.post(
+            "/api/platform/ai-billing/pilot-apply", headers=_h("T-ADMIN"),
+            json={
+                "organization_id": organization_id,
+                "preview_fingerprint": "a" * 64,
+                "confirmation": "SI",
+            },
+        )
+        assert rejected.status_code == 400
+        assert "explícita" in rejected.text
 
     def test_due_settlement_updates_subscription_once_and_payment_closes_it(self, srv, monkeypatch):
         server, fake, client = srv

@@ -1966,8 +1966,72 @@ async def _build_ai_settlement_statement(organization: dict, charge_at: datetime
     }
 
 
+async def _build_pilot_settlement_preview(organization: dict, policy: dict) -> dict:
+    """Build the exact pilot proposal and its blockers without side effects."""
+    from billing import ai_settlement
+    now = datetime.now(timezone.utc)
+    organization_id = organization["organization_id"]
+    organization_billing = _organization_ai_variable_billing(organization)
+    blockers: list[dict[str, str]] = []
+
+    def block(code: str, message: str) -> None:
+        blockers.append({"code": code, "message": message})
+
+    if organization_billing["state"] != "pilot":
+        block("not_pilot", "La empresa debe estar en modo Piloto")
+    if not policy.get("enabled"):
+        block("global_policy_disabled", "El cobro automático global está desactivado")
+    if str(organization.get("subscription_status") or "").lower() != "active":
+        block("subscription_not_active", "La suscripción de la empresa no está activa")
+    charge_at = _parse_billing_datetime(organization.get("current_period_end"))
+    if not charge_at:
+        block("missing_charge_date", "La suscripción no tiene una próxima fecha de cobro")
+    billing_start = ai_settlement.parse_datetime(organization_billing.get("billing_start_date"))
+    if charge_at and billing_start and billing_start >= min(now, charge_at):
+        block("billing_not_started", "La fecha de inicio del cobro de IA todavía no comenzó")
+
+    effective_policy = dict(policy)
+    organization_buffer = organization_billing.get("fx_buffer_percent")
+    if organization_buffer is not None:
+        effective_policy["fx_buffer_percent"] = float(organization_buffer)
+    if not ai_settlement.rate_is_fresh(effective_policy, at=now):
+        block("stale_exchange_rate", "La cotización USD/ARS está vencida o no configurada")
+    if (
+        not organization.get("provider_preapproval_id")
+        or str(organization.get("provider_status") or "").lower() != "authorized"
+    ):
+        block("subscription_not_authorized", "Mercado Pago no tiene una suscripción autorizada")
+
+    statement = None
+    fingerprint = None
+    if charge_at and (not billing_start or billing_start < min(now, charge_at)):
+        statement = await _build_ai_settlement_statement(
+            organization, charge_at, effective_policy, at=now,
+        )
+        fingerprint = ai_settlement.settlement_preview_fingerprint(statement)
+        if float(statement.get("total_amount_ars") or 0) <= 0:
+            block("no_charge", "No hay un importe pendiente para aplicar")
+
+    return {
+        "ready": not blockers and statement is not None,
+        "organization_id": organization_id,
+        "organization_name": organization.get("name") or organization_id,
+        "blockers": blockers,
+        "statement": statement,
+        "preview_fingerprint": fingerprint,
+        "side_effects": {
+            "database_writes": False,
+            "provider_calls": False,
+            "mercadopago_changes": False,
+        },
+        "generated_at": now.isoformat(),
+    }
+
+
 async def _apply_ai_settlement(organization: dict, policy: dict, *,
-                               force: bool = False, manual: bool = False) -> dict:
+                               force: bool = False, manual: bool = False,
+                               expected_preview_fingerprint: Optional[str] = None,
+                               approved_by: Optional[User] = None) -> dict:
     from billing import ai_settlement
     now = datetime.now(timezone.utc)
     organization_id = organization["organization_id"]
@@ -2006,6 +2070,17 @@ async def _apply_ai_settlement(organization: dict, policy: dict, *,
     draft = await _build_ai_settlement_statement(
         organization, charge_at, effective_policy, at=now
     )
+    current_fingerprint = ai_settlement.settlement_preview_fingerprint(draft)
+    if (
+        expected_preview_fingerprint
+        and current_fingerprint != expected_preview_fingerprint
+    ):
+        return {
+            "organization_id": organization_id,
+            "status": "preview_changed",
+            "reason": "La liquidación cambió desde la vista previa",
+            "preview_fingerprint": current_fingerprint,
+        }
     if float(draft.get("total_amount_ars") or 0) <= 0 and draft.get("final_cancellation"):
         existing = await _raw_collection("ai_billing_statements").find_one(
             {"settlement_key": draft["settlement_key"]}, {"_id": 0}
@@ -2054,9 +2129,20 @@ async def _apply_ai_settlement(organization: dict, policy: dict, *,
             statement = await _raw_collection("ai_billing_statements").find_one(
                 {"settlement_key": draft["settlement_key"]}, {"_id": 0}
             ) or draft
+    approval_fields = {}
+    if approved_by:
+        approval_fields = {
+            "approved_at": now_iso(),
+            "approved_by_user_id": approved_by.user_id,
+            "approved_by_email": approved_by.email,
+            "approved_preview_fingerprint": expected_preview_fingerprint,
+        }
     await _raw_collection("ai_billing_statements").update_one(
         {"statement_id": statement["statement_id"]},
-        {"$set": {"status": "applying", "apply_started_at": now_iso(), "updated_at": now_iso()}},
+        {"$set": {
+            "status": "applying", "apply_started_at": now_iso(),
+            "updated_at": now_iso(), **approval_fields,
+        }},
     )
     try:
         provider_result = await _mercadopago_request(
@@ -2100,8 +2186,14 @@ async def _apply_ai_settlement(organization: dict, policy: dict, *,
         "type": "ai_settlement_applied", "provider": "mercadopago",
         "provider_resource_id": provider_id, "statement_id": statement["statement_id"],
         "amount_ars": statement["total_amount_ars"], "created_at": applied_at,
+        "approved_by_user_id": approved_by.user_id if approved_by else None,
+        "approved_by_email": approved_by.email if approved_by else None,
+        "approved_preview_fingerprint": expected_preview_fingerprint,
     })
-    return {**statement, "status": "applied", "applied_at": applied_at}
+    return {
+        **statement, **approval_fields,
+        "status": "applied", "applied_at": applied_at,
+    }
 
 
 async def process_due_ai_settlements(*, force_organization_id: Optional[str] = None,
@@ -6470,6 +6562,17 @@ async def platform_run_ai_settlements(
     organization_id: Optional[str] = None,
     platform_admin: User = Depends(require_platform_admin),
 ):
+    if organization_id:
+        organization = await _raw_collection("organizations").find_one(
+            {"organization_id": organization_id}, {"_id": 0},
+        )
+        if not organization:
+            raise HTTPException(404, "Empresa no encontrada")
+        if _organization_ai_variable_billing(organization)["state"] == "pilot":
+            raise HTTPException(
+                409,
+                "Las empresas piloto deben revisarse y aprobarse desde la vista previa",
+            )
     return await process_due_ai_settlements(force_organization_id=organization_id)
 
 
@@ -6499,6 +6602,16 @@ class AISimulationRequest(BaseModel):
     organization_id: str
     period_start: Optional[str] = None
     period_end: Optional[str] = None
+
+
+class AIPilotPreviewRequest(BaseModel):
+    organization_id: str
+
+
+class AIPilotApprovalRequest(BaseModel):
+    organization_id: str
+    preview_fingerprint: str
+    confirmation: str
 
 
 class AIKeyCredentialPayload(BaseModel):
@@ -6696,6 +6809,63 @@ async def platform_simulate_ai_billing(
         "organization_billing_start_date": org_billing.get("billing_start_date"),
         "organization_fx_buffer_override": organization_buffer,
     }
+
+
+@api_router.post("/platform/ai-billing/pilot-preview")
+async def platform_preview_pilot_ai_settlement(
+    payload: AIPilotPreviewRequest,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    """Return the exact proposal that must be approved for a pilot company."""
+    org = await _raw_collection("organizations").find_one(
+        {"organization_id": payload.organization_id}, {"_id": 0},
+    )
+    if not org:
+        raise HTTPException(404, "Empresa no encontrada")
+    from billing import ai_settlement
+    policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
+    return await _build_pilot_settlement_preview(org, policy)
+
+
+@api_router.post("/platform/ai-billing/pilot-apply")
+async def platform_apply_pilot_ai_settlement(
+    payload: AIPilotApprovalRequest,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    """Apply a reviewed pilot only if its commercial values are unchanged."""
+    if payload.confirmation != "APLICAR":
+        raise HTTPException(400, "La aprobación explícita es obligatoria")
+    if len(payload.preview_fingerprint) != 64:
+        raise HTTPException(400, "La vista previa indicada no es válida")
+    org = await _raw_collection("organizations").find_one(
+        {"organization_id": payload.organization_id}, {"_id": 0},
+    )
+    if not org:
+        raise HTTPException(404, "Empresa no encontrada")
+    from billing import ai_settlement
+    policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
+    preview = await _build_pilot_settlement_preview(org, policy)
+    if not preview["ready"]:
+        raise HTTPException(status_code=409, detail={
+            "message": "La liquidación piloto no está lista para aplicarse",
+            "blockers": preview["blockers"],
+        })
+    if preview["preview_fingerprint"] != payload.preview_fingerprint:
+        raise HTTPException(status_code=409, detail={
+            "message": "La liquidación cambió. Revisá la nueva vista previa antes de aprobar",
+            "code": "preview_changed",
+        })
+    result = await _apply_ai_settlement(
+        org, policy, force=True, manual=True,
+        expected_preview_fingerprint=payload.preview_fingerprint,
+        approved_by=platform_admin,
+    )
+    if result.get("status") == "preview_changed":
+        raise HTTPException(status_code=409, detail={
+            "message": "La liquidación cambió. Revisá la nueva vista previa antes de aprobar",
+            "code": "preview_changed",
+        })
+    return result
 
 
 @api_router.post("/platform/ai-billing/statements/{statement_id}/retry")

@@ -6,6 +6,8 @@ buffer used so later configuration changes cannot alter historical charges.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from decimal import Decimal, ROUND_CEILING
 from datetime import datetime, timedelta, timezone
@@ -235,6 +237,26 @@ def generate_settlement_reference(organization_id: str, period: str, nonce: str 
     clean_org = str(organization_id).replace("org_", "").replace("-", "")[:8]
     clean_period = str(period).replace("-", "")[:6]
     return f"latus_settle_{clean_org}_{clean_period}_{nonce}"
+
+
+def settlement_preview_fingerprint(statement: dict) -> str:
+    """Identify the commercial values reviewed before applying a pilot.
+
+    ``period_end`` is intentionally omitted because it advances by a few
+    seconds between preview and approval. Usage totals, amounts, rate, buffer
+    and the scheduled cycle are included, so any financially relevant change
+    invalidates the approval.
+    """
+    fields = (
+        "organization_id", "settlement_key", "plan_code", "period_start",
+        "charge_scheduled_at", "calls", "tokens", "base_cost_usd",
+        "ai_fee_usd", "billable_cost_usd", "usd_to_ars_rate",
+        "fx_buffer_percent", "plan_amount_ars", "ai_amount_ars",
+        "total_amount_ars", "final_cancellation",
+    )
+    payload = {field: statement.get(field) for field in fields}
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def simulate_settlement(*,
