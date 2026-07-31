@@ -3,8 +3,8 @@ import { useParams } from "react-router-dom";
 import { Send, Bot, Sparkles, MessageSquare, ShieldCheck, RefreshCw } from "lucide-react";
 import axios from "axios";
 
-// Public unauthenticated Axios instance targeting API base
-const API_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000/api";
+const rawUrl = (process.env.REACT_APP_BACKEND_URL || "http://localhost:8000").replace(/\/$/, "");
+const API_URL = rawUrl.endsWith("/api") ? rawUrl : `${rawUrl}/api`;
 
 const publicApi = axios.create({
   baseURL: API_URL,

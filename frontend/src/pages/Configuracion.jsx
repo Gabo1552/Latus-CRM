@@ -1685,10 +1685,16 @@ function WebChatTab() {
     });
   };
 
-  const generateTestLink = () => {
+  const generateTestLink = async () => {
     const newToken = `cw_test_${Date.now().toString(36)}`;
-    setCreatedTestToken(newToken);
-    toast.success("Nuevo enlace de prueba generado");
+    try {
+      await api.post("/public/webchat/session", { session_token: newToken, name: "Prueba Chat Web" });
+      setCreatedTestToken(newToken);
+      toast.success("Nuevo enlace de prueba creado e inicializado");
+    } catch (e) {
+      setCreatedTestToken(newToken);
+      toast.success("Enlace de prueba generado");
+    }
   };
 
   return (

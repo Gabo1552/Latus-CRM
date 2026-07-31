@@ -9651,7 +9651,11 @@ async def organization_context_middleware(request: Request, call_next):
                 )
                 organization_id = await _resolve_session_organization(session, user_doc)
         
-        if not organization_id and (request.url.path.startswith("/api/public/") or request.url.path.startswith("/api/webhook/")):
+        if not organization_id and (
+            request.url.path.startswith("/api/public/")
+            or request.url.path.startswith("/api/webhook/")
+            or request.url.path.startswith("/public/")
+        ):
             organization_id = "default"
 
         if organization_id:
