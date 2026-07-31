@@ -1753,11 +1753,11 @@ function WebChatTab() {
             />
           </div>
 
-          {/* Color */}
+          {/* Color Primario */}
           <div className="p-4 border border-[#E9E6DC] rounded-sm">
-            <Label className="text-sm font-bold text-[#0B1B26]">Color Primario / Marca</Label>
+            <Label className="text-sm font-bold text-[#0B1B26]">Color Primario / Header</Label>
             <p className="text-xs text-[#888888] mt-0.5 mb-2">
-              Color principal de los botones, burbujas y encabezado del chat.
+              Color del encabezado, burbujas de usuario y botón de envío.
             </p>
             <div className="flex items-center gap-3">
               <input
@@ -1774,6 +1774,77 @@ function WebChatTab() {
             </div>
           </div>
 
+          {/* Color de fondo */}
+          <div className="p-4 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Color de Fondo del Chat</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">
+              Fondo del área de mensajes. Recomendado: tonos claros neutros.
+            </p>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                value={draft.webchat_bg_color || "#EFF2F5"}
+                onChange={(e) => set({ webchat_bg_color: e.target.value })}
+                className="h-9 w-12 rounded-sm border border-[#E9E6DC] cursor-pointer p-0.5"
+              />
+              <Input
+                value={draft.webchat_bg_color || "#EFF2F5"}
+                onChange={(e) => set({ webchat_bg_color: e.target.value })}
+                className="rounded-sm h-9 text-xs font-mono w-32"
+              />
+              <button
+                type="button"
+                onClick={() => set({ webchat_bg_color: "#EFF2F5" })}
+                className="text-[10px] font-semibold text-slate-500 hover:text-[#0E8DDB] underline"
+              >
+                Resetear
+              </button>
+            </div>
+          </div>
+
+          {/* Avatar del Bot */}
+          <div className="p-4 border border-[#E9E6DC] rounded-sm md:col-span-2">
+            <Label className="text-sm font-bold text-[#0B1B26]">Foto de Perfil del Bot (Avatar)</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-3">
+              Se muestra en el encabezado y en las burbujas de respuesta. Recomendado: imagen cuadrada, mínimo 80×80px.
+            </p>
+            <div className="flex items-center gap-4">
+              {/* Preview */}
+              <div
+                className="h-16 w-16 rounded-full overflow-hidden border-2 border-[#E9E6DC] flex items-center justify-center flex-shrink-0 shadow-sm"
+                style={{ background: draft.webchat_primary_color || "#0E8DDB" }}
+              >
+                {draft.webchat_avatar_url ? (
+                  <img src={draft.webchat_avatar_url} alt="Avatar" className="h-full w-full object-cover" />
+                ) : (
+                  <span className="text-white text-xl font-bold">
+                    {(draft.bot_name || "B").charAt(0).toUpperCase()}
+                  </span>
+                )}
+              </div>
+              <div className="flex-1 space-y-2">
+                <Input
+                  value={draft.webchat_avatar_url || ""}
+                  onChange={(e) => set({ webchat_avatar_url: e.target.value })}
+                  className="rounded-sm h-9 text-xs"
+                  placeholder="https://tudominio.com/logo.png (o URL de imagen)"
+                />
+                <p className="text-[10px] text-[#888888]">
+                  Pegá la URL de tu logo o foto. Formatos: JPG, PNG, WebP, SVG.
+                </p>
+                {draft.webchat_avatar_url && (
+                  <button
+                    type="button"
+                    onClick={() => set({ webchat_avatar_url: "" })}
+                    className="text-[10px] font-semibold text-red-500 hover:underline"
+                  >
+                    Quitar imagen
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
           {/* Welcome Message */}
           <div className="p-4 border border-[#E9E6DC] rounded-sm md:col-span-2">
             <Label className="text-sm font-bold text-[#0B1B26]">Mensaje de Bienvenida Inicial</Label>
@@ -1787,6 +1858,7 @@ function WebChatTab() {
               placeholder="Ej.: ¡Hola! Bienvenido a nuestra atención online. ¿En qué podemos ayudarte hoy?"
             />
           </div>
+
 
           {/* Code Embed */}
           <div className="p-4 border border-[#E9E6DC] bg-slate-50 rounded-sm md:col-span-2 space-y-3">

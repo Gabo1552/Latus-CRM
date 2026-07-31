@@ -358,6 +358,10 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                     "y enviarle el resumen de atención al finalizar la charla."
                 )
 
+        # For webchat: always auto-reply regardless of WhatsApp auto_reply setting
+        is_webchat = conv.get("channel") == "webchat"
+        auto_reply_enabled = True if is_webchat else ai_cfg.get("whatsapp_auto_reply_enabled", True)
+
         sp = build_system_prompt(
             tone=settings["tone"],
             company_context=merged_cc,
@@ -366,7 +370,7 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             handoff_rules=settings["handoff_rules"],
             bot_name=settings.get("bot_name", "Bot"),
             client_info=client_info,
-            auto_reply_enabled=ai_cfg.get("whatsapp_auto_reply_enabled", True),
+            auto_reply_enabled=auto_reply_enabled,
             work_areas=work_areas,
             appointment_context=appointment_context if appointment_context else None,
             tone_dialect=settings.get("tone_dialect") or "cordobes",

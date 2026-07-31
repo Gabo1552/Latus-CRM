@@ -6065,6 +6065,9 @@ class BotSettingsUpdate(BaseModel):
     webchat_title: Optional[str] = None
     webchat_welcome_message: Optional[str] = None
     webchat_primary_color: Optional[str] = None
+    webchat_avatar_url: Optional[str] = None
+    webchat_bg_color: Optional[str] = None
+    webchat_user_bubble_color: Optional[str] = None
     webchat_position: Optional[str] = None
 
 
@@ -6361,6 +6364,9 @@ async def public_webchat_session(payload: PublicWebChatSessionRequest):
         "webchat_title": bot_settings.get("webchat_title", "Asistente Latus"),
         "webchat_welcome_message": bot_settings.get("webchat_welcome_message", "¡Hola! ¿En qué puedo ayudarte hoy?"),
         "webchat_primary_color": bot_settings.get("webchat_primary_color", "#0E8DDB"),
+        "webchat_avatar_url": bot_settings.get("webchat_avatar_url") or None,
+        "webchat_bg_color": bot_settings.get("webchat_bg_color") or "#F0F2F5",
+        "webchat_user_bubble_color": bot_settings.get("webchat_user_bubble_color") or None,
         "messages": msgs,
     }
 
