@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, Body
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, Body, BackgroundTasks
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6386,6 +6386,57 @@ async def _load_enabled_webchat_settings() -> dict:
     return settings
 
 
+async def _public_webchat_messages(conversation_id: str) -> list[dict]:
+    """Return only messages intended for the visitor.
+
+    Internal system records can contain handoff rules, confidence details or
+    operational descriptions that belong in the CRM inbox, not in the public
+    chat transcript.
+    """
+    items = await db.messages.find(
+        {"conversation_id": conversation_id}, {"_id": 0},
+    ).sort("created_at", 1).to_list(200)
+    return [
+        item for item in items
+        if item.get("sender_type") in {"contact", "bot", "agent"}
+    ]
+
+
+async def _process_webchat_inbound_background(
+    organization_id: str, conversation_id: str, message_id: str,
+) -> None:
+    """Run the slow IA response after acknowledging the visitor message."""
+    from ai import pipeline as bot_pipeline
+    context_token = set_organization_id(organization_id)
+    try:
+        event = await bot_pipeline.process_inbound(
+            db, conversation_id, message_id, wa_send=None,
+        )
+        if event.get("status") == "error":
+            await db.conversations.update_one(
+                {"id": conversation_id},
+                {"$set": {
+                    "bot_enabled": False,
+                    "bot_status": "requiere_humano",
+                    "human_required_reason": "La respuesta automática no pudo completarse",
+                    "updated_at": now_iso(),
+                }},
+            )
+    except Exception:
+        logger.exception("webchat background processing failed conv=%s", conversation_id)
+        await db.conversations.update_one(
+            {"id": conversation_id},
+            {"$set": {
+                "bot_enabled": False,
+                "bot_status": "requiere_humano",
+                "human_required_reason": "La respuesta automática no pudo completarse",
+                "updated_at": now_iso(),
+            }},
+        )
+    finally:
+        reset_organization_id(context_token)
+
+
 @api_router.post("/public/webchat/session")
 async def public_webchat_session(payload: PublicWebChatSessionRequest, request: Request):
     """Initialize or resume a tenant-bound web chat session."""
@@ -6465,7 +6516,7 @@ async def public_webchat_session(payload: PublicWebChatSessionRequest, request: 
     else:
         session_token = conv_doc["webchat_session_token"]
 
-    msgs = await db.messages.find({"conversation_id": conv_doc["id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    msgs = await _public_webchat_messages(conv_doc["id"])
     contact = await db.contacts.find_one({"id": conv_doc["contact_id"]}, {"_id": 0}) or {}
     
     return {
@@ -6499,7 +6550,7 @@ async def public_webchat_get_messages(session_token: str, request: Request):
     if not conv:
         raise HTTPException(status_code=404, detail="Sesión de chat no encontrada")
     
-    msgs = await db.messages.find({"conversation_id": conv["id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    msgs = await _public_webchat_messages(conv["id"])
     return {
         "conversation_id": conv["id"],
         "bot_enabled": bool(conv.get("bot_enabled", True)),
@@ -6511,9 +6562,8 @@ async def public_webchat_get_messages(session_token: str, request: Request):
 
 @api_router.post("/public/webchat/{session_token}/messages")
 async def public_webchat_send_message(session_token: str, payload: PublicWebChatSendRequest,
-                                      request: Request):
+                                      request: Request, background_tasks: BackgroundTasks):
     """Receives an inbound message from the web chat visitor and triggers the AI bot pipeline."""
-    from ai import pipeline as bot_pipeline
     await _activate_webchat_tenant(session_token=session_token)
     _enforce_webchat_rate_limit(request, f"send:{session_token}", limit=20, window_seconds=60)
     await _load_enabled_webchat_settings()
@@ -6535,13 +6585,14 @@ async def public_webchat_send_message(session_token: str, payload: PublicWebChat
     
     existing_message = await db.messages.find_one({"id": msg_id, "conversation_id": conv["id"]}, {"_id": 0})
     if existing_message:
-        event_res = await bot_pipeline.process_inbound(db, conv["id"], msg_id, wa_send=None)
-        updated_msgs = await db.messages.find(
-            {"conversation_id": conv["id"]}, {"_id": 0},
-        ).sort("created_at", 1).to_list(200)
+        background_tasks.add_task(
+            _process_webchat_inbound_background,
+            get_organization_id(), conv["id"], msg_id,
+        )
+        updated_msgs = await _public_webchat_messages(conv["id"])
         updated_conv = await db.conversations.find_one({"id": conv["id"]}, {"_id": 0}) or {}
         return {
-            "status": "ok", "deduplicated": True, "event": event_res,
+            "status": "ok", "deduplicated": True, "processing": True,
             "bot_enabled": bool(updated_conv.get("bot_enabled", True)),
             "bot_status": updated_conv.get("bot_status", "bot_activo"),
             "messages": updated_msgs,
@@ -6577,14 +6628,16 @@ async def public_webchat_send_message(session_token: str, payload: PublicWebChat
         {"id": conv["id"]}, {"$set": update_fields, "$inc": {"unread": 1}},
     )
     
-    event_res = await bot_pipeline.process_inbound(db, conv["id"], msg_id, wa_send=None)
-    
-    updated_msgs = await db.messages.find({"conversation_id": conv["id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    background_tasks.add_task(
+        _process_webchat_inbound_background,
+        get_organization_id(), conv["id"], msg_id,
+    )
+    updated_msgs = await _public_webchat_messages(conv["id"])
     updated_conv = await db.conversations.find_one({"id": conv["id"]}, {"_id": 0}) or {}
     
     return {
         "status": "ok",
-        "event": event_res,
+        "processing": True,
         "bot_enabled": bool(updated_conv.get("bot_enabled", True)),
         "bot_status": updated_conv.get("bot_status", "bot_activo"),
         "messages": updated_msgs

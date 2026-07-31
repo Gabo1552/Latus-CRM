@@ -187,8 +187,7 @@ def test_webchat_get_messages(srv):
 
 
 def test_webchat_bot_replies_to_message(monkeypatch):
-    """Verify that when a message is sent in webchat, the bot pipeline
-    persists its reply to the messages collection (no wa_send needed)."""
+    """The visitor message is acknowledged before the bot reply is returned."""
     for mod in list(sys.modules):
         if mod == "server" or mod.startswith("whatsapp") or mod.startswith("utils") or mod.startswith("ai"):
             sys.modules.pop(mod, None)
@@ -241,11 +240,45 @@ def test_webchat_bot_replies_to_message(monkeypatch):
     data = send_res.json()
     assert data["status"] == "ok"
 
-    # 3. Verify both user message AND bot reply are in the response
+    # 3. The immediate response only contains the acknowledged visitor message.
     messages = data["messages"]
     sender_types = [m["sender_type"] for m in messages]
     assert "contact" in sender_types, "User message should be in messages"
-    assert "bot" in sender_types, "Bot reply should be persisted in webchat messages"
+    assert "bot" not in sender_types
+    assert data["processing"] is True
+
+    # The background task has completed by the time TestClient returns, so the
+    # next poll exposes the reply without delaying the send acknowledgement.
+    poll = client.get(f"/api/public/webchat/{token}/messages")
+    assert poll.status_code == 200
+    assert any(m["sender_type"] == "bot" for m in poll.json()["messages"])
+
+
+def test_public_chat_hides_internal_handoff_description(srv):
+    _, fake, client = srv
+    created = client.post("/api/public/webchat/session", json={
+        "organization_key": "wpk_test_default", "name": "Derivación",
+    }).json()
+    _run(fake.messages.insert_one({
+        "id": "msg_internal_handoff",
+        "conversation_id": created["conversation_id"],
+        "sender_type": "system",
+        "body": "Control humano activado - Confianza baja y reglas internas",
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }))
+    _run(fake.messages.insert_one({
+        "id": "msg_agent_public",
+        "conversation_id": created["conversation_id"],
+        "sender_type": "agent", "sender_name": "María",
+        "body": "Hola, continúo yo con tu consulta.",
+        "created_at": "2026-01-01T00:00:01+00:00",
+    }))
+
+    poll = client.get(f"/api/public/webchat/{created['session_token']}/messages")
+    assert poll.status_code == 200
+    messages = poll.json()["messages"]
+    assert all(item["sender_type"] != "system" for item in messages)
+    assert any(item["sender_type"] == "agent" for item in messages)
 
 
 def test_unknown_token_does_not_create_session(srv):

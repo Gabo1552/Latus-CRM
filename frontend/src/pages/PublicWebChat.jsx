@@ -11,7 +11,11 @@ const publicApi = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
-function TypingIndicator({ color }) {
+const publicMessagesOnly = (items = []) => items.filter(
+  (item) => ["contact", "bot", "agent"].includes(item?.sender_type)
+);
+
+function TypingIndicator({ color, botName }) {
   return (
     <div className="flex justify-start items-end gap-2 px-1">
       <div
@@ -20,8 +24,9 @@ function TypingIndicator({ color }) {
       >
         IA
       </div>
-      <div className="bg-white border border-slate-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
-        <div className="flex items-center gap-1">
+      <div className="bg-white border border-slate-200 rounded-2xl rounded-bl-sm px-4 py-2.5 shadow-sm">
+        <p className="mb-1 text-[10px] font-semibold text-slate-500">{botName || "El asistente"} está escribiendo…</p>
+        <div className="flex items-center gap-1" aria-label="El asistente está escribiendo">
           <span className="h-2 w-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: "0ms" }} />
           <span className="h-2 w-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: "150ms" }} />
           <span className="h-2 w-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: "300ms" }} />
@@ -39,6 +44,7 @@ function ChatMessage({ msg, session, isLatest }) {
 
   const isContact = msg.sender_type === "contact";
   const isBot = msg.sender_type === "bot";
+  const isAgent = msg.sender_type === "agent";
   const isSystem = msg.sender_type === "system";
 
   const messageDate = msg.created_at ? new Date(msg.created_at) : null;
@@ -74,8 +80,10 @@ function ChatMessage({ msg, session, isLatest }) {
         </div>
       )}
       <div className={`flex flex-col max-w-[78%] ${isContact ? "items-end" : "items-start"}`}>
-        {isBot && (
-          <span className="text-[10px] font-semibold text-slate-500 mb-0.5 px-1">{botName}</span>
+        {(isBot || isAgent) && (
+          <span className="text-[10px] font-semibold text-slate-500 mb-0.5 px-1">
+            {isAgent ? (msg.sender_name || "Asesor") : botName}
+          </span>
         )}
         <div
           className={`px-3.5 py-2.5 shadow-sm text-sm leading-relaxed whitespace-pre-wrap break-words ${
@@ -88,9 +96,7 @@ function ChatMessage({ msg, session, isLatest }) {
           {msg.body}
           <div className={`flex items-center justify-end gap-1 mt-1 text-[10px] ${isContact ? "text-white/70" : "text-slate-400"}`}>
             <span>{timeStr}</span>
-            {isContact && (msg.delivery_status === "sending"
-              ? <span>Enviando…</span>
-              : <CheckCheck className="h-3 w-3" />)}
+            {isContact && <><span>Enviado</span><CheckCheck className="h-3 w-3" /></>}
           </div>
         </div>
       </div>
@@ -119,6 +125,7 @@ export default function PublicWebChat() {
   const scrollRef = useRef(null);
   const textareaRef = useRef(null);
   const prevMsgCount = useRef(0);
+  const replyCountBeforeSend = useRef(0);
 
   const scrollToBottom = useCallback((behavior = "smooth") => {
     if (scrollRef.current) {
@@ -137,7 +144,7 @@ export default function PublicWebChat() {
         });
         if (active) {
           setSession(res.data);
-          setMessages(res.data.messages || []);
+          setMessages(publicMessagesOnly(res.data.messages));
           setActiveToken(res.data.session_token);
           setFinished(!!res.data.finished);
           if (token === "nuevo" && res.data.session_token) {
@@ -160,18 +167,20 @@ export default function PublicWebChat() {
       try {
         const res = await publicApi.get(`/public/webchat/${activeToken}/messages`);
         if (res.data?.messages) {
-          const newMsgs = res.data.messages;
+          const newMsgs = publicMessagesOnly(res.data.messages);
           setMessages(prev => {
-            if (newMsgs.length > prev.length) setBotTyping(false);
             return newMsgs;
           });
           setSession(prev => ({ ...prev, bot_enabled: res.data.bot_enabled, bot_status: res.data.bot_status }));
+          const replyCount = newMsgs.filter((item) => item.sender_type === "bot" || item.sender_type === "agent").length;
+          const needsHuman = res.data.bot_enabled === false || ["requiere_humano", "en_atencion_humana", "cerrada"].includes(res.data.bot_status);
+          if (replyCount > replyCountBeforeSend.current || needsHuman) setBotTyping(false);
           if (res.data.finished) setFinished(true);
         }
       } catch { /* silent */ }
-    }, 4000);
+    }, botTyping ? 1500 : 4000);
     return () => clearInterval(interval);
-  }, [activeToken, loading, finished, sending]);
+  }, [activeToken, loading, finished, sending, botTyping]);
 
   useEffect(() => {
     if (messages.length > prevMsgCount.current) scrollToBottom();
@@ -195,6 +204,9 @@ export default function PublicWebChat() {
     setSending(true);
     setActionError("");
     const clientMessageId = retryMessageId || crypto.randomUUID();
+    replyCountBeforeSend.current = messages.filter(
+      (item) => item.sender_type === "bot" || item.sender_type === "agent"
+    ).length;
     setBotTyping(true);
     const tempMsg = {
       id: `temp_${clientMessageId}`,
@@ -202,7 +214,7 @@ export default function PublicWebChat() {
       sender_name: session?.contact_name || "Tu",
       body: text,
       created_at: new Date().toISOString(),
-      delivery_status: "sending",
+      delivery_status: "delivered",
     };
     setMessages(prev => [...prev, tempMsg]);
     scrollToBottom();
@@ -213,8 +225,22 @@ export default function PublicWebChat() {
         client_message_id: clientMessageId,
       });
       if (res.data?.messages) {
-        setMessages(res.data.messages);
-        setBotTyping(false);
+        setMessages(prev => {
+          const merged = new Map(
+            prev.filter(item => item.id !== tempMsg.id).map(item => [item.id, item])
+          );
+          publicMessagesOnly(res.data.messages).forEach(item => merged.set(item.id, item));
+          return Array.from(merged.values()).sort(
+            (a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0)
+          );
+        });
+        setSession(prev => ({
+          ...prev,
+          bot_enabled: res.data.bot_enabled,
+          bot_status: res.data.bot_status,
+        }));
+        const needsHuman = res.data.bot_enabled === false || ["requiere_humano", "en_atencion_humana", "cerrada"].includes(res.data.bot_status);
+        setBotTyping(!needsHuman && res.data.processing !== false);
         setRetryMessageId("");
       }
     } catch (e) {
@@ -311,7 +337,7 @@ export default function PublicWebChat() {
               <div className="flex items-center gap-1.5 mt-0.5">
                 <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
                 <span className="text-white/85 text-[11px] font-medium">
-                  {finished ? "Consulta finalizada" : session?.bot_enabled === false ? "Te atenderá una persona" : "Asistente disponible"}
+                  {finished ? "Consulta finalizada" : session?.bot_enabled === false ? "Te atenderá una persona" : botTyping ? "Escribiendo una respuesta…" : "Asistente disponible"}
                 </span>
               </div>
             </div>
@@ -353,7 +379,7 @@ export default function PublicWebChat() {
               <ChatMessage key={m.id} msg={m} session={session} isLatest={i === messages.length - 1} />
             ))}
 
-            {botTyping && <TypingIndicator color={primaryColor} />}
+            {botTyping && <TypingIndicator color={primaryColor} botName={botName} />}
             {actionError && (
               <div className="mx-auto max-w-sm rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-center text-xs font-medium text-rose-700">
                 {actionError}
