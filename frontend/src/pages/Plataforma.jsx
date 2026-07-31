@@ -24,6 +24,12 @@ const PROVIDER_LABELS = {
   pending: "Esperando adhesión", authorized: "Cobro autorizado",
   paused: "Pausada", canceled: "Cancelada",
 };
+const AI_BILLING_STATES = {
+  disabled: { label: "Desactivado", tone: "border-slate-200 bg-slate-100 text-slate-700", help: "No calcula ni modifica cobros de Mercado Pago." },
+  simulation: { label: "Simulación", tone: "border-amber-200 bg-amber-50 text-amber-800", help: "Permite proyectar importes, sin crear liquidaciones ni tocar Mercado Pago." },
+  pilot: { label: "Piloto", tone: "border-violet-200 bg-violet-50 text-violet-800", help: "Solo se liquida cuando un administrador procesa esta empresa manualmente." },
+  active: { label: "Activo", tone: "border-emerald-200 bg-emerald-50 text-emerald-800", help: "Participa automáticamente de los cierres cuando la política global está activa." },
+};
 
 const inputClass = "mt-1.5 h-10 w-full rounded-lg border border-latus-warm-border bg-white px-3 text-sm text-latus-ink outline-none focus:border-latus-blue focus:ring-2 focus:ring-latus-blue/10";
 
@@ -91,7 +97,7 @@ function AIVariableBillingPanel() {
   return (
     <section className="overflow-hidden rounded-[24px] border border-latus-warm-border bg-white shadow-sm" data-testid="ai-variable-billing-panel">
       <div className="flex flex-col gap-4 border-b border-latus-warm-border bg-latus-cream/35 p-5 sm:flex-row sm:items-start sm:justify-between sm:px-6">
-        <div className="flex items-start gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-violet-100 text-violet-700"><BadgeDollarSign className="h-5 w-5" /></span><div><h2 className="font-extrabold text-latus-ink">Cobro automático del consumo de IA</h2><p className="mt-1 max-w-3xl text-sm leading-5 text-latus-muted">Antes de cada renovación suma al plan el consumo cerrado, convertido a pesos con una cotización registrada. Cada liquidación queda congelada para auditoría.</p></div></div>
+        <div className="flex items-start gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-violet-100 text-violet-700"><BadgeDollarSign className="h-5 w-5" /></span><div><h2 className="font-extrabold text-latus-ink">Cobro automático del consumo de IA</h2><p className="mt-1 max-w-3xl text-sm leading-5 text-latus-muted">La política global habilita el motor, pero el scheduler solo procesa empresas marcadas como Activo. Las empresas Piloto requieren ejecución manual y Simulación nunca modifica Mercado Pago.</p></div></div>
         <label className="flex shrink-0 items-center gap-2 rounded-full border border-latus-warm-border bg-white px-3 py-2 text-xs font-extrabold text-latus-ink"><input type="checkbox" checked={!!draft.enabled} onChange={(e) => setDraft((d) => ({ ...d, enabled: e.target.checked }))} className="h-4 w-4 accent-latus-blue" />{draft.enabled ? "Automatización activa" : "Automatización apagada"}</label>
       </div>
       <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4 sm:p-6">
@@ -111,7 +117,7 @@ function AIVariableBillingPanel() {
       </div>
       <div className="flex flex-col gap-3 border-t border-latus-warm-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <div><p className={`text-xs font-extrabold ${draft.rate_is_fresh ? "text-emerald-700" : "text-amber-700"}`}>{draft.rate_is_fresh ? "Cotización vigente" : "Cotización vencida o no configurada"}</p><p className="mt-1 text-[11px] text-latus-muted">Observada: {draft.exchange_rate_observed_at || "—"} · actualizada: {draft.exchange_rate_updated_at ? new Date(draft.exchange_rate_updated_at).toLocaleString("es-AR") : "—"}</p></div>
-        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => refreshRate.mutate()} disabled={refreshRate.isPending} className="rounded-lg border-latus-warm-border"><RefreshCw className={`h-4 w-4 ${refreshRate.isPending ? "animate-spin" : ""}`} />Actualizar desde BCRA</Button><Button variant="outline" onClick={() => run.mutate()} disabled={!draft.enabled || run.isPending} className="rounded-lg border-latus-warm-border"><FileText className="h-4 w-4" />Procesar vencimientos</Button><Button onClick={() => save.mutate()} disabled={invalid || save.isPending} className="rounded-lg bg-latus-blue text-white hover:bg-latus-blue/90">Guardar política</Button></div>
+        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => refreshRate.mutate()} disabled={refreshRate.isPending} className="rounded-lg border-latus-warm-border"><RefreshCw className={`h-4 w-4 ${refreshRate.isPending ? "animate-spin" : ""}`} />Actualizar desde BCRA</Button><Button variant="outline" onClick={() => run.mutate()} disabled={!draft.enabled || run.isPending} className="rounded-lg border-latus-warm-border"><FileText className="h-4 w-4" />Procesar empresas activas</Button><Button onClick={() => save.mutate()} disabled={invalid || save.isPending} className="rounded-lg bg-latus-blue text-white hover:bg-latus-blue/90">Guardar política</Button></div>
       </div>
       {rows.length > 0 && <div className="overflow-x-auto border-t border-latus-warm-border"><table className="w-full min-w-[900px] text-left text-xs"><thead className="bg-latus-cream text-[10px] font-extrabold uppercase tracking-wider text-latus-muted"><tr><th className="px-5 py-3">Empresa</th><th className="px-4 py-3">Período</th><th className="px-4 py-3 text-right">IA USD</th><th className="px-4 py-3 text-right">IA ARS</th><th className="px-4 py-3 text-right">Plan + IA</th><th className="px-5 py-3">Estado</th></tr></thead><tbody className="divide-y divide-latus-warm-border">{rows.map((row) => <tr key={row.statement_id}><td className="px-5 py-3 font-mono">{row.organization_id}</td><td className="px-4 py-3 text-latus-muted">{String(row.period_start).slice(0, 10)} → {String(row.period_end).slice(0, 10)}</td><td className="px-4 py-3 text-right font-mono">USD {Number(row.billable_cost_usd || 0).toFixed(4)}</td><td className="px-4 py-3 text-right font-mono">$ {Number(row.ai_amount_ars || 0).toLocaleString("es-AR")}</td><td className="px-4 py-3 text-right font-extrabold">$ {Number(row.total_amount_ars || 0).toLocaleString("es-AR")}</td><td className="px-5 py-3"><span className="rounded-full bg-slate-100 px-2.5 py-1 font-extrabold text-slate-700">{SETTLEMENT_STATUS[row.status] || row.status}</span></td></tr>)}</tbody></table></div>}
     </section>
@@ -119,6 +125,7 @@ function AIVariableBillingPanel() {
 }
 
 function ManageModal({ organization, onClose, onSave, saving }) {
+  const variableBilling = organization.ai_variable_billing || {};
   const [draft, setDraft] = useState(() => ({
     plan_code: organization.plan_code || "base",
     subscription_status: organization.subscription_status || "not_configured",
@@ -129,6 +136,9 @@ function ManageModal({ organization, onClose, onSave, saving }) {
     billing_email: organization.billing_email || "",
     internal_notes: organization.internal_notes || "",
     ai_fee_percent: organization.ai_fee_percent ?? "",
+    ai_billing_state: variableBilling.state || "disabled",
+    ai_billing_start_date: dateInput(variableBilling.billing_start_date),
+    ai_fx_buffer_percent: variableBilling.fx_buffer_percent ?? "",
   }));
   const set = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
 
@@ -177,10 +187,48 @@ function ManageModal({ organization, onClose, onSave, saving }) {
             </div>
             <span className="mt-1 block font-normal text-latus-muted">Dejalo vacío para usar el fee global de la plataforma.</span>
           </label>
+          <div className="sm:col-span-2 rounded-2xl border border-violet-200 bg-violet-50/60 p-4">
+            <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-violet-800">Cobro variable de IA por empresa</p>
+            <p className="mt-1 text-xs leading-5 text-violet-700">Este control define si la empresa queda fuera del cobro, solo simula, participa como piloto manual o entra en la automatización.</p>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <label className="text-xs font-bold text-latus-ink">Modo de cobro
+                <select className={inputClass} value={draft.ai_billing_state} onChange={(event) => set("ai_billing_state", event.target.value)}>
+                  {Object.entries(AI_BILLING_STATES).map(([value, meta]) => <option key={value} value={value}>{meta.label}</option>)}
+                </select>
+                <span className="mt-1.5 block font-normal leading-4 text-latus-muted">{AI_BILLING_STATES[draft.ai_billing_state]?.help}</span>
+              </label>
+              <label className="text-xs font-bold text-latus-ink">Facturar consumo desde
+                <Input className={inputClass} type="date" value={draft.ai_billing_start_date} onChange={(event) => set("ai_billing_start_date", event.target.value)} />
+                <span className="mt-1.5 block font-normal leading-4 text-latus-muted">Al habilitar Piloto o Activo sin fecha, se usará el momento de activación.</span>
+              </label>
+              <label className="text-xs font-bold text-latus-ink sm:col-span-2">Colchón cambiario específico
+                <div className="relative max-w-xs"><Input className={`${inputClass} pr-9`} type="number" min="0" max="100" step="0.5" value={draft.ai_fx_buffer_percent} onChange={(event) => set("ai_fx_buffer_percent", event.target.value)} placeholder="Usar política global" /><span className="absolute bottom-2.5 right-3 text-sm text-latus-muted">%</span></div>
+                <span className="mt-1 block font-normal text-latus-muted">Dejalo vacío para heredar el porcentaje global.</span>
+              </label>
+            </div>
+          </div>
         </div>
         <div className="flex justify-end gap-3 border-t border-latus-warm-border bg-white px-6 py-4">
           <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button type="button" disabled={saving} onClick={() => onSave({ ...draft, ai_fee_percent: draft.ai_fee_percent === "" ? null : Number(draft.ai_fee_percent) })} className="bg-latus-blue text-white hover:bg-latus-blue/90">{saving ? "Guardando..." : "Guardar licencia"}</Button>
+          <Button type="button" disabled={saving} onClick={() => onSave({
+            subscription: {
+              plan_code: draft.plan_code,
+              subscription_status: draft.subscription_status,
+              license_status: draft.license_status,
+              trial_ends_at: draft.trial_ends_at,
+              current_period_end: draft.current_period_end,
+              grace_ends_at: draft.grace_ends_at,
+              billing_email: draft.billing_email,
+              internal_notes: draft.internal_notes,
+              ai_fee_percent: draft.ai_fee_percent === "" ? null : Number(draft.ai_fee_percent),
+            },
+            aiBilling: {
+              state: draft.ai_billing_state,
+              billing_start_date: draft.ai_billing_start_date || null,
+              fx_buffer_percent: draft.ai_fx_buffer_percent === "" ? null : Number(draft.ai_fx_buffer_percent),
+              ai_fee_percent: draft.ai_fee_percent === "" ? null : Number(draft.ai_fee_percent),
+            },
+          })} className="bg-latus-blue text-white hover:bg-latus-blue/90">{saving ? "Guardando..." : "Guardar licencia y cobro IA"}</Button>
         </div>
       </div>
     </div>
@@ -548,13 +596,32 @@ export default function Plataforma() {
     onError: (error) => toast.error(error.response?.data?.detail || "No se pudo crear la empresa"),
   });
   const updateSubscription = useMutation({
-    mutationFn: ({ organizationId, body }) => api.patch(`/platform/organizations/${organizationId}/subscription`, body),
+    mutationFn: async ({ organizationId, body }) => {
+      const subscription = await api.patch(
+        `/platform/organizations/${organizationId}/subscription`, body.subscription,
+      );
+      await api.patch(
+        `/platform/organizations/${organizationId}/ai-variable-billing`, body.aiBilling,
+      );
+      return subscription;
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["platform-organizations"] });
       setSelected(null);
       toast.success("Licencia actualizada");
     },
     onError: (error) => toast.error(error.response?.data?.detail || "No se pudo actualizar la licencia"),
+  });
+  const processPilot = useMutation({
+    mutationFn: (organizationId) => api.post(`/platform/ai-settlements/run?organization_id=${encodeURIComponent(organizationId)}`).then((r) => r.data),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["ai-settlements"] });
+      qc.invalidateQueries({ queryKey: ["platform-organizations"] });
+      const result = data?.items?.[0];
+      if (result?.status === "applied") toast.success("Liquidación piloto aplicada a Mercado Pago");
+      else toast.info(`No se aplicó el piloto: ${result?.reason || result?.status || "sin vencimientos"}`);
+    },
+    onError: (error) => toast.error(error.response?.data?.detail || "No se pudo procesar el piloto"),
   });
   const organizations = useMemo(() => organizationsQ.data || [], [organizationsQ.data]);
   const filtered = useMemo(() => {
@@ -653,8 +720,8 @@ export default function Plataforma() {
             <div className="grid min-h-[260px] place-items-center"><div className="h-9 w-9 animate-spin rounded-full border-2 border-latus-blue border-t-transparent" /></div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1280px] text-left">
-                <thead className="bg-latus-cream text-[11px] font-extrabold uppercase tracking-[0.12em] text-latus-muted"><tr><th className="px-5 py-3.5">Empresa</th><th className="px-4 py-3.5">Plan</th><th className="px-4 py-3.5">Suscripción</th><th className="px-4 py-3.5">Mercado Pago</th><th className="px-4 py-3.5">Licencia</th><th className="px-4 py-3.5">Uso</th><th className="px-4 py-3.5">IA este mes</th><th className="px-4 py-3.5">Acceso</th><th className="px-5 py-3.5 text-right">Acciones</th></tr></thead>
+              <table className="w-full min-w-[1420px] text-left">
+                <thead className="bg-latus-cream text-[11px] font-extrabold uppercase tracking-[0.12em] text-latus-muted"><tr><th className="px-5 py-3.5">Empresa</th><th className="px-4 py-3.5">Plan</th><th className="px-4 py-3.5">Suscripción</th><th className="px-4 py-3.5">Mercado Pago</th><th className="px-4 py-3.5">Licencia</th><th className="px-4 py-3.5">Cobro IA</th><th className="px-4 py-3.5">Uso</th><th className="px-4 py-3.5">IA este mes</th><th className="px-4 py-3.5">Acceso</th><th className="px-5 py-3.5 text-right">Acciones</th></tr></thead>
                 <tbody className="divide-y divide-latus-warm-border">
                   {filtered.map((organization) => (
                     <tr key={organization.organization_id} className="hover:bg-latus-cream/50">
@@ -663,11 +730,13 @@ export default function Plataforma() {
                       <td className="px-4 py-4 text-sm text-latus-muted">{SUBSCRIPTION_LABELS[organization.subscription_status] || organization.subscription_status}</td>
                       <td className="px-4 py-4 text-sm text-latus-muted">{PROVIDER_LABELS[organization.provider_status] || (organization.provider_status ? organization.provider_status : "Sin vincular")}</td>
                       <td className="px-4 py-4 text-sm text-latus-muted">{LICENSE_LABELS[organization.license_status] || organization.license_status}</td>
+                      <td className="px-4 py-4"><span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-extrabold ${AI_BILLING_STATES[organization.ai_variable_billing?.state || "disabled"]?.tone}`}>{AI_BILLING_STATES[organization.ai_variable_billing?.state || "disabled"]?.label}</span>{organization.ai_variable_billing?.billing_start_date && <p className="mt-1 text-[10px] text-latus-muted">Desde {dateInput(organization.ai_variable_billing.billing_start_date)}</p>}</td>
                       <td className="px-4 py-4"><p className="flex items-center gap-1.5 text-sm font-bold text-latus-ink"><Users className="h-3.5 w-3.5 text-latus-blue" />{organization.active_users} usuarios</p><p className="mt-1 text-xs text-latus-muted">{organization.contacts} clientes</p></td>
                       <td className="px-4 py-4"><p className="text-sm font-extrabold text-latus-ink">USD {Number(organization.ai_billing?.this_month?.billable_cost_usd || 0).toFixed(2)}</p><p className="mt-1 text-xs text-latus-muted">Base USD {Number(organization.ai_billing?.this_month?.base_cost_usd || 0).toFixed(2)} · fee {organization.ai_billing?.fee_percent ?? 0}%</p></td>
                       <td className="px-4 py-4"><span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-extrabold ${statusTone(organization.access?.allowed)}`}>{organization.access?.allowed ? "Habilitado" : "Bloqueado"}</span></td>
                       <td className="px-5 py-4 text-right">
                         <Button type="button" variant="outline" size="sm" onClick={() => setSimulatingOrg(organization)} className="rounded-lg border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 text-xs font-bold mr-2">Simular</Button>
+                        {organization.ai_variable_billing?.state === "pilot" && <Button type="button" variant="outline" size="sm" disabled={processPilot.isPending} onClick={() => processPilot.mutate(organization.organization_id)} className="mr-2 rounded-lg border-violet-300 bg-violet-50 text-violet-900 hover:bg-violet-100 text-xs font-bold">Procesar piloto</Button>}
                         <Button type="button" variant="outline" size="sm" onClick={() => setSelected(organization)} className="rounded-lg border-latus-warm-border"><Pencil className="h-3.5 w-3.5 mr-1" />Administrar</Button>
                       </td>
                     </tr>

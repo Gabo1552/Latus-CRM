@@ -167,6 +167,10 @@ El backend de Latus CRM incluye verificaciones de seguridad automáticas al inic
 ### Liquidación automática del consumo de IA
 
 - La automatización se configura exclusivamente en **Plataforma > Cobro automático del consumo de IA** y comienza apagada. No habilitarla en producción hasta revisar una liquidación con la suscripción de prueba.
+- La política global es solamente el interruptor maestro. Cada empresa empieza en **Desactivado** y debe habilitarse individualmente desde **Plataforma > Empresas y licencias > Administrar**.
+- Los modos individuales son: **Desactivado** (sin cálculo ni cobro), **Simulación** (proyección sin escribir liquidaciones ni tocar Mercado Pago), **Piloto** (solo ejecución manual para esa empresa) y **Activo** (incluido en el scheduler automático).
+- Al pasar una empresa a Piloto o Activo se registra la fecha desde la cual puede facturarse. Si no se informa una fecha, se usa el momento de activación para no cobrar consumo histórico por accidente.
+- El fee y el colchón cambiario pueden sobrescribirse por empresa. Si se dejan vacíos, heredan la política global; cada liquidación conserva una copia de la configuración efectiva usada.
 - La cotización USD/ARS puede cargarse manualmente o actualizarse desde la API oficial de Estadísticas Cambiarias del BCRA. Las cotizaciones BCRA se refrescan automáticamente cada 12 horas; las manuales nunca se reemplazan solas.
 - Si la cotización supera la vigencia máxima configurada, el sistema no modifica la suscripción. Esto evita convertir costos con un tipo de cambio desactualizado.
 - Dentro de la ventana previa a la renovación, el sistema cierra el consumo todavía no liquidado, congela costo base, fee, cotización, colchón cambiario e importe final, y actualiza el próximo monto mediante `PUT /preapproval/{id}`.

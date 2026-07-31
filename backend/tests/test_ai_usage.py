@@ -244,6 +244,107 @@ class TestAIVariableSettlement:
             "/api/platform/ai-settlement-policy", headers=_h("T-AGENT")
         ).status_code == 403
 
+    def test_tenant_billing_configuration_is_safe_validated_and_platform_only(self, srv):
+        _, fake, client = srv
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        organization_id = organization["organization_id"]
+
+        listed = client.get("/api/platform/organizations", headers=_h("T-ADMIN"))
+        assert listed.status_code == 200
+        row = next(item for item in listed.json() if item["organization_id"] == organization_id)
+        assert row["ai_variable_billing"]["state"] == "disabled"
+
+        assert client.patch(
+            f"/api/platform/organizations/{organization_id}/ai-variable-billing",
+            headers=_h("T-AGENT"), json={"state": "active"},
+        ).status_code == 403
+        invalid = client.patch(
+            f"/api/platform/organizations/{organization_id}/ai-variable-billing",
+            headers=_h("T-ADMIN"), json={"fx_buffer_percent": 101},
+        )
+        assert invalid.status_code == 400
+
+        updated = client.patch(
+            f"/api/platform/organizations/{organization_id}/ai-variable-billing",
+            headers=_h("T-ADMIN"),
+            json={"state": "active", "ai_fee_percent": 17.5,
+                  "fx_buffer_percent": 12},
+        )
+        assert updated.status_code == 200, updated.text
+        config = updated.json()["ai_variable_billing"]
+        assert config["state"] == "active"
+        assert config["billing_start_date"]
+        assert config["ai_fee_percent"] == 17.5
+        stored = _run(fake.organizations.find_one({"organization_id": organization_id}))
+        assert stored["ai_fee_percent"] == 17.5
+        assert stored["ai_variable_billing"]["fx_buffer_percent"] == 12
+
+    def test_simulation_and_pilot_modes_never_enter_automatic_run(self, srv, monkeypatch):
+        server, fake, client = srv
+        from datetime import datetime, timedelta, timezone
+
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        organization_id = organization["organization_id"]
+        now = datetime.now(timezone.utc)
+        start = (now - timedelta(days=29)).isoformat()
+        _run(fake.organizations.update_one(
+            {"organization_id": organization_id},
+            {"$set": {
+                "plan_code": "starter", "subscription_status": "active",
+                "provider_status": "authorized", "provider_preapproval_id": "pre_pilot",
+                "current_period_end": (now + timedelta(hours=2)).isoformat(),
+                "provider_last_payment_at": start,
+                "ai_variable_billing": {"state": "simulation", "billing_start_date": start},
+            }},
+        ))
+        _run(fake.ai_usage_logs.insert_one({
+            "organization_id": organization_id,
+            "created_at": (now - timedelta(days=1)).isoformat(),
+            "status": "success", "total_tokens": 1000,
+            "provider_cost_usd": 1.0, "ai_fee_percent": 20,
+            "ai_fee_usd": 0.2, "billable_cost_usd": 1.2,
+        }))
+        assert client.put(
+            "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
+            json={"usd_to_ars_rate": 1000, "fx_buffer_percent": 10,
+                  "settlement_lead_hours": 24, "max_rate_age_hours": 72,
+                  "enabled": True},
+        ).status_code == 200
+        calls = []
+
+        async def fake_mp(method, path, *, payload=None):
+            calls.append((method, path, payload))
+            return {"id": "pre_pilot", "status": "authorized"}
+
+        monkeypatch.setattr(server, "_mercadopago_request", fake_mp)
+        simulation_run = client.post(
+            f"/api/platform/ai-settlements/run?organization_id={organization_id}",
+            headers=_h("T-ADMIN"),
+        )
+        assert simulation_run.status_code == 200
+        assert simulation_run.json()["items"][0]["reason"] == "organization_simulation_only"
+        assert calls == []
+
+        pilot = client.patch(
+            f"/api/platform/organizations/{organization_id}/ai-variable-billing",
+            headers=_h("T-ADMIN"),
+            json={"state": "pilot", "billing_start_date": start,
+                  "fx_buffer_percent": 25},
+        )
+        assert pilot.status_code == 200, pilot.text
+        automatic = client.post("/api/platform/ai-settlements/run", headers=_h("T-ADMIN"))
+        assert automatic.status_code == 200
+        assert automatic.json()["processed"] == 0
+        assert calls == []
+
+        manual = client.post(
+            f"/api/platform/ai-settlements/run?organization_id={organization_id}",
+            headers=_h("T-ADMIN"),
+        )
+        assert manual.status_code == 200, manual.text
+        assert manual.json()["applied"] == 1
+        assert calls[-1][2]["auto_recurring"]["transaction_amount"] == 46_500
+
     def test_due_settlement_updates_subscription_once_and_payment_closes_it(self, srv, monkeypatch):
         server, fake, client = srv
         from datetime import datetime, timedelta, timezone
@@ -258,6 +359,10 @@ class TestAIVariableSettlement:
                 "provider_status": "authorized", "provider_preapproval_id": "pre_123",
                 "current_period_end": (now + timedelta(hours=2)).isoformat(),
                 "provider_last_payment_at": (now - timedelta(days=29)).isoformat(),
+                "ai_variable_billing": {
+                    "state": "active",
+                    "billing_start_date": (now - timedelta(days=29)).isoformat(),
+                },
             }},
         ))
         _run(fake.ai_usage_logs.insert_one({
@@ -281,8 +386,7 @@ class TestAIVariableSettlement:
         monkeypatch.setattr(server, "_mercadopago_request", fake_mp)
 
         first = client.post(
-            f"/api/platform/ai-settlements/run?organization_id={organization_id}",
-            headers=_h("T-ADMIN"),
+            "/api/platform/ai-settlements/run", headers=_h("T-ADMIN"),
         )
         assert first.status_code == 200, first.text
         assert first.json()["applied"] == 1
@@ -293,8 +397,7 @@ class TestAIVariableSettlement:
         assert statement["status"] == "applied"
 
         second = client.post(
-            f"/api/platform/ai-settlements/run?organization_id={organization_id}",
-            headers=_h("T-ADMIN"),
+            "/api/platform/ai-settlements/run", headers=_h("T-ADMIN"),
         )
         assert second.status_code == 200
         assert len(calls) == 1, "Idempotency must not update Mercado Pago twice"
@@ -349,7 +452,11 @@ class TestAIVariableSettlement:
             {"$set": {"subscription_status": "active", "provider_status": "authorized",
                       "provider_preapproval_id": "pre_cancel",
                       "current_period_end": (now + timedelta(hours=2)).isoformat(),
-                      "provider_last_payment_at": (now - timedelta(days=29)).isoformat()}},
+                      "provider_last_payment_at": (now - timedelta(days=29)).isoformat(),
+                      "ai_variable_billing": {
+                          "state": "active",
+                          "billing_start_date": (now - timedelta(days=29)).isoformat(),
+                      }}},
         ))
         _run(fake.ai_usage_logs.insert_one({
             "organization_id": organization_id,

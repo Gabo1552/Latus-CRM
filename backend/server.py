@@ -14,6 +14,7 @@ import smtplib
 import hashlib
 import hmac
 import json
+import math
 from pathlib import Path
 from dataclasses import replace
 from email.message import EmailMessage
@@ -452,6 +453,34 @@ SUBSCRIPTION_STATUSES = {
     "not_configured", "trialing", "active", "past_due", "canceled", "suspended",
 }
 LICENSE_STATUSES = {"not_configured", "active", "grace_period", "suspended", "expired"}
+AI_VARIABLE_BILLING_STATES = {"disabled", "simulation", "pilot", "active"}
+
+
+def _default_organization_ai_variable_billing() -> dict[str, Any]:
+    return {
+        "state": "disabled",
+        "billing_start_date": None,
+        "fx_buffer_percent": None,
+        "ai_fee_percent": None,
+    }
+
+
+def _organization_ai_variable_billing(organization: dict) -> dict[str, Any]:
+    """Return a backwards-compatible, safe tenant billing configuration."""
+    raw = organization.get("ai_variable_billing")
+    raw = raw if isinstance(raw, dict) else {}
+    state = str(raw.get("state") or "disabled").lower()
+    if state not in AI_VARIABLE_BILLING_STATES:
+        state = "disabled"
+    fee_override = organization.get("ai_fee_percent")
+    if fee_override is None:
+        fee_override = raw.get("ai_fee_percent")
+    return {
+        **_default_organization_ai_variable_billing(),
+        **raw,
+        "state": state,
+        "ai_fee_percent": fee_override,
+    }
 
 PLAN_CATALOG: dict[str, dict[str, Any]] = {
     "base": {
@@ -625,6 +654,9 @@ class Organization(BaseModel):
     billing_email: Optional[str] = None
     billing_cycle: str = "monthly"
     ai_fee_percent: Optional[float] = None
+    ai_variable_billing: dict[str, Any] = Field(
+        default_factory=_default_organization_ai_variable_billing
+    )
     requested_plan_code: Optional[str] = None
     billing_request_status: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
@@ -1885,6 +1917,10 @@ async def _build_ai_settlement_statement(organization: dict, charge_at: datetime
     period_start = ai_settlement.parse_datetime(organization.get("last_ai_settlement_end")) \
         or ai_settlement.parse_datetime(organization.get("provider_last_payment_at")) \
         or ai_settlement.previous_cycle_start(charge_at)
+    organization_billing = _organization_ai_variable_billing(organization)
+    billing_start = ai_settlement.parse_datetime(organization_billing.get("billing_start_date"))
+    if billing_start and billing_start > period_start:
+        period_start = billing_start
     period_end = min(at, charge_at)
     if period_start >= period_end:
         period_start = ai_settlement.previous_cycle_start(charge_at)
@@ -1920,6 +1956,9 @@ async def _build_ai_settlement_statement(organization: dict, charge_at: datetime
         "fx_buffer_percent": policy["fx_buffer_percent"],
         "provider": "mercadopago",
         "provider_preapproval_id": organization.get("provider_preapproval_id"),
+        "organization_billing_state": organization_billing["state"],
+        "organization_billing_start_date": organization_billing.get("billing_start_date"),
+        "organization_fee_percent": organization_billing.get("ai_fee_percent"),
         "final_cancellation": final_cancellation,
         "status": "pending",
         "created_at": now_iso(),
@@ -1928,28 +1967,45 @@ async def _build_ai_settlement_statement(organization: dict, charge_at: datetime
 
 
 async def _apply_ai_settlement(organization: dict, policy: dict, *,
-                               force: bool = False) -> dict:
+                               force: bool = False, manual: bool = False) -> dict:
     from billing import ai_settlement
     now = datetime.now(timezone.utc)
     organization_id = organization["organization_id"]
+    organization_billing = _organization_ai_variable_billing(organization)
+    billing_state = organization_billing["state"]
+    if billing_state == "disabled":
+        return {"organization_id": organization_id, "status": "skipped", "reason": "organization_billing_disabled"}
+    if billing_state == "simulation":
+        return {"organization_id": organization_id, "status": "skipped", "reason": "organization_simulation_only"}
+    if billing_state == "pilot" and not manual:
+        return {"organization_id": organization_id, "status": "skipped", "reason": "pilot_requires_manual_run"}
     if str(organization.get("subscription_status") or "").lower() != "active":
         return {"organization_id": organization_id, "status": "skipped", "reason": "subscription_not_active"}
     charge_at = _parse_billing_datetime(organization.get("current_period_end"))
     if not charge_at:
         return {"organization_id": organization_id, "status": "skipped", "reason": "missing_charge_date"}
+    billing_start = ai_settlement.parse_datetime(organization_billing.get("billing_start_date"))
+    if billing_start and billing_start >= min(now, charge_at):
+        return {"organization_id": organization_id, "status": "skipped", "reason": "billing_not_started"}
     if not force:
         seconds_until_charge = (charge_at - now).total_seconds()
         if seconds_until_charge <= 15 * 60:
             return {"organization_id": organization_id, "status": "skipped", "reason": "charge_too_close"}
         if seconds_until_charge > int(policy["settlement_lead_hours"]) * 3600:
             return {"organization_id": organization_id, "status": "skipped", "reason": "not_due"}
-    if not ai_settlement.rate_is_fresh(policy, at=now):
+    effective_policy = dict(policy)
+    organization_buffer = organization_billing.get("fx_buffer_percent")
+    if organization_buffer is not None:
+        effective_policy["fx_buffer_percent"] = float(organization_buffer)
+    if not ai_settlement.rate_is_fresh(effective_policy, at=now):
         return {"organization_id": organization_id, "status": "skipped", "reason": "stale_exchange_rate"}
     provider_id = str(organization.get("provider_preapproval_id") or "")
     if not provider_id or str(organization.get("provider_status") or "").lower() != "authorized":
         return {"organization_id": organization_id, "status": "skipped", "reason": "subscription_not_authorized"}
 
-    draft = await _build_ai_settlement_statement(organization, charge_at, policy, at=now)
+    draft = await _build_ai_settlement_statement(
+        organization, charge_at, effective_policy, at=now
+    )
     if float(draft.get("total_amount_ars") or 0) <= 0 and draft.get("final_cancellation"):
         existing = await _raw_collection("ai_billing_statements").find_one(
             {"settlement_key": draft["settlement_key"]}, {"_id": 0}
@@ -2069,10 +2125,18 @@ async def process_due_ai_settlements(*, force_organization_id: Optional[str] = N
     if force_organization_id:
         query = {"organization_id": force_organization_id}
     organizations = await _raw_collection("organizations").find(query, {"_id": 0}).to_list(1000)
+    if not force_organization_id:
+        organizations = [
+            organization for organization in organizations
+            if _organization_ai_variable_billing(organization)["state"] == "active"
+        ]
     items = []
     for organization in organizations:
         try:
-            items.append(await _apply_ai_settlement(organization, policy, force=force))
+            items.append(await _apply_ai_settlement(
+                organization, policy, force=force,
+                manual=bool(force_organization_id),
+            ))
         except Exception as exc:
             logger.exception("AI settlement failed org=%s", organization.get("organization_id"))
             items.append({"organization_id": organization.get("organization_id"),
@@ -2109,6 +2173,7 @@ async def _subscription_payload(organization_id: str, *, include_internal: bool 
         "ai_billing": {
             "fee_percent": await ai_usage.effective_fee_percent(db, organization_id),
             "has_custom_fee": organization.get("ai_fee_percent") is not None,
+            "variable_billing": _organization_ai_variable_billing(organization),
             "this_month": await _organization_ai_month_usage(organization_id),
             "latest_statement": await _latest_ai_statement(organization_id),
         },
@@ -2524,7 +2589,12 @@ async def cancel_billing_subscription(
         return await _subscription_payload(user.organization_id)
     from billing import ai_settlement
     variable_policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
-    if variable_policy["enabled"] and str(organization.get("provider_status") or "").lower() == "authorized":
+    organization_billing = _organization_ai_variable_billing(organization)
+    if (
+        variable_policy["enabled"]
+        and organization_billing["state"] in {"pilot", "active"}
+        and str(organization.get("provider_status") or "").lower() == "authorized"
+    ):
         requested_at = now_iso()
         await _raw_collection("organizations").update_one(
             {"organization_id": user.organization_id},
@@ -2652,6 +2722,7 @@ async def platform_list_organizations(platform_admin: User = Depends(require_pla
     organizations = await _raw_collection("organizations").find({}, {"_id": 0}).sort(
         "created_at", -1
     ).to_list(500)
+    organizations = [item for item in organizations if item.get("organization_id")]
     month_start = datetime.combine(
         datetime.now(timezone.utc).date().replace(day=1),
         datetime.min.time(), tzinfo=timezone.utc,
@@ -2680,6 +2751,7 @@ async def platform_list_organizations(platform_admin: User = Depends(require_pla
         fee_override = organization.get("ai_fee_percent")
         rows.append({
             **organization,
+            "ai_variable_billing": _organization_ai_variable_billing(organization),
             "access": subscription_access_state(organization),
             "active_users": await _raw_collection("memberships").count_documents({
                 "organization_id": organization_id, "status": "active",
@@ -2849,6 +2921,14 @@ async def platform_update_subscription(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if "ai_fee_percent" in update:
+        organization_billing = _organization_ai_variable_billing(organization)
+        organization_billing.update({
+            "ai_fee_percent": update["ai_fee_percent"],
+            "updated_at": now_iso(),
+            "updated_by": platform_admin.user_id,
+        })
+        update["ai_variable_billing"] = organization_billing
     if update.get("subscription_status") == "active":
         update["billing_request_status"] = "approved"
         update["requested_plan_code"] = None
@@ -6242,16 +6322,91 @@ async def platform_update_org_ai_variable_billing(
     payload: OrganizationAIBillingUpdate,
     platform_admin: User = Depends(require_platform_admin),
 ):
-    """Point 1: Update tenant individual AI Variable Billing settings."""
+    """Update the tenant rollout mode and its variable-AI billing overrides."""
     org = await _raw_collection("organizations").find_one({"organization_id": organization_id}, {"_id": 0})
     if not org:
         raise HTTPException(404, "Empresa no encontrada")
-    current_billing = org.get("ai_variable_billing") or {}
-    updated_billing = {**current_billing, **payload.model_dump(exclude_unset=True), "updated_at": now_iso()}
+    patch = payload.model_dump(exclude_unset=True)
+    current_billing = _organization_ai_variable_billing(org)
+
+    if "ai_fee_percent" in patch and patch["ai_fee_percent"] is not None:
+        from ai import usage as ai_usage
+        try:
+            patch["ai_fee_percent"] = ai_usage.validate_fee_percent(patch["ai_fee_percent"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if "fx_buffer_percent" in patch and patch["fx_buffer_percent"] is not None:
+        buffer = float(patch["fx_buffer_percent"])
+        if not math.isfinite(buffer) or buffer < 0 or buffer > 100:
+            raise HTTPException(400, "El colchón cambiario debe estar entre 0% y 100%")
+        patch["fx_buffer_percent"] = round(buffer, 4)
+    if "max_monthly_ai_cost_usd" in patch and patch["max_monthly_ai_cost_usd"] is not None:
+        maximum = float(patch["max_monthly_ai_cost_usd"])
+        if not math.isfinite(maximum) or maximum <= 0:
+            raise HTTPException(400, "El límite mensual debe ser mayor a cero")
+        patch["max_monthly_ai_cost_usd"] = round(maximum, 4)
+    if "billing_start_date" in patch:
+        if patch["billing_start_date"] in (None, ""):
+            patch["billing_start_date"] = None
+        else:
+            parsed_start = _parse_billing_datetime(patch["billing_start_date"])
+            if not parsed_start:
+                raise HTTPException(400, "Fecha de inicio de facturación inválida")
+            patch["billing_start_date"] = parsed_start.isoformat()
+
+    next_state = patch.get("state", current_billing["state"])
+    if (
+        next_state in {"disabled", "simulation"}
+        and current_billing["state"] in {"pilot", "active"}
+        and next_state != current_billing["state"]
+    ):
+        open_statement = await _raw_collection("ai_billing_statements").find_one({
+            "organization_id": organization_id,
+            "status": {"$in": ["applying", "applied", "payment_failed"]},
+        }, {"_id": 0})
+        if open_statement:
+            raise HTTPException(
+                409,
+                "No se puede desactivar mientras exista una liquidación aplicada o pendiente de pago",
+            )
+    if (
+        next_state in {"pilot", "active"}
+        and not patch.get("billing_start_date")
+        and not current_billing.get("billing_start_date")
+    ):
+        patch["billing_start_date"] = now_iso()
+
+    changed_at = now_iso()
+    updated_billing = {
+        **current_billing,
+        **patch,
+        "state": next_state,
+        "updated_at": changed_at,
+        "updated_by": platform_admin.user_id,
+    }
+    db_update: dict[str, Any] = {
+        "$set": {"ai_variable_billing": updated_billing, "updated_at": changed_at}
+    }
+    if "ai_fee_percent" in patch:
+        if patch["ai_fee_percent"] is None:
+            db_update["$unset"] = {"ai_fee_percent": ""}
+        else:
+            db_update["$set"]["ai_fee_percent"] = patch["ai_fee_percent"]
     await _raw_collection("organizations").update_one(
         {"organization_id": organization_id},
-        {"$set": {"ai_variable_billing": updated_billing, "updated_at": now_iso()}}
+        db_update,
     )
+    await _raw_collection("billing_events").insert_one({
+        "event_id": new_id("billevt"),
+        "organization_id": organization_id,
+        "type": "organization_ai_variable_billing_updated",
+        "previous_state": current_billing["state"],
+        "new_state": next_state,
+        "changes": patch,
+        "actor_user_id": platform_admin.user_id,
+        "actor_email": platform_admin.email,
+        "created_at": changed_at,
+    })
     return {"organization_id": organization_id, "ai_variable_billing": updated_billing}
 
 
@@ -6270,15 +6425,21 @@ async def platform_simulate_ai_billing(
     plan_code = org.get("plan_code") or "base"
     plan = PLAN_CATALOG.get(plan_code) or PLAN_CATALOG["base"]
 
-    org_billing = org.get("ai_variable_billing") or {}
-    fx_buffer = float(org_billing.get("fx_buffer_percent") or policy.get("fx_buffer_percent") or 10.0)
+    org_billing = _organization_ai_variable_billing(org)
+    organization_buffer = org_billing.get("fx_buffer_percent")
+    fx_buffer = float(
+        organization_buffer
+        if organization_buffer is not None
+        else (policy.get("fx_buffer_percent") or 10.0)
+    )
     rate = float(policy.get("usd_to_ars_rate") or 0.0)
     if rate <= 0:
-        rate = 1250.0
+        raise HTTPException(400, "Configurá una cotización USD/ARS antes de simular")
 
     query: dict[str, Any] = {"organization_id": payload.organization_id, "status": "success"}
-    if payload.period_start:
-        query["created_at"] = {"$gte": payload.period_start}
+    period_start = payload.period_start or org_billing.get("billing_start_date")
+    if period_start:
+        query["created_at"] = {"$gte": period_start}
     if payload.period_end:
         query.setdefault("created_at", {})["$lt"] = payload.period_end
 
@@ -6295,7 +6456,12 @@ async def platform_simulate_ai_billing(
         fx_buffer_percent=fx_buffer,
         included_tokens=included_tokens,
     )
-    return simulation
+    return {
+        **simulation,
+        "organization_billing_state": org_billing["state"],
+        "organization_billing_start_date": org_billing.get("billing_start_date"),
+        "organization_fx_buffer_override": organization_buffer,
+    }
 
 
 @api_router.post("/platform/ai-billing/statements/{statement_id}/retry")
