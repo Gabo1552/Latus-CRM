@@ -2,6 +2,7 @@
 import { useParams, useSearchParams } from "react-router-dom";
 import { Send, CheckCheck, Lock, PhoneOff } from "lucide-react";
 import axios from "axios";
+import { mergePublicMessages, publicMessagesOnly } from "../lib/publicWebChatMessages";
 
 const rawUrl = (process.env.REACT_APP_BACKEND_URL || "http://localhost:8000").replace(/\/$/, "");
 const API_URL = rawUrl.endsWith("/api") ? rawUrl : `${rawUrl}/api`;
@@ -11,13 +12,9 @@ const publicApi = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
-const publicMessagesOnly = (items = []) => items.filter(
-  (item) => ["contact", "bot", "agent"].includes(item?.sender_type)
-);
-
 function TypingIndicator({ color, botName }) {
   return (
-    <div className="flex justify-start items-end gap-2 px-1">
+    <div className="flex justify-start items-end gap-2 px-1" role="status" aria-live="polite">
       <div
         className="h-8 w-8 rounded-full flex-shrink-0 flex items-center justify-center text-white text-xs font-bold shadow-sm"
         style={{ background: color }}
@@ -79,7 +76,7 @@ function ChatMessage({ msg, session, isLatest }) {
           }
         </div>
       )}
-      <div className={`flex flex-col max-w-[78%] ${isContact ? "items-end" : "items-start"}`}>
+      <div className={`flex flex-col max-w-[86%] sm:max-w-[78%] ${isContact ? "items-end" : "items-start"}`}>
         {(isBot || isAgent) && (
           <span className="text-[10px] font-semibold text-slate-500 mb-0.5 px-1">
             {isAgent ? (msg.sender_name || "Asesor") : botName}
@@ -96,7 +93,9 @@ function ChatMessage({ msg, session, isLatest }) {
           {msg.body}
           <div className={`flex items-center justify-end gap-1 mt-1 text-[10px] ${isContact ? "text-white/70" : "text-slate-400"}`}>
             <span>{timeStr}</span>
-            {isContact && <><span>Enviado</span><CheckCheck className="h-3 w-3" /></>}
+            {isContact && (msg.delivery_status === "failed"
+              ? <span className="font-semibold text-rose-100">No enviado</span>
+              : <><span>Enviado</span><CheckCheck className="h-3 w-3" /></>)}
           </div>
         </div>
       </div>
@@ -125,7 +124,9 @@ export default function PublicWebChat() {
   const scrollRef = useRef(null);
   const textareaRef = useRef(null);
   const prevMsgCount = useRef(0);
-  const replyCountBeforeSend = useRef(0);
+  const replyIdsBeforeSend = useRef(new Set());
+  const requestEpoch = useRef(0);
+  const pollInFlight = useRef(false);
 
   const scrollToBottom = useCallback((behavior = "smooth") => {
     if (scrollRef.current) {
@@ -162,30 +163,48 @@ export default function PublicWebChat() {
 
   useEffect(() => {
     if (!activeToken || loading || finished) return;
+    let cancelled = false;
     const interval = setInterval(async () => {
-      if (document.hidden || sending) return;
+      if (document.hidden || sending || pollInFlight.current) return;
+      const epoch = requestEpoch.current;
+      pollInFlight.current = true;
       try {
         const res = await publicApi.get(`/public/webchat/${activeToken}/messages`);
+        if (cancelled || epoch !== requestEpoch.current) return;
         if (res.data?.messages) {
           const newMsgs = publicMessagesOnly(res.data.messages);
-          setMessages(prev => {
-            return newMsgs;
-          });
+          setMessages(prev => mergePublicMessages(prev, newMsgs));
           setSession(prev => ({ ...prev, bot_enabled: res.data.bot_enabled, bot_status: res.data.bot_status }));
-          const replyCount = newMsgs.filter((item) => item.sender_type === "bot" || item.sender_type === "agent").length;
+          const hasNewReply = newMsgs.some((item) => (
+            (item.sender_type === "bot" || item.sender_type === "agent")
+            && !replyIdsBeforeSend.current.has(item.id)
+          ));
           const needsHuman = res.data.bot_enabled === false || ["requiere_humano", "en_atencion_humana", "cerrada"].includes(res.data.bot_status);
-          if (replyCount > replyCountBeforeSend.current || needsHuman) setBotTyping(false);
+          if (hasNewReply || needsHuman) setBotTyping(false);
           if (res.data.finished) setFinished(true);
         }
       } catch { /* silent */ }
+      finally { pollInFlight.current = false; }
     }, botTyping ? 1500 : 4000);
-    return () => clearInterval(interval);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [activeToken, loading, finished, sending, botTyping]);
 
   useEffect(() => {
-    if (messages.length > prevMsgCount.current) scrollToBottom();
+    let frame;
+    if (messages.length > prevMsgCount.current || botTyping) {
+      frame = requestAnimationFrame(() => scrollToBottom());
+    }
     prevMsgCount.current = messages.length;
-  }, [messages.length, scrollToBottom]);
+    return () => { if (frame) cancelAnimationFrame(frame); };
+  }, [messages.length, botTyping, scrollToBottom]);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return undefined;
+    const keepLatestVisible = () => requestAnimationFrame(() => scrollToBottom("auto"));
+    viewport.addEventListener("resize", keepLatestVisible);
+    return () => viewport.removeEventListener("resize", keepLatestVisible);
+  }, [scrollToBottom]);
 
   const handleDraftChange = (e) => {
     setDraft(e.target.value);
@@ -203,10 +222,13 @@ export default function PublicWebChat() {
     if (textareaRef.current) textareaRef.current.style.height = "auto";
     setSending(true);
     setActionError("");
+    requestEpoch.current += 1;
     const clientMessageId = retryMessageId || crypto.randomUUID();
-    replyCountBeforeSend.current = messages.filter(
-      (item) => item.sender_type === "bot" || item.sender_type === "agent"
-    ).length;
+    replyIdsBeforeSend.current = new Set(
+      messages
+        .filter((item) => item.sender_type === "bot" || item.sender_type === "agent")
+        .map((item) => item.id)
+    );
     setBotTyping(true);
     const tempMsg = {
       id: `temp_${clientMessageId}`,
@@ -215,8 +237,11 @@ export default function PublicWebChat() {
       body: text,
       created_at: new Date().toISOString(),
       delivery_status: "delivered",
+      client_message_id: clientMessageId,
     };
-    setMessages(prev => [...prev, tempMsg]);
+    setMessages(prev => mergePublicMessages(
+      prev.filter(item => item.id !== tempMsg.id), [tempMsg]
+    ));
     scrollToBottom();
     try {
       const res = await publicApi.post(`/public/webchat/${activeToken}/messages`, {
@@ -225,27 +250,25 @@ export default function PublicWebChat() {
         client_message_id: clientMessageId,
       });
       if (res.data?.messages) {
-        setMessages(prev => {
-          const merged = new Map(
-            prev.filter(item => item.id !== tempMsg.id).map(item => [item.id, item])
-          );
-          publicMessagesOnly(res.data.messages).forEach(item => merged.set(item.id, item));
-          return Array.from(merged.values()).sort(
-            (a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0)
-          );
-        });
+        setMessages(prev => mergePublicMessages(prev, res.data.messages));
         setSession(prev => ({
           ...prev,
           bot_enabled: res.data.bot_enabled,
           bot_status: res.data.bot_status,
         }));
         const needsHuman = res.data.bot_enabled === false || ["requiere_humano", "en_atencion_humana", "cerrada"].includes(res.data.bot_status);
-        setBotTyping(!needsHuman && res.data.processing !== false);
+        const hasNewReply = publicMessagesOnly(res.data.messages).some((item) => (
+          (item.sender_type === "bot" || item.sender_type === "agent")
+          && !replyIdsBeforeSend.current.has(item.id)
+        ));
+        setBotTyping(!hasNewReply && !needsHuman && res.data.processing !== false);
         setRetryMessageId("");
       }
     } catch (e) {
       setBotTyping(false);
-      setMessages(prev => prev.filter(item => item.id !== tempMsg.id));
+      setMessages(prev => prev.map(item => (
+        item.id === tempMsg.id ? { ...item, delivery_status: "failed" } : item
+      )));
       setDraft(text);
       setRetryMessageId(clientMessageId);
       setActionError(e?.response?.data?.detail || "No pudimos enviar el mensaje. Intentá nuevamente.");
@@ -274,7 +297,7 @@ export default function PublicWebChat() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: "#EFF2F5" }}>
+      <div className="min-h-[100dvh] flex items-center justify-center" style={{ background: "#EFF2F5" }}>
         <div className="flex flex-col items-center gap-3">
           <div className="h-12 w-12 rounded-full border-4 border-[#0E8DDB] border-t-transparent animate-spin" />
           <p className="text-sm font-medium text-slate-500">Conectando...</p>
@@ -285,7 +308,7 @@ export default function PublicWebChat() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4" style={{ background: "#EFF2F5" }}>
+      <div className="min-h-[100dvh] flex items-center justify-center p-4" style={{ background: "#EFF2F5" }}>
         <div className="bg-white rounded-2xl p-8 max-w-sm w-full text-center shadow-lg border border-slate-200">
           <div className="h-16 w-16 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-4">
             <PhoneOff className="h-8 w-8 text-slate-400" />
@@ -315,16 +338,24 @@ export default function PublicWebChat() {
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 4px; }
+        @media (max-width: 639px) {
+          .latus-chat-page, .latus-chat-shell { height: 100vh; min-height: 100vh; }
+          @supports (height: 100dvh) {
+            .latus-chat-page, .latus-chat-shell { height: 100dvh; min-height: 100dvh; }
+          }
+          .latus-chat-header { padding-top: max(0.75rem, env(safe-area-inset-top)); }
+          .latus-chat-composer { padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
+        }
       `}</style>
       <div
-        className="min-h-screen flex flex-col items-center justify-center sm:p-4"
+        className="latus-chat-page h-[100dvh] min-h-[100dvh] flex flex-col items-center justify-center sm:p-4"
         style={{ background: bgColor, fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif" }}
       >
         <div
-          className="w-full max-w-[460px] h-screen sm:h-[92vh] sm:max-h-[780px] flex flex-col sm:rounded-2xl overflow-hidden shadow-2xl"
+          className="latus-chat-shell w-full max-w-[460px] h-[100dvh] min-h-0 sm:h-[92dvh] sm:max-h-[780px] flex flex-col sm:rounded-2xl overflow-hidden shadow-2xl"
           style={{ background: "#ffffff" }}
         >
-          <div className="flex items-center gap-3 px-4 py-3 shrink-0" style={{ background: primaryColor }}>
+          <div className="latus-chat-header flex items-center gap-2.5 px-3.5 py-3 sm:gap-3 sm:px-4 shrink-0" style={{ background: primaryColor }}>
             <div className="h-10 w-10 rounded-full overflow-hidden flex-shrink-0 shadow border-2 border-white/30"
               style={{ background: "rgba(255,255,255,0.25)" }}>
               {avatarUrl
@@ -345,13 +376,20 @@ export default function PublicWebChat() {
               type="button"
               onClick={handleFinish}
               disabled={finishing || finished}
-              className="text-[11px] font-semibold text-white/90 hover:text-white bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-lg transition-all flex-shrink-0 disabled:opacity-60"
+              className="min-h-10 touch-manipulation text-[11px] font-semibold text-white/90 hover:text-white bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-lg transition-all flex-shrink-0 disabled:opacity-60"
             >
               {finished ? "Listo" : finishing ? "..." : "Finalizar"}
             </button>
           </div>
 
-          <div ref={scrollRef} className="flex-1 overflow-y-auto py-4 px-3 space-y-2.5" style={{ background: bgColor }}>
+          <div
+            ref={scrollRef}
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions text"
+            className="flex-1 min-h-0 overscroll-contain overflow-y-auto py-3.5 px-2.5 sm:py-4 sm:px-3 space-y-2.5"
+            style={{ background: bgColor }}
+          >
             <div className="flex items-end gap-2 px-1" style={{ animation: "slideIn 0.3s ease-out" }}>
               <div className="flex-shrink-0 h-8 w-8 rounded-full overflow-hidden shadow-sm" style={{ background: primaryColor }}>
                 {avatarUrl
@@ -359,7 +397,7 @@ export default function PublicWebChat() {
                   : <div className="h-full w-full flex items-center justify-center text-white text-xs font-bold">{botName.charAt(0).toUpperCase()}</div>
                 }
               </div>
-              <div className="flex flex-col items-start max-w-[78%]">
+              <div className="flex flex-col items-start max-w-[86%] sm:max-w-[78%]">
                 <span className="text-[10px] font-semibold text-slate-500 mb-0.5 px-1">{botName}</span>
                 <div className="bg-white border border-slate-200 rounded-2xl rounded-bl-sm px-3.5 py-2.5 shadow-sm">
                   <p className="text-sm text-slate-800 leading-relaxed">{welcomeMsg}</p>
@@ -387,7 +425,7 @@ export default function PublicWebChat() {
             )}
           </div>
 
-          <div className="bg-white border-t border-slate-200 px-3 py-3 shrink-0">
+          <div className="latus-chat-composer bg-white border-t border-slate-200 px-3 py-3 shrink-0">
             <div className="flex items-end gap-2">
               <div className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2 focus-within:border-slate-400 focus-within:bg-white transition-all">
                 <textarea
@@ -398,16 +436,19 @@ export default function PublicWebChat() {
                   onKeyDown={handleKeyDown}
                   disabled={finished}
                   maxLength={2000}
-                  placeholder={finished ? "Consulta finalizada" : "Escribi tu mensaje..."}
-                  className="w-full text-sm text-slate-800 bg-transparent resize-none outline-none placeholder-slate-400 leading-relaxed"
+                  enterKeyHint="send"
+                  autoCapitalize="sentences"
+                  placeholder={finished ? "Consulta finalizada" : "Escribí tu mensaje..."}
+                  className="w-full text-base sm:text-sm text-slate-800 bg-transparent resize-none outline-none placeholder-slate-400 leading-relaxed"
                   style={{ maxHeight: 120, overflowY: "auto" }}
                 />
               </div>
               <button
                 type="button"
+                aria-label="Enviar mensaje"
                 onClick={handleSend}
                 disabled={!draft.trim() || sending || finished}
-                className="h-10 w-10 rounded-full flex items-center justify-center transition-all shadow-sm disabled:opacity-40 flex-shrink-0 hover:scale-105 active:scale-95"
+                className="h-11 w-11 touch-manipulation rounded-full flex items-center justify-center transition-all shadow-sm disabled:opacity-40 flex-shrink-0 hover:scale-105 active:scale-95"
                 style={{ background: primaryColor }}
               >
                 <Send className="h-4 w-4 text-white" style={{ marginLeft: 1 }} />
