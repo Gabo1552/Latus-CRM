@@ -1155,6 +1155,40 @@ class TestUsageEndpoints:
         assert r3.json()["total_calls"] == 1
         assert r3.json()["by_model"][0]["model"] == "claude-test"
 
+    def test_summary_exposes_bot_quality_and_efficiency(self, srv):
+        from datetime import datetime, timezone
+        _, fake, client = srv
+        self._seed_log(fake, latency_ms=1200, prompt_tokens=800,
+                       completion_tokens=120, total_tokens=920)
+        self._seed_log(fake, latency_ms=2400, prompt_tokens=1200,
+                       completion_tokens=180, total_tokens=1380)
+        now = datetime.now(timezone.utc).isoformat()
+        _run(fake.bot_events.insert_one({
+            "event_id": "evt_quality_1", "created_at": now,
+            "status": "completed", "decision": "reply_with_bot",
+            "channel": "webchat", "confidence": 0.9,
+            "context_characters": 1200,
+        }))
+        _run(fake.bot_events.insert_one({
+            "event_id": "evt_quality_2", "created_at": now,
+            "status": "completed", "decision": "require_human",
+            "channel": "whatsapp", "confidence": 0.6,
+            "context_characters": 2400,
+        }))
+
+        response = client.get("/api/admin/ai-usage/summary", headers=_h("T-ADMIN"))
+        assert response.status_code == 200
+        quality = response.json()["bot_performance"]
+        assert quality["events"] == 2
+        assert quality["reply_rate_pct"] == 50.0
+        assert quality["handoff_rate_pct"] == 50.0
+        assert quality["average_confidence_pct"] == 75.0
+        assert quality["average_latency_ms"] == 1800
+        assert quality["p95_latency_ms"] == 2400
+        assert quality["average_prompt_tokens"] == 1000.0
+        assert quality["channels"] == {"webchat": 1, "whatsapp": 1}
+        assert quality["alerts"]
+
     def test_logs_pagination(self, srv):
         _, fake, client = srv
         for _ in range(25): self._seed_log(fake)

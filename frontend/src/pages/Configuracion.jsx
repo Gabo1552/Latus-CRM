@@ -1637,7 +1637,7 @@ function WebChatTab() {
 
   const [draft, setDraft] = useState({});
   const [pendingKeys, setPendingKeys] = useState({});
-  const [createdTestToken, setCreatedTestToken] = useState("cw_prueba_demo");
+  const [createdTestToken, setCreatedTestToken] = useState("");
 
   useEffect(() => {
     if (q.data) {
@@ -1672,7 +1672,8 @@ function WebChatTab() {
   }
 
   const primaryColor = draft.webchat_primary_color || "#0E8DDB";
-  const embedCode = `<!-- Latus CRM Web Chat Widget -->\n<script src="${window.location.origin}/widget.js" data-org-id="default" data-color="${primaryColor}"></script>`;
+  const publicKey = draft.webchat_public_key || "";
+  const embedCode = `<!-- Latus CRM Web Chat Widget -->\n<script src="${window.location.origin}/widget.js" data-latus-key="${publicKey}" data-color="${primaryColor}" data-position="${draft.webchat_position || "right"}" defer></script>`;
 
   const onSave = () => {
     save.mutate({
@@ -1681,19 +1682,21 @@ function WebChatTab() {
       webchat_title: (draft.webchat_title || "Asistente Latus").trim(),
       webchat_welcome_message: (draft.webchat_welcome_message || "¡Hola! ¿En qué puedo ayudarte hoy?").trim(),
       webchat_primary_color: draft.webchat_primary_color || "#0E8DDB",
+      webchat_bg_color: draft.webchat_bg_color || "#EFF2F5",
+      webchat_user_bubble_color: draft.webchat_user_bubble_color || draft.webchat_primary_color || "#0E8DDB",
+      webchat_avatar_url: (draft.webchat_avatar_url || "").trim(),
       webchat_position: draft.webchat_position || "right",
     });
   };
 
   const generateTestLink = async () => {
-    const newToken = `cw_test_${Date.now().toString(36)}`;
+      const newToken = `cw_test_${Date.now().toString(36)}_${crypto.randomUUID().replaceAll("-", "")}`;
     try {
       await api.post("/public/webchat/session", { session_token: newToken, name: "Prueba Chat Web" });
       setCreatedTestToken(newToken);
       toast.success("Nuevo enlace de prueba creado e inicializado");
     } catch (e) {
-      setCreatedTestToken(newToken);
-      toast.success("Enlace de prueba generado");
+      toast.error(e?.response?.data?.detail || "No se pudo crear el enlace de prueba");
     }
   };
 
@@ -1802,6 +1805,37 @@ function WebChatTab() {
             </div>
           </div>
 
+          <div className="p-4 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Color de los mensajes del cliente</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">Color de las burbujas enviadas desde el chat web.</p>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                value={draft.webchat_user_bubble_color || draft.webchat_primary_color || "#0E8DDB"}
+                onChange={(e) => set({ webchat_user_bubble_color: e.target.value })}
+                className="h-9 w-12 rounded-sm border border-[#E9E6DC] cursor-pointer p-0.5"
+              />
+              <Input
+                value={draft.webchat_user_bubble_color || draft.webchat_primary_color || "#0E8DDB"}
+                onChange={(e) => set({ webchat_user_bubble_color: e.target.value })}
+                className="rounded-sm h-9 text-xs font-mono w-32"
+              />
+            </div>
+          </div>
+
+          <div className="p-4 border border-[#E9E6DC] rounded-sm">
+            <Label className="text-sm font-bold text-[#0B1B26]">Posición del widget</Label>
+            <p className="text-xs text-[#888888] mt-0.5 mb-2">Elegí en qué esquina aparecerá el botón en tu sitio.</p>
+            <select
+              value={draft.webchat_position || "right"}
+              onChange={(e) => set({ webchat_position: e.target.value })}
+              className="h-9 w-full rounded-sm border border-[#E9E6DC] bg-white px-3 text-xs text-[#0B1B26]"
+            >
+              <option value="right">Inferior derecha</option>
+              <option value="left">Inferior izquierda</option>
+            </select>
+          </div>
+
           {/* Avatar del Bot */}
           <div className="p-4 border border-[#E9E6DC] rounded-sm md:col-span-2">
             <Label className="text-sm font-bold text-[#0B1B26]">Foto de Perfil del Bot (Avatar)</Label>
@@ -1876,6 +1910,10 @@ function WebChatTab() {
                 variant="outline"
                 size="sm"
                 onClick={() => {
+                  if (!publicKey) {
+                    toast.error("No se pudo obtener la clave pública del Chat Web");
+                    return;
+                  }
                   navigator.clipboard.writeText(embedCode);
                   toast.success("Código de widget copiado al portapapeles");
                 }}
@@ -1912,12 +1950,13 @@ function WebChatTab() {
             <div className="flex items-center gap-2 pt-1 flex-wrap">
               <Input
                 readOnly
-                value={`${window.location.origin}/c/${createdTestToken}`}
+                value={createdTestToken ? `${window.location.origin}/c/${createdTestToken}` : "Creá un enlace para comenzar la prueba"}
                 className="bg-white border-[#E9E6DC] font-mono text-xs h-9 flex-1 text-slate-700 min-w-[200px]"
               />
               <Button
                 type="button"
                 variant="outline"
+                disabled={!createdTestToken}
                 onClick={() => {
                   navigator.clipboard.writeText(`${window.location.origin}/c/${createdTestToken}`);
                   toast.success("Enlace de prueba copiado al portapapeles");
@@ -1930,7 +1969,7 @@ function WebChatTab() {
                 href={`/c/${createdTestToken}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-4 h-9 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-sm transition-all shrink-0 shadow-2xs"
+                className={`inline-flex items-center gap-1.5 px-4 h-9 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-sm transition-all shrink-0 shadow-2xs ${!createdTestToken ? "pointer-events-none opacity-50" : ""}`}
               >
                 Probar Chat Válido <ExternalLink className="h-3.5 w-3.5" />
               </a>
@@ -1941,7 +1980,7 @@ function WebChatTab() {
                 className="inline-flex items-center gap-1.5 px-3 h-9 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-sm transition-all shrink-0 border border-slate-200"
                 title="Probar pantalla de error cuando un link no existe o venció"
               >
-                Probar Enlace Inválido <AlertOctagon className="h-3.5 w-3.5 text-rose-500" />
+                Verificar enlace vencido <AlertOctagon className="h-3.5 w-3.5 text-rose-500" />
               </a>
             </div>
           </div>

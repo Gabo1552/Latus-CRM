@@ -186,6 +186,60 @@ class TestPipeline:
         bots = [m for m in db.messages.docs if m["sender_type"] == "bot"]
         assert len(bots) == 0
 
+    def test_01c_webchat_replies_even_when_whatsapp_auto_reply_is_disabled(self, pipeline_mod, monkeypatch):
+        db = _DB()
+        _run(db.platform_secrets.insert_one({"_id": "ai_provider", "whatsapp_auto_reply_enabled": False}))
+        cv = _seed_conv(db, channel="webchat", last_text="Hola desde la web")
+        captured = {}
+
+        async def fake_llm(**kwargs):
+            captured.update(kwargs)
+            return await _llm_factory(decision="reply_with_bot", confidence=0.9)(**kwargs)
+
+        monkeypatch.setattr(pipeline_mod, "call_llm_json", fake_llm)
+        event = _run(pipeline_mod.process_inbound(db, cv, "webmsg.1", wa_send=None))
+        assert event["decision"] == "reply_with_bot"
+        bot_messages = [m for m in db.messages.docs if m.get("sender_type") == "bot"]
+        assert len(bot_messages) == 1
+        assert bot_messages[0]["channel"] == "webchat"
+        assert "chat web" in captured["system_prompt"]
+        assert captured["max_output_tokens"] == 500
+
+    def test_01d_webchat_phone_is_saved_from_structured_extraction(self, pipeline_mod, monkeypatch):
+        db = _DB()
+        cv = _seed_conv(db, channel="webchat", last_text="Mi número es 351 555 7788")
+        _run(db.contacts.update_one({"id": "ct1"}, {"$set": {"phone": None}}))
+
+        async def fake_llm(**kwargs):
+            parsed, raw = await _llm_factory(decision="reply_with_bot", confidence=0.9)(**kwargs)
+            parsed["contact_phone"] = "351 555 7788"
+            return parsed, raw
+
+        monkeypatch.setattr(pipeline_mod, "call_llm_json", fake_llm)
+        event = _run(pipeline_mod.process_inbound(db, cv, "webmsg.2", wa_send=None))
+        contact = _run(db.contacts.find_one({"id": "ct1"}))
+        assert event["contact_phone_updated"] is True
+        assert contact["phone"] == "+543515557788"
+
+    def test_01e_delivery_failure_is_visible_and_handed_to_human(self, pipeline_mod, monkeypatch):
+        db = _DB()
+        cv = _seed_conv(db)
+        monkeypatch.setattr(
+            pipeline_mod, "call_llm_json",
+            _llm_factory(decision="reply_with_bot", confidence=0.9),
+        )
+
+        async def failed_send(conv, text):
+            raise RuntimeError("canal temporalmente no disponible")
+
+        event = _run(pipeline_mod.process_inbound(db, cv, "wamid.SENDFAIL", wa_send=failed_send))
+        conversation = _run(db.conversations.find_one({"id": cv}))
+        assert event["status"] == "error"
+        assert event["decision"] == "require_human"
+        assert conversation["bot_enabled"] is False
+        assert conversation["bot_status"] == "requiere_humano"
+        assert any(n.get("type") == "handoff_required" for n in db.notifications.docs)
+
     def test_02_bot_disabled_no_llm_call(self, pipeline_mod, monkeypatch):
         db = _DB()
         cv = _seed_conv(db, bot_enabled=False)
@@ -631,7 +685,7 @@ class TestBotInactivityAndTransitions:
         assert appointment["end_time"] == "2026-07-20T14:30:00+00:00"
         assert len(db.appointments.docs) == 1
 
-    def test_bot_won_status_creates_immutable_sale_snapshot(self, pipeline_mod, monkeypatch):
+    def test_bot_won_status_requires_human_review(self, pipeline_mod, monkeypatch):
         db = _DB()
         cv = _seed_conv(db, last_text="Confirmo la compra")
         _run(db.products.insert_one({
@@ -660,7 +714,7 @@ class TestBotInactivityAndTransitions:
             db, cv, "wamid.SALE1", wa_send=AsyncMock(return_value={})
         ))
         lead = _run(db.leads.find_one({"id": "ld1"}))
-        assert event.get("sale_close_blocked") is not True
-        assert lead["status"] == "won"
-        assert lead["closed_value"] == 120
-        assert lead["sale_snapshot"]["products"][0]["unit_price"] == 120
+        assert event.get("sale_status_requires_human") is True
+        assert event.get("lead_status_suggested") == "ganado"
+        assert lead["status"] == "nuevo"
+        assert not lead.get("sale_snapshot")

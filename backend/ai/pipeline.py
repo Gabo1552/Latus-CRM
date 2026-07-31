@@ -145,6 +145,8 @@ async def regenerate_summary(db, conv_id: str, *, user_id: str | None = None) ->
             purpose="summary_regen",
             conversation_id=conv_id,
             user_id=user_id,
+            max_output_tokens=250,
+            ai_settings=ai_cfg,
         )
     except LLMUnavailable as e:
         return {"summary": "", "error": str(e)}
@@ -192,6 +194,33 @@ async def _compile_client_info(db, conv, settings: dict) -> str | None:
     return "\n".join(info_lines) if info_lines else None
 
 
+async def _deliver_bot_reply(db, conv: dict, settings: dict, reply: str, wa_send=None) -> bool:
+    """Deliver one reply through the conversation channel and persist it once."""
+    text = (reply or "").strip()
+    if not text:
+        return False
+    channel = conv.get("channel") or "whatsapp"
+    if channel == "whatsapp":
+        if wa_send is None:
+            return False
+        await wa_send(conv, text)
+    elif channel != "webchat":
+        return False
+    await db.messages.insert_one({
+        "id": "msg_" + uuid.uuid4().hex[:12],
+        "conversation_id": conv["id"],
+        "sender_type": "bot",
+        "sender_name": settings.get("bot_name", "Bot"),
+        "body": text,
+        "direction": "outbound",
+        "delivery_status": "sent",
+        "message_type": "text",
+        "channel": channel,
+        "created_at": _now_iso(),
+    })
+    return True
+
+
 async def suggest_reply(db, conv_id: str, *, user_id: str | None = None) -> dict:
     conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0})
     if not conv: return {"draft": "", "confidence": 0.0, "error": "conv not found"}
@@ -205,17 +234,26 @@ async def suggest_reply(db, conv_id: str, *, user_id: str | None = None) -> dict
     msgs.reverse()
     block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
     client_info = await _compile_client_info(db, conv, settings)
+    context_parts = []
+    if conv.get("summary"):
+        context_parts.append(f"[resumen_previo] {str(conv['summary'])[:600]}")
+    if client_info:
+        context_parts.append(f"[datos_crm_solo_informativos]\n{client_info[:1600]}")
+    if block:
+        context_parts.append(block)
+    block = "\n\n".join(context_parts)
     sp = build_system_prompt(tone=settings["tone"],
                              company_context=merged_biz,
                              response_instructions=settings.get("response_instructions") or "",
                              faqs=settings["faqs"], handoff_rules=settings["handoff_rules"],
                              bot_name=settings.get("bot_name", "Bot"),
-                             client_info=client_info,
+                             client_info=None,
                              tone_dialect=settings.get("tone_dialect") or "cordobes",
                              response_length_limit=settings.get("response_length_limit") or "conciso",
                              writing_rules=settings.get("writing_rules"),
                              company_workflow_steps=settings.get("company_workflow_steps"),
-                             custom_client_fields=settings.get("custom_client_fields"))
+                             custom_client_fields=settings.get("custom_client_fields"),
+                             channel=conv.get("channel") or "whatsapp")
     asst_provider = ai_cfg.get("provider", "built_in")
     asst_model = ai_cfg.get("model", "gpt-4o-mini")
     try:
@@ -225,7 +263,9 @@ async def suggest_reply(db, conv_id: str, *, user_id: str | None = None) -> dict
                                         model=asst_model,
                                         purpose="suggest_reply",
                                         conversation_id=conv_id,
-                                        user_id=user_id)
+                                        user_id=user_id,
+                                        max_output_tokens=450,
+                                        ai_settings=ai_cfg)
     except LLMUnavailable as e:
         return {"draft": "", "confidence": 0.0, "error": str(e)}
     return {"draft": (parsed.get("reply") or "").strip(),
@@ -265,12 +305,16 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         if not conv:
             return await _finish(db, event, decision="no_action",
                                  reason="conversation not found")
+        event["channel"] = conv.get("channel") or "whatsapp"
         ai_cfg = await ai_providers.load_settings(db)
         if not ai_cfg.get("ai_enabled", True):
             return await _finish(db, event, decision="no_action",
                                  reason="ia_desactivada")
         settings = await _load_bot_settings(db)
-        work_areas = await db.work_areas.find({}, {"_id": 0}).to_list(100)
+        work_areas = (
+            await db.work_areas.find({}, {"_id": 0}).to_list(100)
+            if ai_cfg.get("auto_handoff_enabled", True) else []
+        )
 
         if not conversation_bot_should_run(conv, settings):
             return await _finish(db, event, decision="no_action",
@@ -280,6 +324,7 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         msgs = await db.messages.find({"conversation_id": conv_id}, {"_id": 0}) \
             .sort("created_at", -1).to_list(N)
         msgs.reverse()
+        event["context_message_count"] = len(msgs)
         last_inbound = next((m for m in reversed(msgs) if m.get("sender_type") == "contact"), None)
         last_text = (last_inbound or {}).get("body", "") if last_inbound else ""
 
@@ -306,7 +351,7 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                 "direction": "outbound",
                 "delivery_status": "sent",
                 "message_type": "text",
-                "channel": "whatsapp",
+                "channel": conv.get("channel") or "whatsapp",
             })
             return await _finish(db, event, decision="require_human",
                                  reason=human_reason)
@@ -324,13 +369,24 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         event["catalog_products_returned"] = products_returned
         event["raw_input_excerpt"] = (last_text or "")[:240]
 
-        block = "\n".join(f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs)
+        message_block = "\n".join(
+            f"[{m.get('sender_type')}] {(m.get('body') or '')[:300]}" for m in msgs
+        )
         base = (ai_cfg.get("system_prompt_base") or "").strip()
         cc = settings.get("company_context") or settings.get("business_instructions") or ""
         merged_cc = (base + "\n\n" + cc).strip() if base else cc
         if catalog_block:
             merged_cc = (merged_cc + "\n\n" + catalog_block).strip()
         client_info = await _compile_client_info(db, conv, settings)
+        context_parts = []
+        if conv.get("summary"):
+            context_parts.append(f"[resumen_previo] {str(conv['summary'])[:600]}")
+        if client_info:
+            context_parts.append(f"[datos_crm_solo_informativos]\n{client_info[:1600]}")
+        if message_block:
+            context_parts.append(message_block)
+        block = "\n\n".join(context_parts)
+        event["context_characters"] = len(block)
         appointment_context = ""
         if settings.get("appointment_scheduling_enabled"):
             from utils.scheduling import build_appointment_context
@@ -338,7 +394,7 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
 
         session_token = conv.get("webchat_session_token")
         if not session_token:
-            session_token = f"cw_{uuid.uuid4().hex[:16]}"
+            session_token = f"cw_{uuid.uuid4().hex}{uuid.uuid4().hex[:8]}"
             await db.conversations.update_one({"id": conv_id}, {"$set": {"webchat_session_token": session_token}})
 
         resp_instr = settings.get("response_instructions") or ""
@@ -351,11 +407,12 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         if conv.get("channel") == "webchat":
             contact = await db.contacts.find_one({"id": conv.get("contact_id")}, {"_id": 0}) or {}
             phone = contact.get("phone", "")
-            if not phone or "cnt_" in phone or len(phone) < 8 or not phone.replace("+", "").isdigit():
+            phone_digits = "".join(ch for ch in str(phone) if ch.isdigit())
+            if len(phone_digits) < 8:
                 resp_instr += (
                     "\n\nREGISTRO DE TELÉFONO (CHAT WEB): Al saludar o al avanzar en la consulta, "
                     "pedile amablemente su número de WhatsApp/Teléfono al cliente para registrar su legajo único "
-                    "y enviarle el resumen de atención al finalizar la charla."
+                    "y poder contactarlo si necesita seguimiento. No prometas enviar mensajes hasta verificar el número."
                 )
 
         # For webchat: always auto-reply regardless of WhatsApp auto_reply setting
@@ -369,7 +426,7 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             faqs=settings["faqs"],
             handoff_rules=settings["handoff_rules"],
             bot_name=settings.get("bot_name", "Bot"),
-            client_info=client_info,
+            client_info=None,
             auto_reply_enabled=auto_reply_enabled,
             work_areas=work_areas,
             appointment_context=appointment_context if appointment_context else None,
@@ -378,6 +435,7 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             writing_rules=settings.get("writing_rules"),
             company_workflow_steps=settings.get("company_workflow_steps"),
             custom_client_fields=settings.get("custom_client_fields"),
+            channel=conv.get("channel") or "whatsapp",
         )
         parsed: dict = {}
         raw = ""
@@ -390,7 +448,9 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                                               model=bot_model,
                                               purpose="bot_pipeline",
                                               conversation_id=conv_id,
-                                              message_id=triggered_by_message_id)
+                                              message_id=triggered_by_message_id,
+                                              max_output_tokens=500,
+                                              ai_settings=ai_cfg)
         except LLMUnavailable as e:
             return await _finish(db, event, decision="no_action",
                                  reason=f"LLM no disponible: {e}",
@@ -411,6 +471,21 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                     lead_sets = {f"custom_fields.{k}": v for k, v in clean_profile.items()}
                     await db.leads.update_one({"id": lid}, {"$set": lead_sets})
 
+        extracted_phone = str(parsed.get("contact_phone") or "").strip()
+        phone_digits = "".join(ch for ch in extracted_phone if ch.isdigit())
+        if phone_digits.startswith("00"):
+            phone_digits = phone_digits[2:]
+        if len(phone_digits) == 10:
+            phone_digits = "54" + phone_digits
+        elif len(phone_digits) == 11 and phone_digits.startswith("0"):
+            phone_digits = "54" + phone_digits[1:]
+        if len(phone_digits) >= 8 and conv.get("contact_id"):
+            await db.contacts.update_one(
+                {"id": conv["contact_id"]},
+                {"$set": {"phone": f"+{phone_digits}", "phone_source": "bot_extracted"}},
+            )
+            event["contact_phone_updated"] = True
+
         decision = parsed.get("decision") or "no_action"
         confidence = float(parsed.get("confidence") or 0.0)
         reply = (parsed.get("reply") or "").strip()
@@ -421,6 +496,13 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
         lead_status_suggested = parsed.get("lead_status_suggested")
         evidence = (parsed.get("evidence_for_status_change") or "").strip()
         human_reason = (parsed.get("human_required_reason") or "").strip() or forced_handoff_reason
+        event.update({
+            "provider": bot_provider,
+            "model": bot_model,
+            "confidence": round(confidence, 4),
+            "intent": intent,
+            "reply_characters": len(reply),
+        })
 
         if forced_handoff_reason:
             decision = "require_human"
@@ -436,7 +518,8 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             decision = "require_human"
             human_reason = human_reason or f"Confianza baja ({confidence:.2f} < {thresh:.2f})"
 
-        if decision == "reply_with_bot" and not ai_cfg.get("whatsapp_auto_reply_enabled", True):
+        if (decision == "reply_with_bot" and conv.get("channel") == "whatsapp"
+                and not ai_cfg.get("whatsapp_auto_reply_enabled", True)):
             event["auto_reply_suppressed"] = True
             decision = "update_status_only"
             reply = ""
@@ -446,49 +529,28 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                                     "next_best_action": nba}
         notif_payload = None
 
-        if decision == "reply_with_bot" and reply and wa_send is not None:
+        if decision == "reply_with_bot" and reply:
             try:
-                await wa_send(conv, reply)
-                await db.messages.insert_one({
-                    "id": "msg_" + uuid.uuid4().hex[:12],
-                    "conversation_id": conv_id,
-                    "sender_type": "bot",
-                    "sender_name": settings.get("bot_name", "Bot"),
-                    "body": reply,
-                    "direction": "outbound",
-                    "delivery_status": "sent",
-                    "channel": conv.get("channel"),
-                    "created_at": _now_iso(),
-                })
-                conv_set["last_message"] = reply
-                conv_set["last_message_at"] = _now_iso()
-                conv_set["bot_status"] = "esperando_cliente"
-                event["decision"] = "reply_with_bot"
+                delivered = await _deliver_bot_reply(db, conv, settings, reply, wa_send)
+                if delivered:
+                    conv_set["last_message"] = reply
+                    conv_set["last_message_at"] = _now_iso()
+                    conv_set["bot_status"] = "esperando_cliente"
+                    event["decision"] = "reply_with_bot"
             except Exception as e:
-                logger.exception("wa_send failed in bot pipeline")
-                event["error_message"] = f"wa_send failed: {e}"
+                logger.exception("bot reply delivery failed")
+                event["error_message"] = f"reply delivery failed: {e}"
                 event["status"] = "error"
+                event["decision"] = "require_human"
+                event["human_required_reason"] = "No se pudo entregar la respuesta automática"
+                if ai_cfg.get("auto_handoff_enabled", True):
+                    conv_set["bot_enabled"] = False
+                    conv_set["bot_status"] = "requiere_humano"
+                    conv_set["human_required_reason"] = event["human_required_reason"]
                 notif_payload = ("handoff_required",
                                  "Bot no pudo enviar respuesta",
-                                 f"Falla al enviar via WhatsApp: {e}")
+                                 f"Falla al responder por {conv.get('channel') or 'el canal'}: {e}")
                 decision = "require_human"
-        elif decision == "reply_with_bot" and reply and wa_send is None and conv.get("channel") == "webchat":
-            # Web chat channel: no WhatsApp send needed, persist reply directly to DB
-            await db.messages.insert_one({
-                "id": "msg_" + uuid.uuid4().hex[:12],
-                "conversation_id": conv_id,
-                "sender_type": "bot",
-                "sender_name": settings.get("bot_name", "Bot"),
-                "body": reply,
-                "direction": "outbound",
-                "delivery_status": "sent",
-                "channel": "webchat",
-                "created_at": _now_iso(),
-            })
-            conv_set["last_message"] = reply
-            conv_set["last_message_at"] = _now_iso()
-            conv_set["bot_status"] = "esperando_cliente"
-            event["decision"] = "reply_with_bot"
         elif decision == "require_human":
             if ai_cfg.get("auto_handoff_enabled", True):
                 conv_set["bot_enabled"] = False
@@ -592,24 +654,14 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                         f"El bot agendó una cita para el {start_dt.astimezone(ZoneInfo(slot['timezone'])).strftime('%d/%m %H:%M')}"
                     )
                     
-                    if reply and wa_send is not None:
+                    if reply:
                         try:
-                            await wa_send(conv, reply)
-                            await db.messages.insert_one({
-                                "id": "msg_" + uuid.uuid4().hex[:12],
-                                "conversation_id": conv_id,
-                                "sender_type": "bot",
-                                "sender_name": settings.get("bot_name", "Bot"),
-                                "body": reply,
-                                "direction": "outbound",
-                                "delivery_status": "sent",
-                                "channel": conv.get("channel"),
-                                "created_at": _now_iso(),
-                            })
-                            conv_set["last_message"] = reply
-                            conv_set["last_message_at"] = _now_iso()
+                            delivered = await _deliver_bot_reply(db, conv, settings, reply, wa_send)
+                            if delivered:
+                                conv_set["last_message"] = reply
+                                conv_set["last_message_at"] = _now_iso()
                         except Exception as e:
-                            logger.exception("wa_send failed for appointment confirmation")
+                            logger.exception("reply delivery failed for appointment confirmation")
                 except Exception as e:
                     logger.exception("Failed to schedule appointment")
                     event["error_message"] = f"schedule failed: {e}"
@@ -681,21 +733,11 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                         f"Turno reprogramado: {cname}",
                         f"El bot movió el turno al {new_start.astimezone(ZoneInfo(slot['timezone'])).strftime('%d/%m %H:%M')}",
                     )
-                    if reply and wa_send is not None:
-                        await wa_send(conv, reply)
-                        await db.messages.insert_one({
-                            "id": "msg_" + uuid.uuid4().hex[:12],
-                            "conversation_id": conv_id,
-                            "sender_type": "bot",
-                            "sender_name": settings.get("bot_name", "Bot"),
-                            "body": reply,
-                            "direction": "outbound",
-                            "delivery_status": "sent",
-                            "channel": conv.get("channel"),
-                            "created_at": _now_iso(),
-                        })
-                        conv_set["last_message"] = reply
-                        conv_set["last_message_at"] = _now_iso()
+                    if reply:
+                        delivered = await _deliver_bot_reply(db, conv, settings, reply, wa_send)
+                        if delivered:
+                            conv_set["last_message"] = reply
+                            conv_set["last_message_at"] = _now_iso()
                 except Exception as e:
                     logger.exception("Failed to reschedule appointment")
                     event["error_message"] = f"reschedule failed: {e}"
@@ -732,21 +774,11 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                         f"Turno confirmado: {cname}",
                         "El cliente confirmó su asistencia al turno",
                     )
-                    if reply and wa_send is not None:
-                        await wa_send(conv, reply)
-                        await db.messages.insert_one({
-                            "id": "msg_" + uuid.uuid4().hex[:12],
-                            "conversation_id": conv_id,
-                            "sender_type": "bot",
-                            "sender_name": settings.get("bot_name", "Bot"),
-                            "body": reply,
-                            "direction": "outbound",
-                            "delivery_status": "sent",
-                            "channel": conv.get("channel"),
-                            "created_at": confirmed_at,
-                        })
-                        conv_set["last_message"] = reply
-                        conv_set["last_message_at"] = confirmed_at
+                    if reply:
+                        delivered = await _deliver_bot_reply(db, conv, settings, reply, wa_send)
+                        if delivered:
+                            conv_set["last_message"] = reply
+                            conv_set["last_message_at"] = confirmed_at
                 except Exception as e:
                     logger.exception("Failed to confirm appointment")
                     event["error_message"] = f"confirmation failed: {e}"
@@ -764,23 +796,20 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
             lead = await db.leads.find_one({"id": conv.get("lead_id")}, {"_id": 0}) if conv.get("lead_id") else None
             if lead and normalize_lead_status(lead.get("status")) != lead_status_suggested:
                 db_status = SPANISH_TO_ENGLISH_STATUS.get(lead_status_suggested, lead_status_suggested)
+                if lead.get("status") == "won" or db_status == "won":
+                    event["sale_status_requires_human"] = True
+                    event["lead_status_suggested"] = lead_status_suggested
+                    notif_payload = (
+                        "handoff_required",
+                        "Revisión de cierre de venta",
+                        "La IA detectó un posible cambio con impacto en venta o inventario; requiere confirmación humana.",
+                    )
+                    db_status = None
+                if not db_status:
+                    lead = None
+            if lead and normalize_lead_status(lead.get("status")) != lead_status_suggested:
                 lead_update = {"status": db_status, "updated_at": _now_iso()}
                 try:
-                    if lead.get("status") != "won" and db_status == "won":
-                        from utils.sales import close_sale
-                        lead_update.update(await close_sale(
-                            db,
-                            lead,
-                            lead.get("products") or [],
-                            user_id=conv.get("assigned_to"),
-                        ))
-                    elif lead.get("status") == "won" and db_status != "won":
-                        from utils.sales import reverse_sale
-                        lead_update["sale_snapshot"] = await reverse_sale(
-                            db,
-                            lead.get("sale_snapshot"),
-                            user_id=conv.get("assigned_to"),
-                        )
                     await db.leads.update_one({"id": lead["id"]}, {"$set": lead_update})
                     event["lead_status_change"] = {
                         "from": lead.get("status"), "to": lead_status_suggested
@@ -808,7 +837,7 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                     "direction": "outbound",
                     "delivery_status": "sent",
                     "message_type": "text",
-                    "channel": "whatsapp",
+                    "channel": conv.get("channel") or "whatsapp",
                 })
 
         if notif_payload:
@@ -871,7 +900,8 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                         "created_at": _now_iso(),
                     })
 
-        return await _finish(db, event, decision=decision, status="completed")
+        final_status = "error" if event.get("status") == "error" else "completed"
+        return await _finish(db, event, decision=decision, status=final_status)
 
     except Exception as e:
         logger.exception("bot pipeline error for conv=%s", conv_id)

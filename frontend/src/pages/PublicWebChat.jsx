@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useRef, useCallback } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { Send, CheckCheck, Lock, PhoneOff } from "lucide-react";
 import axios from "axios";
 
@@ -41,15 +41,20 @@ function ChatMessage({ msg, session, isLatest }) {
   const isBot = msg.sender_type === "bot";
   const isSystem = msg.sender_type === "system";
 
-  const timeStr = msg.created_at
-    ? new Date(msg.created_at).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })
+  const messageDate = msg.created_at ? new Date(msg.created_at) : null;
+  const isToday = messageDate && new Date().toDateString() === messageDate.toDateString();
+  const timeStr = messageDate
+    ? messageDate.toLocaleString("es-AR", {
+        ...(isToday ? {} : { day: "2-digit", month: "2-digit" }),
+        hour: "2-digit", minute: "2-digit",
+      })
     : "";
 
   if (isSystem) {
     return (
       <div className="flex justify-center my-1">
         <span className="text-[11px] font-medium text-slate-400 bg-white/70 border border-slate-200 px-3 py-1 rounded-full">
-          {msg.body}
+          {msg.body}{timeStr ? ` · ${timeStr}` : ""}
         </span>
       </div>
     );
@@ -83,7 +88,9 @@ function ChatMessage({ msg, session, isLatest }) {
           {msg.body}
           <div className={`flex items-center justify-end gap-1 mt-1 text-[10px] ${isContact ? "text-white/70" : "text-slate-400"}`}>
             <span>{timeStr}</span>
-            {isContact && <CheckCheck className="h-3 w-3" />}
+            {isContact && (msg.delivery_status === "sending"
+              ? <span>Enviando…</span>
+              : <CheckCheck className="h-3 w-3" />)}
           </div>
         </div>
       </div>
@@ -93,6 +100,9 @@ function ChatMessage({ msg, session, isLatest }) {
 
 export default function PublicWebChat() {
   const { token } = useParams();
+  const [searchParams] = useSearchParams();
+  const organizationKey = searchParams.get("key") || "";
+  const [activeToken, setActiveToken] = useState(token === "nuevo" ? "" : token);
   const [session, setSession] = useState(null);
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
@@ -102,6 +112,9 @@ export default function PublicWebChat() {
   const [finished, setFinished] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [botTyping, setBotTyping] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [summarySent, setSummarySent] = useState(false);
+  const [retryMessageId, setRetryMessageId] = useState("");
 
   const scrollRef = useRef(null);
   const textareaRef = useRef(null);
@@ -117,10 +130,19 @@ export default function PublicWebChat() {
     let active = true;
     const init = async () => {
       try {
-        const res = await publicApi.post("/public/webchat/session", { session_token: token });
+        if (token === "nuevo" && !organizationKey) throw new Error("missing organization key");
+        const res = await publicApi.post("/public/webchat/session", {
+          session_token: token === "nuevo" ? undefined : token,
+          organization_key: organizationKey || undefined,
+        });
         if (active) {
           setSession(res.data);
           setMessages(res.data.messages || []);
+          setActiveToken(res.data.session_token);
+          setFinished(!!res.data.finished);
+          if (token === "nuevo" && res.data.session_token) {
+            window.history.replaceState({}, "", `/c/${res.data.session_token}`);
+          }
           setLoading(false);
         }
       } catch {
@@ -129,24 +151,27 @@ export default function PublicWebChat() {
     };
     init();
     return () => { active = false; };
-  }, [token]);
+  }, [token, organizationKey]);
 
   useEffect(() => {
-    if (!token || loading) return;
+    if (!activeToken || loading || finished) return;
     const interval = setInterval(async () => {
+      if (document.hidden || sending) return;
       try {
-        const res = await publicApi.get(`/public/webchat/${token}/messages`);
+        const res = await publicApi.get(`/public/webchat/${activeToken}/messages`);
         if (res.data?.messages) {
           const newMsgs = res.data.messages;
           setMessages(prev => {
             if (newMsgs.length > prev.length) setBotTyping(false);
             return newMsgs;
           });
+          setSession(prev => ({ ...prev, bot_enabled: res.data.bot_enabled, bot_status: res.data.bot_status }));
+          if (res.data.finished) setFinished(true);
         }
       } catch { /* silent */ }
-    }, 2500);
+    }, 4000);
     return () => clearInterval(interval);
-  }, [token, loading]);
+  }, [activeToken, loading, finished, sending]);
 
   useEffect(() => {
     if (messages.length > prevMsgCount.current) scrollToBottom();
@@ -155,6 +180,7 @@ export default function PublicWebChat() {
 
   const handleDraftChange = (e) => {
     setDraft(e.target.value);
+    setRetryMessageId("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
       textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 120) + "px";
@@ -162,44 +188,57 @@ export default function PublicWebChat() {
   };
 
   const handleSend = async () => {
-    if (!draft.trim() || sending || finished) return;
+    if (!draft.trim() || sending || finished || !activeToken) return;
     const text = draft.trim();
     setDraft("");
     if (textareaRef.current) textareaRef.current.style.height = "auto";
     setSending(true);
+    setActionError("");
+    const clientMessageId = retryMessageId || crypto.randomUUID();
     setBotTyping(true);
     const tempMsg = {
-      id: `temp_${Date.now()}`,
+      id: `temp_${clientMessageId}`,
       sender_type: "contact",
       sender_name: session?.contact_name || "Tu",
       body: text,
       created_at: new Date().toISOString(),
+      delivery_status: "sending",
     };
     setMessages(prev => [...prev, tempMsg]);
     scrollToBottom();
     try {
-      const res = await publicApi.post(`/public/webchat/${token}/messages`, {
+      const res = await publicApi.post(`/public/webchat/${activeToken}/messages`, {
         body: text,
         sender_name: session?.contact_name || "Visitante Web",
+        client_message_id: clientMessageId,
       });
       if (res.data?.messages) {
         setMessages(res.data.messages);
         setBotTyping(false);
+        setRetryMessageId("");
       }
-    } catch {
+    } catch (e) {
       setBotTyping(false);
+      setMessages(prev => prev.filter(item => item.id !== tempMsg.id));
+      setDraft(text);
+      setRetryMessageId(clientMessageId);
+      setActionError(e?.response?.data?.detail || "No pudimos enviar el mensaje. Intentá nuevamente.");
     } finally {
       setSending(false);
     }
   };
 
   const handleFinish = async () => {
-    if (finishing || finished) return;
+    if (finishing || finished || !activeToken) return;
     setFinishing(true);
+    setActionError("");
     try {
-      await publicApi.post(`/public/webchat/${token}/finish`);
+      const res = await publicApi.post(`/public/webchat/${activeToken}/finish`);
+      setSummarySent(!!res.data?.summary_sent);
       setFinished(true);
-    } catch { /* silent */ }
+    } catch (e) {
+      setActionError(e?.response?.data?.detail || "No pudimos finalizar la consulta.");
+    }
     finally { setFinishing(false); }
   };
 
@@ -225,8 +264,8 @@ export default function PublicWebChat() {
           <div className="h-16 w-16 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-4">
             <PhoneOff className="h-8 w-8 text-slate-400" />
           </div>
-          <h2 className="text-lg font-bold text-slate-800">Sesion no encontrada</h2>
-          <p className="text-sm text-slate-500 mt-1.5">Este enlace puede haber expirado o ser invalido.</p>
+          <h2 className="text-lg font-bold text-slate-800">Sesión no encontrada</h2>
+          <p className="text-sm text-slate-500 mt-1.5">Este enlace puede haber expirado o ser inválido.</p>
         </div>
       </div>
     );
@@ -235,7 +274,7 @@ export default function PublicWebChat() {
   const primaryColor = session?.webchat_primary_color || "#0E8DDB";
   const bgColor = session?.webchat_bg_color || "#EFF2F5";
   const title = session?.webchat_title || "Asistente";
-  const welcomeMsg = session?.webchat_welcome_message || "Hola! En que puedo ayudarte hoy?";
+  const welcomeMsg = session?.webchat_welcome_message || "¡Hola! ¿En qué puedo ayudarte hoy?";
   const avatarUrl = session?.webchat_avatar_url;
   const botName = session?.bot_name || "Bot";
 
@@ -271,7 +310,9 @@ export default function PublicWebChat() {
               <h1 className="text-white font-semibold text-[15px] leading-tight truncate">{title}</h1>
               <div className="flex items-center gap-1.5 mt-0.5">
                 <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
-                <span className="text-white/85 text-[11px] font-medium">En linea - Respuesta inmediata</span>
+                <span className="text-white/85 text-[11px] font-medium">
+                  {finished ? "Consulta finalizada" : session?.bot_enabled === false ? "Te atenderá una persona" : "Asistente disponible"}
+                </span>
               </div>
             </div>
             <button
@@ -303,7 +344,7 @@ export default function PublicWebChat() {
             {finished && (
               <div className="flex justify-center">
                 <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl px-4 py-2.5 text-[12px] font-medium text-center max-w-xs">
-                  Consulta finalizada. Enviamos el resumen a tu WhatsApp.
+                  {summarySent ? "Consulta finalizada. Enviamos el resumen a tu WhatsApp." : "Consulta finalizada correctamente."}
                 </div>
               </div>
             )}
@@ -313,6 +354,11 @@ export default function PublicWebChat() {
             ))}
 
             {botTyping && <TypingIndicator color={primaryColor} />}
+            {actionError && (
+              <div className="mx-auto max-w-sm rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-center text-xs font-medium text-rose-700">
+                {actionError}
+              </div>
+            )}
           </div>
 
           <div className="bg-white border-t border-slate-200 px-3 py-3 shrink-0">
@@ -325,6 +371,7 @@ export default function PublicWebChat() {
                   onChange={handleDraftChange}
                   onKeyDown={handleKeyDown}
                   disabled={finished}
+                  maxLength={2000}
                   placeholder={finished ? "Consulta finalizada" : "Escribi tu mensaje..."}
                   className="w-full text-sm text-slate-800 bg-transparent resize-none outline-none placeholder-slate-400 leading-relaxed"
                   style={{ maxHeight: 120, overflowY: "auto" }}

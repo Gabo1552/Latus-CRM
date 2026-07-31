@@ -29,9 +29,16 @@ async def call_llm_json(
     conversation_id: str | None = None,
     message_id: str | None = None,
     user_id: str | None = None,
+    max_output_tokens: int | None = None,
+    ai_settings: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Call the configured LLM, log usage, and return ``(parsed_json, raw_text)``."""
-    provider_obj = await get_provider(db, override_provider=provider, override_model=model, for_bot=(purpose == "bot_pipeline"))
+    provider_obj = await get_provider(
+        db, override_provider=provider, override_model=model,
+        for_bot=(purpose == "bot_pipeline"), settings_override=ai_settings,
+    )
+    if max_output_tokens is not None:
+        provider_obj.max_tokens = max(100, min(int(provider_obj.max_tokens), int(max_output_tokens)))
     res = await call_with_logging(
         db, provider_obj,
         system_prompt=system_prompt,

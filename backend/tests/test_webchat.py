@@ -79,6 +79,9 @@ class _Coll:
                 if "$inc" in update:
                     for k, v in update["$inc"].items():
                         d[k] = d.get(k, 0) + v
+                if "$unset" in update:
+                    for k in update["$unset"]:
+                        d.pop(k, None)
                 class _Res: modified_count = 1
                 return _Res()
         if upsert:
@@ -111,6 +114,12 @@ def srv(monkeypatch):
     fake = _FakeDB()
     monkeypatch.setattr(server, "db", fake)
     monkeypatch.setattr(server, "_start_scheduler", lambda: None, raising=False)
+    server._WEBCHAT_RATE_BUCKETS.clear()
+    _run(fake.organizations.insert_one({
+        "organization_id": "default", "name": "Estética Demo", "status": "active",
+        "subscription_status": "active", "license_status": "active",
+        "webchat_public_key": "wpk_test_default",
+    }))
     
     # Mock bot pipeline process_inbound
     from ai import pipeline as bot_pipeline
@@ -124,6 +133,7 @@ def srv(monkeypatch):
 def test_webchat_session_creation(srv):
     server, fake, client = srv
     res = client.post("/api/public/webchat/session", json={
+        "organization_key": "wpk_test_default",
         "name": "Cliente Test Web",
         "phone": "+5493519998877"
     })
@@ -140,6 +150,7 @@ def test_webchat_send_message(srv):
     server, fake, client = srv
     # 1. Create session
     session_res = client.post("/api/public/webchat/session", json={
+        "organization_key": "wpk_test_default",
         "name": "Juan Perez",
         "phone": "+5493511112233"
     })
@@ -164,6 +175,7 @@ def test_webchat_get_messages(srv):
     server, fake, client = srv
     # 1. Create session
     session_res = client.post("/api/public/webchat/session", json={
+        "organization_key": "wpk_test_default",
         "name": "Maria Lopez"
     })
     token = session_res.json()["session_token"]
@@ -184,6 +196,12 @@ def test_webchat_bot_replies_to_message(monkeypatch):
     fake = _FakeDB()
     monkeypatch.setattr(server, "db", fake)
     monkeypatch.setattr(server, "_start_scheduler", lambda: None, raising=False)
+    server._WEBCHAT_RATE_BUCKETS.clear()
+    _run(fake.organizations.insert_one({
+        "organization_id": "default", "name": "Estética Demo", "status": "active",
+        "subscription_status": "active", "license_status": "active",
+        "webchat_public_key": "wpk_test_default",
+    }))
 
     # Use a real-looking pipeline that persists a bot message to DB for webchat
     from ai import pipeline as bot_pipeline
@@ -208,7 +226,9 @@ def test_webchat_bot_replies_to_message(monkeypatch):
     client = TestClient(server.app)
 
     # 1. Create webchat session
-    session_res = client.post("/api/public/webchat/session", json={"name": "Tester Bot"})
+    session_res = client.post("/api/public/webchat/session", json={
+        "organization_key": "wpk_test_default", "name": "Tester Bot",
+    })
     assert session_res.status_code == 200
     token = session_res.json()["session_token"]
 
@@ -226,3 +246,95 @@ def test_webchat_bot_replies_to_message(monkeypatch):
     sender_types = [m["sender_type"] for m in messages]
     assert "contact" in sender_types, "User message should be in messages"
     assert "bot" in sender_types, "Bot reply should be persisted in webchat messages"
+
+
+def test_unknown_token_does_not_create_session(srv):
+    _, fake, client = srv
+    before = len(fake.conversations.docs)
+    response = client.post("/api/public/webchat/session", json={"session_token": "cw_missing_token_123456789"})
+    assert response.status_code == 404
+    assert len(fake.conversations.docs) == before
+
+
+def test_phone_does_not_resume_an_existing_conversation(srv):
+    _, _, client = srv
+    first = client.post("/api/public/webchat/session", json={
+        "organization_key": "wpk_test_default", "name": "Primera", "phone": "+5493511112233",
+    }).json()
+    second = client.post("/api/public/webchat/session", json={
+        "organization_key": "wpk_test_default", "name": "Segunda", "phone": "+5493511112233",
+    }).json()
+    assert first["conversation_id"] != second["conversation_id"]
+    assert first["session_token"] != second["session_token"]
+
+
+def test_finish_is_idempotent_and_new_message_reopens(srv):
+    _, fake, client = srv
+    created = client.post("/api/public/webchat/session", json={
+        "organization_key": "wpk_test_default", "name": "Cierre",
+    }).json()
+    token = created["session_token"]
+    first = client.post(f"/api/public/webchat/{token}/finish")
+    second = client.post(f"/api/public/webchat/{token}/finish")
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["finished"] is True
+    sent = client.post(f"/api/public/webchat/{token}/messages", json={"body": "Necesito retomar"})
+    assert sent.status_code == 200
+    conv = _run(fake.conversations.find_one({"id": created["conversation_id"]}))
+    assert conv["status"] == "abierta"
+    assert conv["bot_status"] == "bot_activo"
+
+
+def test_disabled_webchat_rejects_public_access(srv):
+    _, fake, client = srv
+    _run(fake.bot_settings.insert_one({"_id": "default", "webchat_enabled": False}))
+    response = client.post("/api/public/webchat/session", json={
+        "organization_key": "wpk_test_default", "name": "No disponible",
+    })
+    assert response.status_code == 404
+
+
+def test_whatsapp_invite_opens_a_linked_webchat_without_changing_original_channel(srv):
+    _, fake, client = srv
+    _run(fake.contacts.insert_one({
+        "id": "contact_wa", "organization_id": "default", "name": "Cliente WA",
+        "phone": "+5493512223344",
+    }))
+    token = "cw_whatsapp_invite_12345678901234567890"
+    _run(fake.conversations.insert_one({
+        "id": "conv_wa", "organization_id": "default", "contact_id": "contact_wa",
+        "lead_id": "lead_wa", "channel": "whatsapp", "status": "abierta",
+        "webchat_session_token": token,
+    }))
+    response = client.post("/api/public/webchat/session", json={"session_token": token})
+    assert response.status_code == 200, response.text
+    created = response.json()
+    assert created["conversation_id"] != "conv_wa"
+    linked = _run(fake.conversations.find_one({"id": created["conversation_id"]}))
+    original = _run(fake.conversations.find_one({"id": "conv_wa"}))
+    assert linked["channel"] == "webchat"
+    assert linked["source_conversation_id"] == "conv_wa"
+    assert linked["contact_id"] == "contact_wa"
+    assert original["channel"] == "whatsapp"
+    assert "webchat_session_token" not in original
+
+
+def test_retried_client_message_is_idempotent(srv):
+    _, fake, client = srv
+    created = client.post("/api/public/webchat/session", json={
+        "organization_key": "wpk_test_default", "name": "Reintento",
+    }).json()
+    token = created["session_token"]
+    payload = {"body": "El mismo mensaje", "client_message_id": "browser-message-1"}
+    first = client.post(f"/api/public/webchat/{token}/messages", json=payload)
+    second = client.post(f"/api/public/webchat/{token}/messages", json=payload)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["deduplicated"] is True
+    inbound = [
+        item for item in fake.messages.docs
+        if item.get("conversation_id") == created["conversation_id"]
+        and item.get("sender_type") == "contact"
+    ]
+    assert len(inbound) == 1

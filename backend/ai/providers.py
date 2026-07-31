@@ -529,9 +529,16 @@ _PROVIDER_CLASSES: dict[str, type[AIProvider]] = {
 }
 
 
-async def get_provider(db, *, override_provider: str | None = None, override_model: str | None = None, for_bot: bool = False) -> AIProvider:
+async def get_provider(
+    db, *, override_provider: str | None = None,
+    override_model: str | None = None, for_bot: bool = False,
+    settings_override: dict[str, Any] | None = None,
+) -> AIProvider:
     """Construct the configured provider, ready to call ``.chat(...)``."""
-    s = await load_settings(db)
+    # The bot pipeline already loaded these settings to decide whether it may
+    # answer. Reusing that snapshot saves one tenant-scoped database read for
+    # every generated reply while keeping direct callers backwards compatible.
+    s = settings_override or await load_settings(db)
     if not s.get("ai_enabled", True):
         raise LLMUnavailable("La integración con IA está desactivada")
     active_provider = override_provider or s.get("provider") or "built_in"

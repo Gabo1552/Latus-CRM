@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import json
 import math
+import re
 from pathlib import Path
 from dataclasses import replace
 from email.message import EmailMessage
@@ -6071,7 +6072,23 @@ class BotSettingsUpdate(BaseModel):
     webchat_position: Optional[str] = None
 
 
-async def _log_system_message(db, conv_id: str, text: str):
+async def _ensure_webchat_public_key(organization_id: str) -> str:
+    organizations = _raw_collection("organizations")
+    organization = await organizations.find_one(
+        {"organization_id": organization_id}, {"_id": 0, "webchat_public_key": 1},
+    ) or {}
+    existing = str(organization.get("webchat_public_key") or "").strip()
+    if existing:
+        return existing
+    public_key = f"wpk_{uuid.uuid4().hex}{uuid.uuid4().hex[:8]}"
+    await organizations.update_one(
+        {"organization_id": organization_id},
+        {"$set": {"webchat_public_key": public_key, "webchat_public_key_created_at": now_iso()}},
+    )
+    return public_key
+
+
+async def _log_system_message(db, conv_id: str, text: str, *, channel: str = "whatsapp"):
     import uuid
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
@@ -6085,7 +6102,7 @@ async def _log_system_message(db, conv_id: str, text: str):
         "direction": "outbound",
         "delivery_status": "sent",
         "message_type": "text",
-        "channel": "whatsapp",
+        "channel": channel,
     }
     await db.messages.insert_one(msg_doc)
 
@@ -6096,12 +6113,14 @@ async def admin_get_bot_settings(admin: User = Depends(require_any_perm("ai_view
     from ai import providers as ai_providers
     doc = await db.bot_settings.find_one({"_id": "default"}, {"_id": 0}) or {}
     platform_ai = await ai_providers.load_settings(db)
+    webchat_public_key = await _ensure_webchat_public_key(admin.organization_id)
     return {
         **DEFAULT_BOT_SETTINGS,
         **doc,
         "provider": platform_ai.get("provider", "built_in"),
         "model": platform_ai.get("model", "gpt-4o-mini"),
         "provider_managed_by_platform": True,
+        "webchat_public_key": webchat_public_key,
     }
 
 
@@ -6182,6 +6201,32 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
                 update["bot_inactive_close_hours"] = val
             except Exception:
                 raise HTTPException(400, "El cierre automático debe ser entre 1 y 168 horas")
+    for color_field in ("webchat_primary_color", "webchat_bg_color", "webchat_user_bubble_color"):
+        if color_field in update:
+            color = str(update[color_field] or "").strip()
+            if not re.fullmatch(r"#[0-9A-Fa-f]{6}", color):
+                raise HTTPException(400, f"{color_field} debe ser un color hexadecimal válido")
+            update[color_field] = color.upper()
+    for text_field, max_length in (
+        ("webchat_title", 80), ("webchat_welcome_message", 500),
+        ("webchat_avatar_url", 1000),
+    ):
+        if text_field in update:
+            value = str(update[text_field] or "").strip()
+            if len(value) > max_length:
+                raise HTTPException(400, f"{text_field} supera el máximo de {max_length} caracteres")
+            update[text_field] = value
+    if update.get("webchat_avatar_url"):
+        parsed_avatar = urlparse(update["webchat_avatar_url"])
+        if parsed_avatar.scheme != "https" or not parsed_avatar.netloc:
+            raise HTTPException(400, "La imagen del bot debe usar una URL HTTPS válida")
+    if "webchat_position" in update:
+        position = str(update["webchat_position"] or "").strip().lower()
+        if position not in {"left", "right"}:
+            raise HTTPException(400, "La posición del chat debe ser izquierda o derecha")
+        update["webchat_position"] = position
+    if "webchat_enabled" in update:
+        update["webchat_enabled"] = bool(update["webchat_enabled"])
     if "appointment_timezone" in update or "appointment_services" in update:
         from utils.scheduling import SchedulingError, normalize_services, validate_timezone
         current = await db.bot_settings.find_one({"_id": "default"}, {"_id": 0}) or {}
@@ -6270,68 +6315,140 @@ async def admin_patch_bot_settings(payload: BotSettingsUpdate,
 # ---------------------------------------------------------------------------
 
 class PublicWebChatSessionRequest(BaseModel):
-    session_token: Optional[str] = None
-    organization_id: Optional[str] = None
-    name: Optional[str] = None
-    phone: Optional[str] = None
+    session_token: Optional[str] = Field(default=None, max_length=160)
+    organization_key: Optional[str] = Field(default=None, max_length=100)
+    name: Optional[str] = Field(default=None, max_length=80)
+    phone: Optional[str] = Field(default=None, max_length=30)
 
 
 class PublicWebChatSendRequest(BaseModel):
-    body: str
-    sender_name: Optional[str] = None
+    body: str = Field(min_length=1, max_length=2000)
+    sender_name: Optional[str] = Field(default=None, max_length=80)
+    client_message_id: Optional[str] = Field(default=None, max_length=100)
+
+
+_WEBCHAT_RATE_BUCKETS: dict[str, list[float]] = {}
+
+
+def _enforce_webchat_rate_limit(request: Request, scope: str, *, limit: int, window_seconds: int) -> None:
+    now = datetime.now(timezone.utc).timestamp()
+    forwarded_for = (request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
+    client_host = forwarded_for or (request.client.host if request.client else "unknown")
+    bucket_key = hashlib.sha256(f"{scope}:{client_host}".encode()).hexdigest()
+    recent = [ts for ts in _WEBCHAT_RATE_BUCKETS.get(bucket_key, []) if now - ts < window_seconds]
+    if len(recent) >= limit:
+        raise HTTPException(429, "Demasiadas solicitudes. Esperá un momento y volvé a intentar")
+    recent.append(now)
+    _WEBCHAT_RATE_BUCKETS[bucket_key] = recent
+    if len(_WEBCHAT_RATE_BUCKETS) > 10_000:
+        stale_before = now - max(window_seconds, 600)
+        for key, values in list(_WEBCHAT_RATE_BUCKETS.items())[:2_000]:
+            if not values or values[-1] < stale_before:
+                _WEBCHAT_RATE_BUCKETS.pop(key, None)
+
+
+async def _activate_webchat_tenant(*, session_token: Optional[str] = None,
+                                   organization_key: Optional[str] = None) -> str:
+    current = get_organization_id()
+    if current:
+        if session_token:
+            existing = await _raw_collection("conversations").find_one(
+                {"webchat_session_token": session_token}, {"_id": 0, "organization_id": 1},
+            )
+            if existing and existing.get("organization_id") != current:
+                raise HTTPException(404, "Enlace de chat inválido o vencido")
+        return current
+    organization_id = None
+    if session_token:
+        conversation = await _raw_collection("conversations").find_one(
+            {"webchat_session_token": session_token},
+            {"_id": 0, "organization_id": 1},
+        )
+        organization_id = (conversation or {}).get("organization_id")
+    if not organization_id and organization_key:
+        organization = await _raw_collection("organizations").find_one(
+            {"webchat_public_key": organization_key}, {"_id": 0},
+        )
+        if (organization and organization.get("status") != "deleted"
+                and subscription_access_state(organization).get("allowed")):
+            organization_id = organization.get("organization_id")
+    if not organization_id:
+        raise HTTPException(404, "Enlace de chat inválido o vencido")
+    set_organization_id(organization_id)
+    return organization_id
+
+
+async def _load_enabled_webchat_settings() -> dict:
+    from ai.pipeline import _load_bot_settings
+    settings = await _load_bot_settings(db)
+    if not settings.get("webchat_enabled", True):
+        raise HTTPException(404, "El chat web no está disponible")
+    return settings
 
 
 @api_router.post("/public/webchat/session")
-async def public_webchat_session(payload: PublicWebChatSessionRequest):
-    """Initializes or resumes a public web chat session by token or phone."""
-    from ai.pipeline import DEFAULT_BOT_SETTINGS, _load_bot_settings
-    bot_settings = await _load_bot_settings(db)
-    
+async def public_webchat_session(payload: PublicWebChatSessionRequest, request: Request):
+    """Initialize or resume a tenant-bound web chat session."""
     session_token = (payload.session_token or "").strip()
+    organization_key = (payload.organization_key or "").strip()
+    await _activate_webchat_tenant(
+        session_token=session_token or None, organization_key=organization_key or None,
+    )
+    _enforce_webchat_rate_limit(
+        request, f"session:{session_token or organization_key}", limit=12, window_seconds=600,
+    )
+    bot_settings = await _load_enabled_webchat_settings()
     conv_doc = None
-    existing_contact = None
-    
+
     if session_token:
         conv_doc = await db.conversations.find_one({
-            "$or": [
-                {"webchat_session_token": session_token},
-                {"id": session_token}
-            ]
+            "webchat_session_token": session_token,
         })
-    
-    if payload.phone:
-        clean_phone = (payload.phone or "").strip()
-        existing_contact = await db.contacts.find_one({"phone": clean_phone})
-    
-    if not conv_doc and existing_contact:
-        conv_doc = await db.conversations.find_one({"contact_id": existing_contact["id"]})
-    
+
+    linked_source = None
+    if conv_doc and conv_doc.get("channel") != "webchat":
+        linked_source = conv_doc
+        await db.conversations.update_one(
+            {"id": linked_source["id"]},
+            {"$unset": {"webchat_session_token": ""}, "$set": {"webchat_linked_at": now_iso()}},
+        )
+        conv_doc = None
+
     if not conv_doc:
-        import uuid
+        # Only an authenticated tenant administrator or a valid public
+        # installation key may create a session. Unknown shared tokens never
+        # create data implicitly.
+        if session_token and not linked_source and not organization_key and not _request_session_token(request):
+            raise HTTPException(404, "Enlace de chat inválido o vencido")
         now = datetime.now(timezone.utc).isoformat()
-        if existing_contact:
-            contact_id = existing_contact["id"]
+        if linked_source:
+            contact_id = linked_source.get("contact_id")
         else:
-            clean_name = (payload.name or "Visitante Web").strip()
-            clean_phone = (payload.phone or f"+549{uuid.uuid4().hex[:8]}").strip()
+            clean_name = (payload.name or "Visitante Web").strip() or "Visitante Web"
+            clean_phone = (payload.phone or "").strip()
             contact_id = f"cnt_{uuid.uuid4().hex[:12]}"
             contact_doc = {
                 "id": contact_id,
+                "organization_id": get_organization_id(),
                 "name": clean_name,
-                "phone": clean_phone,
+                "phone": clean_phone or None,
                 "company": "Web Chat",
                 "lead_source": "Web Chat",
                 "custom_fields": {},
                 "created_at": now,
             }
             await db.contacts.insert_one(contact_doc)
-        
+
         conv_id = f"conv_{uuid.uuid4().hex[:12]}"
-        session_token = session_token if (session_token and session_token.startswith("cw_")) else f"cw_{uuid.uuid4().hex[:16]}"
+        session_token = (
+            session_token if session_token.startswith("cw_") and len(session_token) >= 20
+            else f"cw_{uuid.uuid4().hex}{uuid.uuid4().hex[:8]}"
+        )
         conv_doc = {
             "id": conv_id,
+            "organization_id": get_organization_id(),
             "contact_id": contact_id,
-            "lead_id": None,
+            "lead_id": linked_source.get("lead_id") if linked_source else None,
             "channel": "webchat",
             "status": "abierta",
             "priority": "media",
@@ -6341,16 +6458,13 @@ async def public_webchat_session(payload: PublicWebChatSessionRequest):
             "last_message_at": now,
             "unread": 0,
             "webchat_session_token": session_token,
+            "source_conversation_id": linked_source.get("id") if linked_source else None,
             "created_at": now,
         }
         await db.conversations.insert_one(conv_doc)
     else:
-        if not conv_doc.get("webchat_session_token"):
-            session_token = session_token if (session_token and session_token.startswith("cw_")) else f"cw_{uuid.uuid4().hex[:16]}"
-            await db.conversations.update_one({"id": conv_doc["id"]}, {"$set": {"webchat_session_token": session_token}})
-        else:
-            session_token = conv_doc["webchat_session_token"]
-    
+        session_token = conv_doc["webchat_session_token"]
+
     msgs = await db.messages.find({"conversation_id": conv_doc["id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
     contact = await db.contacts.find_one({"id": conv_doc["contact_id"]}, {"_id": 0}) or {}
     
@@ -6367,28 +6481,22 @@ async def public_webchat_session(payload: PublicWebChatSessionRequest):
         "webchat_avatar_url": bot_settings.get("webchat_avatar_url") or None,
         "webchat_bg_color": bot_settings.get("webchat_bg_color") or "#F0F2F5",
         "webchat_user_bubble_color": bot_settings.get("webchat_user_bubble_color") or None,
+        "finished": conv_doc.get("status") == "cerrada" or conv_doc.get("bot_status") == "cerrada",
         "messages": msgs,
     }
 
 
 @api_router.get("/public/webchat/{session_token}/messages")
-async def public_webchat_get_messages(session_token: str):
+async def public_webchat_get_messages(session_token: str, request: Request):
     """Retrieves message history for a web chat session."""
+    await _activate_webchat_tenant(session_token=session_token)
+    _enforce_webchat_rate_limit(request, f"poll:{session_token}", limit=90, window_seconds=60)
+    await _load_enabled_webchat_settings()
     conv = await db.conversations.find_one({
-        "$or": [
-            {"webchat_session_token": session_token},
-            {"id": session_token}
-        ]
+        "webchat_session_token": session_token,
+        "channel": "webchat",
     }, {"_id": 0})
     if not conv:
-        if session_token.startswith("cw_"):
-            init_res = await public_webchat_session(PublicWebChatSessionRequest(session_token=session_token))
-            return {
-                "conversation_id": init_res.get("conversation_id"),
-                "bot_enabled": init_res.get("bot_enabled", True),
-                "bot_status": init_res.get("bot_status", "bot_activo"),
-                "messages": init_res.get("messages", [])
-            }
         raise HTTPException(status_code=404, detail="Sesión de chat no encontrada")
     
     msgs = await db.messages.find({"conversation_id": conv["id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
@@ -6396,31 +6504,52 @@ async def public_webchat_get_messages(session_token: str):
         "conversation_id": conv["id"],
         "bot_enabled": bool(conv.get("bot_enabled", True)),
         "bot_status": conv.get("bot_status", "bot_activo"),
+        "finished": conv.get("status") == "cerrada" or conv.get("bot_status") == "cerrada",
         "messages": msgs
     }
 
 
 @api_router.post("/public/webchat/{session_token}/messages")
-async def public_webchat_send_message(session_token: str, payload: PublicWebChatSendRequest):
+async def public_webchat_send_message(session_token: str, payload: PublicWebChatSendRequest,
+                                      request: Request):
     """Receives an inbound message from the web chat visitor and triggers the AI bot pipeline."""
     from ai import pipeline as bot_pipeline
+    await _activate_webchat_tenant(session_token=session_token)
+    _enforce_webchat_rate_limit(request, f"send:{session_token}", limit=20, window_seconds=60)
+    await _load_enabled_webchat_settings()
     conv = await db.conversations.find_one({
-        "$or": [
-            {"webchat_session_token": session_token},
-            {"id": session_token}
-        ]
+        "webchat_session_token": session_token,
+        "channel": "webchat",
     }, {"_id": 0})
     if not conv:
         raise HTTPException(status_code=404, detail="Sesión de chat no encontrada")
     
     now = datetime.now(timezone.utc).isoformat()
-    msg_id = f"msg_{uuid.uuid4().hex[:12]}"
-    clean_body = (payload.body or "").strip()
+    client_message_id = (payload.client_message_id or uuid.uuid4().hex).strip()
+    msg_id = "msg_web_" + hashlib.sha256(
+        f"{conv['id']}:{client_message_id}".encode(),
+    ).hexdigest()[:24]
+    clean_body = payload.body.strip()
     if not clean_body:
         raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
     
+    existing_message = await db.messages.find_one({"id": msg_id, "conversation_id": conv["id"]}, {"_id": 0})
+    if existing_message:
+        event_res = await bot_pipeline.process_inbound(db, conv["id"], msg_id, wa_send=None)
+        updated_msgs = await db.messages.find(
+            {"conversation_id": conv["id"]}, {"_id": 0},
+        ).sort("created_at", 1).to_list(200)
+        updated_conv = await db.conversations.find_one({"id": conv["id"]}, {"_id": 0}) or {}
+        return {
+            "status": "ok", "deduplicated": True, "event": event_res,
+            "bot_enabled": bool(updated_conv.get("bot_enabled", True)),
+            "bot_status": updated_conv.get("bot_status", "bot_activo"),
+            "messages": updated_msgs,
+        }
+
     msg_doc = {
         "id": msg_id,
+        "organization_id": get_organization_id(),
         "conversation_id": conv["id"],
         "sender_type": "contact",
         "sender_name": payload.sender_name or "Visitante Web",
@@ -6430,13 +6559,13 @@ async def public_webchat_send_message(session_token: str, payload: PublicWebChat
         "delivery_status": "delivered",
         "message_type": "text",
         "channel": "webchat",
+        "client_message_id": client_message_id,
     }
     await db.messages.insert_one(msg_doc)
     
     update_fields = {"last_message": clean_body, "last_message_at": now}
     if conv.get("status") == "cerrada":
-        from ai.pipeline import DEFAULT_BOT_SETTINGS, _load_bot_settings
-        bot_settings = await _load_bot_settings(db)
+        bot_settings = await _load_enabled_webchat_settings()
         bot_default = bot_settings.get("bot_enabled_default", True)
         update_fields["status"] = "abierta"
         update_fields["bot_enabled"] = bot_default
@@ -6445,8 +6574,7 @@ async def public_webchat_send_message(session_token: str, payload: PublicWebChat
         await _log_system_message(db, conv["id"], "Conversación de Chat Web reabierta por nuevo mensaje del cliente")
 
     await db.conversations.update_one(
-        {"id": conv["id"]},
-        {"$set": {"last_message": clean_body, "last_message_at": now}, "$inc": {"unread": 1}}
+        {"id": conv["id"]}, {"$set": update_fields, "$inc": {"unread": 1}},
     )
     
     event_res = await bot_pipeline.process_inbound(db, conv["id"], msg_id, wa_send=None)
@@ -6461,6 +6589,58 @@ async def public_webchat_send_message(session_token: str, payload: PublicWebChat
         "bot_status": updated_conv.get("bot_status", "bot_activo"),
         "messages": updated_msgs
     }
+
+
+async def send_webchat_whatsapp_summary_internal(db, conv_id: str) -> dict:
+    conv = await db.conversations.find_one({"id": conv_id, "channel": "webchat"}, {"_id": 0})
+    if not conv:
+        return {"sent": False, "reason": "conversation_not_found"}
+    contact = await db.contacts.find_one({"id": conv.get("contact_id")}, {"_id": 0}) or {}
+    wa_id = "".join(ch for ch in str(contact.get("whatsapp_id") or "") if ch.isdigit())
+    if len(wa_id) < 8:
+        return {"sent": False, "reason": "whatsapp_not_verified"}
+    cfg = _wa_config_for_conversation(await wa_config_effective(db), conv)
+    if not cfg.is_configured:
+        return {"sent": False, "reason": "whatsapp_not_configured"}
+    summary = str(conv.get("summary") or "").strip()
+    if not summary:
+        recent = await db.messages.find(
+            {"conversation_id": conv_id}, {"_id": 0, "sender_type": 1, "body": 1},
+        ).sort("created_at", -1).to_list(6)
+        recent.reverse()
+        summary = " · ".join(
+            str(item.get("body") or "").strip()[:180] for item in recent if item.get("body")
+        )[:700]
+    text = f"Resumen de tu consulta en {contact.get('name') or 'nuestro chat'}: {summary or 'Consulta finalizada.'}"
+    try:
+        result = await send_text_message(cfg, wa_id, text)
+    except Exception as exc:
+        logger.warning("webchat summary could not be sent conv=%s: %s", conv_id, exc)
+        return {"sent": False, "reason": "send_failed"}
+    return {"sent": True, "provider_result": result}
+
+
+@api_router.post("/public/webchat/{session_token}/finish")
+async def public_webchat_finish(session_token: str, request: Request):
+    await _activate_webchat_tenant(session_token=session_token)
+    _enforce_webchat_rate_limit(request, f"finish:{session_token}", limit=6, window_seconds=60)
+    conv = await db.conversations.find_one(
+        {"webchat_session_token": session_token, "channel": "webchat"}, {"_id": 0},
+    )
+    if not conv:
+        raise HTTPException(404, "Sesión de chat no encontrada")
+    if conv.get("status") != "cerrada":
+        closed_at = now_iso()
+        await db.conversations.update_one(
+            {"id": conv["id"]},
+            {"$set": {
+                "status": "cerrada", "bot_enabled": False, "bot_status": "cerrada",
+                "closed_at": closed_at, "updated_at": closed_at,
+            }},
+        )
+        await _log_system_message(db, conv["id"], "Consulta de Chat Web finalizada", channel="webchat")
+    summary_result = await send_webchat_whatsapp_summary_internal(db, conv["id"])
+    return {"ok": True, "finished": True, "summary_sent": bool(summary_result.get("sent"))}
 
 
 # ---------------------------------------------------------------------------
@@ -6667,6 +6847,61 @@ async def admin_ai_usage_summary(
     ai_fee = round(sum(float(item["ai_fee_usd"]) for item in breakdowns), 6)
     billable_cost = round(sum(float(item["billable_cost_usd"]) for item in breakdowns), 6)
 
+    bot_logs = [l for l in logs if l.get("purpose") == "bot_pipeline"]
+    latencies = sorted(int(l.get("latency_ms") or 0) for l in bot_logs if int(l.get("latency_ms") or 0) > 0)
+    p95_latency = latencies[max(0, math.ceil(len(latencies) * 0.95) - 1)] if latencies else 0
+    bot_event_query: dict = {"created_at": {"$gte": f, "$lte": t}}
+    if target_org and target_org != "__all__":
+        bot_event_query["organization_id"] = target_org
+    bot_events = await db.bot_events.find(bot_event_query, {"_id": 0}).to_list(50_000)
+    decisions: dict[str, int] = {}
+    channels: dict[str, int] = {}
+    confidence_values: list[float] = []
+    context_sizes: list[int] = []
+    for item in bot_events:
+        decision_name = item.get("decision") or "sin_decision"
+        decisions[decision_name] = decisions.get(decision_name, 0) + 1
+        channel_name = item.get("channel") or "sin_canal"
+        channels[channel_name] = channels.get(channel_name, 0) + 1
+        if item.get("confidence") is not None:
+            confidence_values.append(float(item.get("confidence") or 0.0))
+        if item.get("context_characters") is not None:
+            context_sizes.append(int(item.get("context_characters") or 0))
+    event_total = len(bot_events)
+    bot_errors = sum(1 for item in bot_events if item.get("status") == "error")
+    handoffs = decisions.get("require_human", 0)
+    replies = decisions.get("reply_with_bot", 0)
+    quality_alerts = []
+    if event_total and bot_errors * 100 / event_total > 5:
+        quality_alerts.append("La tasa de errores del bot supera el 5%.")
+    if event_total and handoffs * 100 / event_total > 40:
+        quality_alerts.append("Más del 40% de las consultas se derivan a una persona.")
+    if p95_latency > 8000:
+        quality_alerts.append("El 5% más lento de las respuestas tarda más de 8 segundos.")
+    avg_prompt_tokens = round(
+        sum(int(item.get("prompt_tokens") or 0) for item in bot_logs) / len(bot_logs), 1
+    ) if bot_logs else 0.0
+    if avg_prompt_tokens > 6000:
+        quality_alerts.append("El contexto promedio supera 6.000 tokens de entrada.")
+    bot_performance = {
+        "events": event_total,
+        "replies": replies,
+        "handoffs": handoffs,
+        "errors": bot_errors,
+        "reply_rate_pct": round(replies * 100.0 / event_total, 1) if event_total else 0.0,
+        "handoff_rate_pct": round(handoffs * 100.0 / event_total, 1) if event_total else 0.0,
+        "error_rate_pct": round(bot_errors * 100.0 / event_total, 1) if event_total else 0.0,
+        "average_confidence_pct": round(sum(confidence_values) * 100.0 / len(confidence_values), 1) if confidence_values else 0.0,
+        "average_latency_ms": round(sum(latencies) / len(latencies)) if latencies else 0,
+        "p95_latency_ms": p95_latency,
+        "average_prompt_tokens": avg_prompt_tokens,
+        "average_completion_tokens": round(sum(int(item.get("completion_tokens") or 0) for item in bot_logs) / len(bot_logs), 1) if bot_logs else 0.0,
+        "average_context_characters": round(sum(context_sizes) / len(context_sizes)) if context_sizes else 0,
+        "decisions": decisions,
+        "channels": channels,
+        "alerts": quality_alerts,
+    }
+
     by_model: dict[str, dict] = {}
     by_day: dict[str, dict] = {}
     by_conv: dict[str, dict] = {}
@@ -6716,6 +6951,7 @@ async def admin_ai_usage_summary(
         "base_cost_usd": base_cost,
         "ai_fee_usd": ai_fee,
         "billable_cost_usd": billable_cost,
+        "bot_performance": bot_performance,
         "token_measured_calls": token_measured_calls,
         "measurement": {
             "tokens": "provider_response",
@@ -9689,6 +9925,14 @@ async def _ensure_indexes() -> None:
         await _raw_collection("organizations").create_index(
             "organization_id", unique=True, name="ux_organizations_id",
         )
+        await _raw_collection("organizations").create_index(
+            "webchat_public_key", unique=True, sparse=True,
+            name="ux_organizations_webchat_public_key",
+        )
+        await _raw_collection("conversations").create_index(
+            "webchat_session_token", unique=True, sparse=True,
+            name="ux_conversations_webchat_session_token",
+        )
         await _raw_collection("billing_requests").create_index(
             [("organization_id", 1), ("created_at", -1)],
             name="ix_billing_requests_org_created",
@@ -10253,7 +10497,8 @@ async def organization_context_middleware(request: Request, call_next):
                 )
                 organization_id = await _resolve_session_organization(session, user_doc)
         
-        if not organization_id and (
+        is_public_webchat = request.url.path.startswith("/api/public/webchat")
+        if not organization_id and not is_public_webchat and (
             request.url.path.startswith("/api/public/")
             or request.url.path.startswith("/api/webhook/")
             or request.url.path.startswith("/public/")

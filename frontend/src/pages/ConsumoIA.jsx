@@ -301,6 +301,11 @@ export default function ConsumoIA() {
           )}
         </div>
 
+        <BotPerformancePanel
+          data={summaryQ.data?.bot_performance}
+          loading={summaryQ.isPending}
+        />
+
         {/* Empty state */}
         {!summaryQ.isPending && summaryQ.data && summaryQ.data.total_calls === 0 && (
           <div data-testid="empty-state"
@@ -909,5 +914,63 @@ function PricingEditor({ pricing, onSaved, canAdmin }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+function BotPerformancePanel({ data, loading }) {
+  const alerts = data?.alerts || [];
+  const channelLabels = { whatsapp: "WhatsApp", webchat: "Chat web", sin_canal: "Sin identificar" };
+  const channels = Object.entries(data?.channels || {});
+  const metrics = [
+    ["Respuestas automáticas", `${Number(data?.reply_rate_pct || 0).toFixed(1)}%`, `${fmtInt(data?.replies)} respuestas`],
+    ["Derivaciones a personas", `${Number(data?.handoff_rate_pct || 0).toFixed(1)}%`, `${fmtInt(data?.handoffs)} derivaciones`],
+    ["Confianza promedio", `${Number(data?.average_confidence_pct || 0).toFixed(1)}%`, "según decisión del modelo"],
+    ["Tiempo promedio", `${fmtInt(data?.average_latency_ms)} ms`, `P95: ${fmtInt(data?.p95_latency_ms)} ms`],
+    ["Tokens de entrada", fmtInt(data?.average_prompt_tokens), "promedio por respuesta"],
+    ["Tokens de salida", fmtInt(data?.average_completion_tokens), "promedio por respuesta"],
+  ];
+  return (
+    <section className="overflow-hidden rounded-2xl border border-latus-warm-border bg-white shadow-sm" data-testid="bot-performance-panel">
+      <div className="flex flex-col gap-3 border-b border-latus-warm-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-50 text-latus-blue"><Activity className="h-4 w-4" /></div>
+          <div>
+            <p className="text-sm font-extrabold text-latus-ink">Calidad y eficiencia del bot</p>
+            <p className="mt-0.5 text-xs text-latus-muted">Decisiones y tiempos reales del período seleccionado.</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {channels.map(([channel, count]) => (
+            <span key={channel} className="rounded-full border border-latus-warm-border bg-latus-cream px-2.5 py-1 text-[10px] font-bold text-latus-ink">
+              {channelLabels[channel] || channel}: {fmtInt(count)}
+            </span>
+          ))}
+        </div>
+      </div>
+      {loading ? (
+        <div className="p-6 text-center text-sm text-latus-muted">Calculando rendimiento…</div>
+      ) : !data?.events ? (
+        <div className="p-6 text-center text-sm text-latus-muted">Todavía no hay decisiones del bot en este período.</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-px bg-latus-warm-border lg:grid-cols-6">
+            {metrics.map(([label, value, detail]) => (
+              <div key={label} className="bg-white p-4">
+                <p className="text-[10px] font-extrabold uppercase tracking-[0.08em] text-latus-muted">{label}</p>
+                <p className="mt-2 text-xl font-black tracking-tight text-latus-ink">{value}</p>
+                <p className="mt-1 text-[10px] text-latus-muted">{detail}</p>
+              </div>
+            ))}
+          </div>
+          <div className={`flex items-start gap-2 px-5 py-3 text-xs ${alerts.length ? "bg-amber-50 text-amber-900" : "bg-emerald-50 text-emerald-800"}`}>
+            {alerts.length ? <AlertOctagon className="mt-0.5 h-4 w-4 shrink-0" /> : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />}
+            <div>
+              <p className="font-bold">{alerts.length ? "Puntos a revisar" : "Funcionamiento dentro de los parámetros esperados"}</p>
+              {alerts.map((alert) => <p key={alert} className="mt-0.5">• {alert}</p>)}
+            </div>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
