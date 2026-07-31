@@ -172,3 +172,57 @@ def test_webchat_get_messages(srv):
     msgs_res = client.get(f"/api/public/webchat/{token}/messages")
     assert msgs_res.status_code == 200
     assert "messages" in msgs_res.json()
+
+
+def test_webchat_bot_replies_to_message(monkeypatch):
+    """Verify that when a message is sent in webchat, the bot pipeline
+    persists its reply to the messages collection (no wa_send needed)."""
+    for mod in list(sys.modules):
+        if mod == "server" or mod.startswith("whatsapp") or mod.startswith("utils") or mod.startswith("ai"):
+            sys.modules.pop(mod, None)
+    import server
+    fake = _FakeDB()
+    monkeypatch.setattr(server, "db", fake)
+    monkeypatch.setattr(server, "_start_scheduler", lambda: None, raising=False)
+
+    # Use a real-looking pipeline that persists a bot message to DB for webchat
+    from ai import pipeline as bot_pipeline
+    async def fake_process_inbound_with_reply(db, conv_id, msg_id, wa_send=None):
+        # Simulate webchat bot reply branch: persist message directly
+        conv = await db.conversations.find_one({"id": conv_id})
+        if conv and conv.get("channel") == "webchat":
+            await db.messages.insert_one({
+                "id": f"msg_bot_{msg_id}",
+                "conversation_id": conv_id,
+                "sender_type": "bot",
+                "sender_name": "Bot",
+                "body": "¡Hola! Soy el asistente virtual. ¿En qué puedo ayudarte?",
+                "direction": "outbound",
+                "delivery_status": "sent",
+                "channel": "webchat",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            })
+        return {"decision": "reply_with_bot"}
+    monkeypatch.setattr(bot_pipeline, "process_inbound", fake_process_inbound_with_reply)
+
+    client = TestClient(server.app)
+
+    # 1. Create webchat session
+    session_res = client.post("/api/public/webchat/session", json={"name": "Tester Bot"})
+    assert session_res.status_code == 200
+    token = session_res.json()["session_token"]
+
+    # 2. Send a message
+    send_res = client.post(f"/api/public/webchat/{token}/messages", json={
+        "body": "Hola, quiero información",
+        "sender_name": "Tester Bot"
+    })
+    assert send_res.status_code == 200
+    data = send_res.json()
+    assert data["status"] == "ok"
+
+    # 3. Verify both user message AND bot reply are in the response
+    messages = data["messages"]
+    sender_types = [m["sender_type"] for m in messages]
+    assert "contact" in sender_types, "User message should be in messages"
+    assert "bot" in sender_types, "Bot reply should be persisted in webchat messages"

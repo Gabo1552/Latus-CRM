@@ -468,9 +468,23 @@ async def process_inbound(db, conv_id: str, triggered_by_message_id: str,
                                  "Bot no pudo enviar respuesta",
                                  f"Falla al enviar via WhatsApp: {e}")
                 decision = "require_human"
-                conv_set["bot_enabled"] = False
-                conv_set["bot_status"] = "requiere_humano"
-                conv_set["human_required_reason"] = "Bot no pudo enviar respuesta automática"
+        elif decision == "reply_with_bot" and reply and wa_send is None and conv.get("channel") == "webchat":
+            # Web chat channel: no WhatsApp send needed, persist reply directly to DB
+            await db.messages.insert_one({
+                "id": "msg_" + uuid.uuid4().hex[:12],
+                "conversation_id": conv_id,
+                "sender_type": "bot",
+                "sender_name": settings.get("bot_name", "Bot"),
+                "body": reply,
+                "direction": "outbound",
+                "delivery_status": "sent",
+                "channel": "webchat",
+                "created_at": _now_iso(),
+            })
+            conv_set["last_message"] = reply
+            conv_set["last_message_at"] = _now_iso()
+            conv_set["bot_status"] = "esperando_cliente"
+            event["decision"] = "reply_with_bot"
         elif decision == "require_human":
             if ai_cfg.get("auto_handoff_enabled", True):
                 conv_set["bot_enabled"] = False
