@@ -1637,6 +1637,7 @@ function WebChatTab() {
 
   const [draft, setDraft] = useState({});
   const [pendingKeys, setPendingKeys] = useState({});
+  const [createdTestToken, setCreatedTestToken] = useState("cw_prueba_demo");
 
   useEffect(() => {
     if (q.data) {
@@ -1682,6 +1683,12 @@ function WebChatTab() {
       webchat_primary_color: draft.webchat_primary_color || "#0E8DDB",
       webchat_position: draft.webchat_position || "right",
     });
+  };
+
+  const generateTestLink = () => {
+    const newToken = `cw_test_${Date.now().toString(36)}`;
+    setCreatedTestToken(newToken);
+    toast.success("Nuevo enlace de prueba generado");
   };
 
   return (
@@ -1804,20 +1811,52 @@ function WebChatTab() {
             </pre>
           </div>
 
-          {/* Public Preview Button */}
-          <div className="p-4 border border-[#E9E6DC] bg-latus-cream/40 rounded-sm md:col-span-2 flex items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-bold text-[#0B1B26]">Probar Experiencia de Chat Web</p>
-              <p className="text-xs text-[#888888]">Abrí una vista previa interactiva del chat público en una nueva pestaña.</p>
+          {/* Public Preview & Test Link Generator */}
+          <div className="p-5 border border-[#E9E6DC] bg-blue-50/20 rounded-sm md:col-span-2 space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <p className="text-sm font-bold text-[#0B1B26] flex items-center gap-1.5">
+                  <Sparkles className="h-4 w-4 text-[#0E8DDB]" /> Generador de Enlace de Prueba (Vista del Cliente)
+                </p>
+                <p className="text-xs text-[#888888] mt-0.5">
+                  Creá un enlace único de prueba para interactuar con la interfaz del cliente exactamente como la vería en su navegador o celular.
+                </p>
+              </div>
+              <Button
+                type="button"
+                onClick={generateTestLink}
+                className="bg-[#0E8DDB] hover:bg-[#0a7ab8] text-white text-xs font-bold gap-1.5 h-9 rounded-sm shadow-2xs"
+              >
+                <Plus className="h-3.5 w-3.5" /> Crear Enlace de Prueba
+              </Button>
             </div>
-            <a
-              href="/c/demo_preview"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#0E8DDB] hover:bg-[#0a7ab8] text-white text-xs font-bold rounded-sm transition-all shrink-0"
-            >
-              Probar Chat Web <ExternalLink className="h-3.5 w-3.5" />
-            </a>
+
+            <div className="flex items-center gap-2 pt-1">
+              <Input
+                readOnly
+                value={`${window.location.origin}/c/${createdTestToken}`}
+                className="bg-white border-[#E9E6DC] font-mono text-xs h-9 flex-1 text-slate-700"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  navigator.clipboard.writeText(`${window.location.origin}/c/${createdTestToken}`);
+                  toast.success("Enlace de prueba copiado al portapapeles");
+                }}
+                className="text-xs font-bold gap-1 h-9 bg-white"
+              >
+                <Copy className="h-3.5 w-3.5" /> Copiar
+              </Button>
+              <a
+                href={`/c/${createdTestToken}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-4 h-9 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-sm transition-all shrink-0 shadow-2xs"
+              >
+                Probar Chat Web <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            </div>
           </div>
         </div>
 

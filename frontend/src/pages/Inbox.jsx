@@ -246,7 +246,21 @@ export default function Inbox() {
     onError: () => toast.error("No se pudo desactivar el bot"),
   });
 
-  const filtered = convs.filter((c) => !search || c.contact?.name?.toLowerCase().includes(search.toLowerCase()));
+  const filtered = useMemo(() => {
+    const list = convs.filter((c) => !search || c.contact?.name?.toLowerCase().includes(search.toLowerCase()));
+    const seen = new Set();
+    const result = [];
+    for (const c of list) {
+      const cid = c.contact_id || c.contact?.id;
+      const channel = c.channel || "whatsapp";
+      const key = `${cid}_${channel}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(c);
+      }
+    }
+    return result;
+  }, [convs, search]);
 
   return (
     <AppLayout title="Bandeja">
@@ -373,15 +387,6 @@ export default function Inbox() {
                         {c.channel === "webchat" && (
                           <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-purple-700 bg-purple-50 border border-purple-200 rounded-sm px-1.5 py-0.5 leading-none">
                             <Globe className="h-2.5 w-2.5 text-purple-600" /> WEB
-                          </span>
-                        )}
-                        {!c.bot_enabled ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 bg-slate-100 border border-slate-200 rounded-sm px-1.5 py-0.5 leading-none">
-                            <UserIcon className="h-2.5 w-2.5 text-slate-600" /> HUMANO
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[#0E8DDB] bg-[#E0F2FE] border border-[#BAE6FD] rounded-sm px-1.5 py-0.5 leading-none">
-                            <Bot className="h-2.5 w-2.5 text-[#0E8DDB]" /> BOT
                           </span>
                         )}
 
@@ -919,6 +924,45 @@ export default function Inbox() {
                         ))}
                     </SelectContent>
                   </Select>
+                </div>
+
+                {/* Web Chat Link Section */}
+                <div className="p-4 border-t border-slate-200 bg-purple-50/30 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-purple-900 flex items-center gap-1">
+                      <Globe className="h-3.5 w-3.5 text-purple-600" /> Link de Chat Web
+                    </p>
+                    <span className="text-[10px] bg-purple-100 text-purple-800 font-mono px-1.5 py-0.5 rounded font-bold">
+                      Único
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600">
+                    Enlace privado para conversar con este cliente en la web sin costos de WhatsApp Meta.
+                  </p>
+                  <div className="flex items-center gap-2 pt-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const token = active.webchat_session_token || active.id;
+                        const link = `${window.location.origin}/c/${token}`;
+                        navigator.clipboard.writeText(link);
+                        toast.success("Enlace de Chat Web copiado al portapapeles");
+                      }}
+                      className="text-xs font-bold gap-1 flex-1 bg-white border-purple-200 text-purple-900 hover:bg-purple-50"
+                    >
+                      <Copy className="h-3.5 w-3.5 text-purple-600" /> Copiar Link
+                    </Button>
+                    <a
+                      href={`/c/${active.webchat_session_token || active.id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-bold gap-1 px-3 py-1.5 rounded-md bg-purple-700 hover:bg-purple-800 text-white inline-flex items-center"
+                      title="Probar vista del cliente"
+                    >
+                      Probar <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  </div>
                 </div>
               </div>
             )}
