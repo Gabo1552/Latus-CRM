@@ -6,7 +6,7 @@ import {
   Users as UsersIcon, MessageSquareText, Plus, MoreHorizontal, Search,
   Copy, RefreshCw, CheckCircle2, AlertTriangle, KeyRound, Trash2, Eye, EyeOff,
   Bot, CalendarClock, Sparkles, Lightbulb, Shield, CheckSquare, Package, Building2,
-  Globe, Code, ExternalLink,
+  Globe, Code, ExternalLink, AlertOctagon,
 } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
 import AppointmentSettingsPanel from "@/components/AppointmentSettingsPanel";

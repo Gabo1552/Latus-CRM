@@ -30,6 +30,12 @@ const AI_BILLING_STATES = {
   pilot: { label: "Piloto", tone: "border-violet-200 bg-violet-50 text-violet-800", help: "Solo se liquida cuando un administrador procesa esta empresa manualmente." },
   active: { label: "Activo", tone: "border-emerald-200 bg-emerald-50 text-emerald-800", help: "Participa automáticamente de los cierres cuando la política global está activa." },
 };
+const PROFITABILITY_STATES = {
+  healthy: { label: "Rentable", tone: "border-emerald-200 bg-emerald-50 text-emerald-700" },
+  at_risk: { label: "Margen ajustado", tone: "border-amber-200 bg-amber-50 text-amber-800" },
+  blocked: { label: "No rentable", tone: "border-rose-200 bg-rose-50 text-rose-700" },
+  not_configured: { label: "Sin calcular", tone: "border-slate-200 bg-slate-100 text-slate-600" },
+};
 
 const inputClass = "mt-1.5 h-10 w-full rounded-lg border border-latus-warm-border bg-white px-3 text-sm text-latus-ink outline-none focus:border-latus-blue focus:ring-2 focus:ring-latus-blue/10";
 
@@ -45,6 +51,7 @@ const SETTLEMENT_STATUS = {
   pending: "Pendiente", applying: "Aplicando", applied: "Próximo cobro",
   paid: "Cobrado", payment_failed: "Pago rechazado", failed: "Error",
   closed_no_charge: "Cerrado sin saldo",
+  blocked_margin: "Bloqueada por margen",
 };
 
 function AIVariableBillingPanel() {
@@ -71,6 +78,11 @@ function AIVariableBillingPanel() {
         fx_buffer_percent: Number(draft.fx_buffer_percent),
         settlement_lead_hours: Number(draft.settlement_lead_hours),
         max_rate_age_hours: Number(draft.max_rate_age_hours),
+        mp_fee_percent: Number(draft.mp_fee_percent),
+        tax_percent: Number(draft.tax_percent),
+        min_net_margin_percent: Number(draft.min_net_margin_percent),
+        min_ai_margin_percent: Number(draft.min_ai_margin_percent),
+        profitability_enforcement: draft.profitability_enforcement,
       };
       if (Number(draft.usd_to_ars_rate) !== Number(policyQ.data?.usd_to_ars_rate)) {
         payload.usd_to_ars_rate = Number(draft.usd_to_ars_rate);
@@ -92,7 +104,11 @@ function AIVariableBillingPanel() {
   });
   if (!draft) return null;
   const invalid = Number(draft.usd_to_ars_rate) <= 0 || Number(draft.fx_buffer_percent) < 0
-    || Number(draft.settlement_lead_hours) < 1 || Number(draft.max_rate_age_hours) < 12;
+    || Number(draft.settlement_lead_hours) < 1 || Number(draft.max_rate_age_hours) < 12
+    || Number(draft.mp_fee_percent) < 0 || Number(draft.mp_fee_percent) > 30
+    || Number(draft.tax_percent) < 0 || Number(draft.tax_percent) > 60
+    || Number(draft.min_net_margin_percent) < 0 || Number(draft.min_net_margin_percent) > 100
+    || Number(draft.min_ai_margin_percent) < 0 || Number(draft.min_ai_margin_percent) > 100;
   const rows = statementsQ.data?.items || [];
   return (
     <section className="overflow-hidden rounded-[24px] border border-latus-warm-border bg-white shadow-sm" data-testid="ai-variable-billing-panel">
@@ -114,6 +130,29 @@ function AIVariableBillingPanel() {
         <label className="text-xs font-bold text-latus-ink">Vigencia máxima de cotización
           <div className="relative"><Input type="number" min="12" max="720" value={draft.max_rate_age_hours} onChange={(e) => setDraft((d) => ({ ...d, max_rate_age_hours: e.target.value }))} className="mt-1.5 h-10 rounded-lg border-latus-warm-border pr-10" /><span className="absolute bottom-2.5 right-3 text-latus-muted">hs</span></div>
         </label>
+      </div>
+      <div className="mx-5 mb-5 rounded-2xl border border-amber-200 bg-amber-50/50 p-4 sm:mx-6 sm:mb-6">
+        <div className="flex items-start gap-3">
+          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+          <div><p className="text-xs font-extrabold uppercase tracking-[0.12em] text-amber-900">Control global de rentabilidad</p><p className="mt-1 text-xs leading-5 text-amber-800">Se valida el margen total y también el margen aislado de IA, para que el precio del plan no oculte una venta de IA a pérdida.</p></div>
+        </div>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          <label className="text-xs font-bold text-latus-ink">Costo Mercado Pago
+            <div className="relative"><Input type="number" min="0" max="30" step="0.1" value={draft.mp_fee_percent} onChange={(e) => setDraft((d) => ({ ...d, mp_fee_percent: e.target.value }))} className="mt-1.5 h-10 border-amber-200 bg-white pr-8" /><span className="absolute bottom-2.5 right-3 text-latus-muted">%</span></div>
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Impuestos estimados
+            <div className="relative"><Input type="number" min="0" max="60" step="0.1" value={draft.tax_percent} onChange={(e) => setDraft((d) => ({ ...d, tax_percent: e.target.value }))} className="mt-1.5 h-10 border-amber-200 bg-white pr-8" /><span className="absolute bottom-2.5 right-3 text-latus-muted">%</span></div>
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Margen total mínimo
+            <div className="relative"><Input type="number" min="0" max="100" step="0.5" value={draft.min_net_margin_percent} onChange={(e) => setDraft((d) => ({ ...d, min_net_margin_percent: e.target.value }))} className="mt-1.5 h-10 border-amber-200 bg-white pr-8" /><span className="absolute bottom-2.5 right-3 text-latus-muted">%</span></div>
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Margen IA mínimo
+            <div className="relative"><Input type="number" min="0" max="100" step="0.5" value={draft.min_ai_margin_percent} onChange={(e) => setDraft((d) => ({ ...d, min_ai_margin_percent: e.target.value }))} className="mt-1.5 h-10 border-amber-200 bg-white pr-8" /><span className="absolute bottom-2.5 right-3 text-latus-muted">%</span></div>
+          </label>
+          <label className="text-xs font-bold text-latus-ink">Si no alcanza el margen
+            <select value={draft.profitability_enforcement} onChange={(e) => setDraft((d) => ({ ...d, profitability_enforcement: e.target.value }))} className={`${inputClass} border-amber-200`}><option value="block">Bloquear cobro</option><option value="warn">Advertir y continuar</option></select>
+          </label>
+        </div>
       </div>
       <div className="flex flex-col gap-3 border-t border-latus-warm-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <div><p className={`text-xs font-extrabold ${draft.rate_is_fresh ? "text-emerald-700" : "text-amber-700"}`}>{draft.rate_is_fresh ? "Cotización vigente" : "Cotización vencida o no configurada"}</p><p className="mt-1 text-[11px] text-latus-muted">Observada: {draft.exchange_rate_observed_at || "—"} · actualizada: {draft.exchange_rate_updated_at ? new Date(draft.exchange_rate_updated_at).toLocaleString("es-AR") : "—"}</p></div>
@@ -139,6 +178,9 @@ function ManageModal({ organization, onClose, onSave, saving }) {
     ai_billing_state: variableBilling.state || "disabled",
     ai_billing_start_date: dateInput(variableBilling.billing_start_date),
     ai_fx_buffer_percent: variableBilling.fx_buffer_percent ?? "",
+    ai_min_net_margin_percent: variableBilling.min_net_margin_percent ?? "",
+    ai_min_margin_percent: variableBilling.min_ai_margin_percent ?? "",
+    ai_profitability_enforcement: variableBilling.profitability_enforcement ?? "",
   }));
   const set = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
 
@@ -205,6 +247,15 @@ function ManageModal({ organization, onClose, onSave, saving }) {
                 <div className="relative max-w-xs"><Input className={`${inputClass} pr-9`} type="number" min="0" max="100" step="0.5" value={draft.ai_fx_buffer_percent} onChange={(event) => set("ai_fx_buffer_percent", event.target.value)} placeholder="Usar política global" /><span className="absolute bottom-2.5 right-3 text-sm text-latus-muted">%</span></div>
                 <span className="mt-1 block font-normal text-latus-muted">Dejalo vacío para heredar el porcentaje global.</span>
               </label>
+              <label className="text-xs font-bold text-latus-ink">Margen total mínimo propio
+                <div className="relative"><Input className={`${inputClass} pr-9`} type="number" min="0" max="100" step="0.5" value={draft.ai_min_net_margin_percent} onChange={(event) => set("ai_min_net_margin_percent", event.target.value)} placeholder="Heredar global" /><span className="absolute bottom-2.5 right-3 text-sm text-latus-muted">%</span></div>
+              </label>
+              <label className="text-xs font-bold text-latus-ink">Margen IA mínimo propio
+                <div className="relative"><Input className={`${inputClass} pr-9`} type="number" min="0" max="100" step="0.5" value={draft.ai_min_margin_percent} onChange={(event) => set("ai_min_margin_percent", event.target.value)} placeholder="Heredar global" /><span className="absolute bottom-2.5 right-3 text-sm text-latus-muted">%</span></div>
+              </label>
+              <label className="text-xs font-bold text-latus-ink sm:col-span-2">Acción propia ante margen insuficiente
+                <select className={inputClass} value={draft.ai_profitability_enforcement} onChange={(event) => set("ai_profitability_enforcement", event.target.value)}><option value="">Heredar política global</option><option value="block">Bloquear liquidación</option><option value="warn">Advertir y continuar</option></select>
+              </label>
             </div>
           </div>
         </div>
@@ -227,6 +278,9 @@ function ManageModal({ organization, onClose, onSave, saving }) {
               billing_start_date: draft.ai_billing_start_date || null,
               fx_buffer_percent: draft.ai_fx_buffer_percent === "" ? null : Number(draft.ai_fx_buffer_percent),
               ai_fee_percent: draft.ai_fee_percent === "" ? null : Number(draft.ai_fee_percent),
+              min_net_margin_percent: draft.ai_min_net_margin_percent === "" ? null : Number(draft.ai_min_net_margin_percent),
+              min_ai_margin_percent: draft.ai_min_margin_percent === "" ? null : Number(draft.ai_min_margin_percent),
+              profitability_enforcement: draft.ai_profitability_enforcement || null,
             },
           })} className="bg-latus-blue text-white hover:bg-latus-blue/90">{saving ? "Guardando..." : "Guardar licencia y cobro IA"}</Button>
         </div>
@@ -465,6 +519,10 @@ function SimulationModal({ organizationId, orgName, onClose }) {
                     <span>Margen neto estimado de esta liquidación</span>
                     <span>$ {money(profitability.net_profit_ars)} · {profitability.net_margin_percent || 0}%</span>
                   </div>
+                  <div className={`mt-2 flex items-center justify-between rounded-lg border p-3 font-bold ${profitability.meets_ai_margin ? "border-violet-200 bg-violet-50 text-violet-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
+                    <span>Margen aislado del consumo de IA</span>
+                    <span>$ {money(profitability.ai_net_profit_ars)} · {profitability.ai_net_margin_percent == null ? "Sin consumo" : `${profitability.ai_net_margin_percent}%`}</span>
+                  </div>
                 </div>
               </div>
 
@@ -578,6 +636,10 @@ function PilotApprovalModal({ organization, onClose }) {
                       <div className="mt-2 flex justify-between gap-4"><span className="text-latus-muted">Consumo IA</span><span className="font-bold text-violet-700">$ {money(statement.ai_amount_ars)} ARS</span></div>
                     </div>
                     <div className="flex justify-between gap-4 rounded-lg bg-latus-blue/10 p-3 text-base font-black text-latus-blue"><span>Próximo importe total</span><span>$ {money(statement.total_amount_ars)} ARS</span></div>
+                    <div className={`grid gap-2 rounded-lg border p-3 text-xs sm:grid-cols-2 ${statement.profitability?.is_profitable ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
+                      <div><span className="block text-[10px] font-bold uppercase">Margen total</span><strong>{statement.profitability?.net_margin_percent ?? 0}%</strong> <span>(mín. {statement.profitability?.min_margin_percent ?? 0}%)</span></div>
+                      <div><span className="block text-[10px] font-bold uppercase">Margen de IA</span><strong>{statement.profitability?.ai_net_margin_percent ?? 0}%</strong> <span>(mín. {statement.profitability?.min_ai_margin_percent ?? 0}%)</span></div>
+                    </div>
                   </div>
                 </div>
               )}
@@ -714,6 +776,7 @@ function SuperadminExecutiveDashboardPanel({
             <p className="text-xs font-bold uppercase tracking-wider text-emerald-800">Ganancia Neta Estimada Latus</p>
             <p className="mt-2 text-3xl font-black tracking-tight text-emerald-700">$ {Number(d.estimated_net_profit_ars || 0).toLocaleString("es-AR")} <span className="text-xs font-normal">ARS</span></p>
             <p className="mt-1 text-[11px] font-bold text-emerald-700">Margen Neto: {d.net_margin_percent}%</p>
+            <p className="mt-1 text-[10px] text-emerald-800">{d.healthy_organizations || 0} rentables · {d.at_risk_organizations || 0} ajustadas · {d.blocked_organizations || 0} no rentables</p>
           </div>
 
           <div className="rounded-2xl border border-violet-200 bg-violet-50/50 p-5 shadow-sm">
@@ -889,7 +952,7 @@ export default function Plataforma() {
                       <td className="px-4 py-4 text-sm text-latus-muted">{LICENSE_LABELS[organization.license_status] || organization.license_status}</td>
                       <td className="px-4 py-4"><span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-extrabold ${AI_BILLING_STATES[organization.ai_variable_billing?.state || "disabled"]?.tone}`}>{AI_BILLING_STATES[organization.ai_variable_billing?.state || "disabled"]?.label}</span>{organization.ai_variable_billing?.billing_start_date && <p className="mt-1 text-[10px] text-latus-muted">Desde {dateInput(organization.ai_variable_billing.billing_start_date)}</p>}</td>
                       <td className="px-4 py-4"><p className="flex items-center gap-1.5 text-sm font-bold text-latus-ink"><Users className="h-3.5 w-3.5 text-latus-blue" />{organization.active_users} usuarios</p><p className="mt-1 text-xs text-latus-muted">{organization.contacts} clientes</p></td>
-                      <td className="px-4 py-4"><p className="text-sm font-extrabold text-latus-ink">USD {Number(organization.ai_billing?.this_month?.billable_cost_usd || 0).toFixed(2)}</p><p className="mt-1 text-xs text-latus-muted">Base USD {Number(organization.ai_billing?.this_month?.base_cost_usd || 0).toFixed(2)} · fee {organization.ai_billing?.fee_percent ?? 0}%</p></td>
+                      <td className="px-4 py-4"><p className="text-sm font-extrabold text-latus-ink">USD {Number(organization.ai_billing?.this_month?.billable_cost_usd || 0).toFixed(2)}</p><p className="mt-1 text-xs text-latus-muted">Base USD {Number(organization.ai_billing?.this_month?.base_cost_usd || 0).toFixed(2)} · fee {organization.ai_billing?.fee_percent ?? 0}%</p>{(() => { const profitability = organization.ai_billing?.profitability || {}; const meta = PROFITABILITY_STATES[profitability.status] || PROFITABILITY_STATES.not_configured; return <span className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${meta.tone}`}>{meta.label}{profitability.ai_net_margin_percent != null ? ` · IA ${profitability.ai_net_margin_percent}%` : ""}</span>; })()}</td>
                       <td className="px-4 py-4"><span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-extrabold ${statusTone(organization.access?.allowed)}`}>{organization.access?.allowed ? "Habilitado" : "Bloqueado"}</span></td>
                       <td className="px-5 py-4 text-right">
                         <Button type="button" variant="outline" size="sm" onClick={() => setSimulatingOrg(organization)} className="rounded-lg border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 text-xs font-bold mr-2">Simular</Button>

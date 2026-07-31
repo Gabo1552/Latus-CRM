@@ -7238,8 +7238,9 @@ async def platform_financial_dashboard(
         )
         total_ai_billable_ars += ai_billable_ars
         total_ai_provider_cost_ars += profitability["provider_cost_ars"]
-        total_mp_fee_ars += profitability["mp_fee_ars"]
-        total_tax_ars += profitability["tax_ars"]
+        summary_revenue_ars = (plan_price if allowed else 0.0) + ai_billable_ars
+        total_mp_fee_ars += summary_revenue_ars * float(effective_policy["mp_fee_percent"]) / 100.0
+        total_tax_ars += summary_revenue_ars * float(effective_policy["tax_percent"]) / 100.0
 
         org_matrix.append({
             "organization_id": org_id,
@@ -9612,9 +9613,15 @@ development_origins = [
     "http://127.0.0.1:3000",
     "http://127.0.0.1:5173"
 ]
+default_staging_origins = [
+    "https://latus-crm-staging.vercel.app",
+    "https://latus-crm.vercel.app",
+    "https://latus-crm-staging.up.railway.app",
+]
 configured_origins = _split_cors_origins()
 origins = list(dict.fromkeys(
-    (development_origins if _environment_name() == "development" else [])
+    development_origins
+    + default_staging_origins
     + configured_origins
 ))
 

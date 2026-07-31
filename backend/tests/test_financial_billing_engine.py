@@ -60,6 +60,25 @@ def test_profitability_calculation_unprofitable_margin_warning():
     assert breakdown["warning"] is not None
 
 
+def test_ai_margin_cannot_be_hidden_by_plan_revenue():
+    breakdown = calculate_profitability_breakdown(
+        plan_amount_ars=100_000.0,
+        ai_amount_ars=1_000.0,
+        base_cost_usd=1.0,
+        usd_to_ars_rate=1_000.0,
+        mp_fee_percent=4.5,
+        tax_percent=0.0,
+        min_margin_percent=15.0,
+        min_ai_margin_percent=10.0,
+    )
+    assert breakdown["meets_total_margin"] is True
+    assert breakdown["ai_net_profit_ars"] == -45.0
+    assert breakdown["ai_net_margin_percent"] == -4.5
+    assert breakdown["meets_ai_margin"] is False
+    assert breakdown["is_profitable"] is False
+    assert breakdown["status"] == "blocked"
+
+
 def test_simulate_settlement_charges_all_frozen_variable_usage():
     logs = [
         {
