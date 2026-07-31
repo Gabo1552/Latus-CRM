@@ -29,6 +29,11 @@ DEFAULT_POLICY: dict[str, Any] = {
     "fx_buffer_percent": 10.0,
     "settlement_lead_hours": 24,
     "max_rate_age_hours": 72,
+    "mp_fee_percent": 4.5,
+    "tax_percent": 0.0,
+    "min_net_margin_percent": 15.0,
+    "min_ai_margin_percent": 10.0,
+    "profitability_enforcement": "block",
 }
 
 
@@ -78,6 +83,24 @@ def validate_policy(patch: dict, current: dict | None = None) -> dict:
         if age < 12 or age > 720:
             raise ValueError("La vigencia de cotización debe estar entre 12 y 720 horas")
         result["max_rate_age_hours"] = age
+    percent_rules = {
+        "mp_fee_percent": (0.0, 30.0, "El costo de Mercado Pago"),
+        "tax_percent": (0.0, 60.0, "El porcentaje de impuestos"),
+        "min_net_margin_percent": (0.0, 100.0, "El margen neto mínimo"),
+        "min_ai_margin_percent": (0.0, 100.0, "El margen mínimo de IA"),
+    }
+    for field, (minimum, maximum, label) in percent_rules.items():
+        if field not in patch:
+            continue
+        value = float(patch[field])
+        if not math.isfinite(value) or value < minimum or value > maximum:
+            raise ValueError(f"{label} debe estar entre {minimum:g}% y {maximum:g}%")
+        result[field] = round(value, 4)
+    if "profitability_enforcement" in patch:
+        enforcement = str(patch["profitability_enforcement"] or "").lower()
+        if enforcement not in {"block", "warn"}:
+            raise ValueError("La acción de rentabilidad debe ser bloquear o advertir")
+        result["profitability_enforcement"] = enforcement
     if result["enabled"] and float(result.get("usd_to_ars_rate") or 0) <= 0:
         raise ValueError("Configurá la cotización USD/ARS antes de activar la liquidación")
     return result
@@ -198,7 +221,8 @@ def calculate_profitability_breakdown(*,
                                       usd_to_ars_rate: float,
                                       mp_fee_percent: float = 4.5,
                                       tax_percent: float = 0.0,
-                                      min_margin_percent: float = 15.0) -> dict[str, float | bool | str]:
+                                      min_margin_percent: float = 15.0,
+                                      min_ai_margin_percent: float | None = None) -> dict[str, Any]:
     """Calculate Net Profit breakdown and verify minimum margin safety rules.
 
     Formula:
@@ -211,10 +235,39 @@ def calculate_profitability_breakdown(*,
     net_profit_ars = round(total_revenue_ars - provider_cost_ars - mp_fee_ars - tax_ars, 2)
     net_margin_percent = round((net_profit_ars / total_revenue_ars * 100.0), 2) if total_revenue_ars > 0 else 0.0
 
-    is_profitable = net_margin_percent >= min_margin_percent and net_profit_ars > 0
+    minimum_ai_margin = min_margin_percent if min_ai_margin_percent is None else min_ai_margin_percent
+    ai_mp_fee_ars = round(ai_amount_ars * (mp_fee_percent / 100.0), 2)
+    ai_tax_ars = round(ai_amount_ars * (tax_percent / 100.0), 2)
+    ai_net_profit_ars = round(ai_amount_ars - provider_cost_ars - ai_mp_fee_ars - ai_tax_ars, 2)
+    has_ai_charge = ai_amount_ars > 0 or provider_cost_ars > 0
+    ai_net_margin_percent = (
+        round(ai_net_profit_ars / ai_amount_ars * 100.0, 2)
+        if ai_amount_ars > 0 else None
+    )
+    meets_total_margin = net_margin_percent >= min_margin_percent and net_profit_ars > 0
+    meets_ai_margin = (
+        not has_ai_charge
+        or (
+            ai_net_margin_percent is not None
+            and ai_net_margin_percent >= minimum_ai_margin
+            and ai_net_profit_ars > 0
+        )
+    )
+    is_profitable = meets_total_margin and meets_ai_margin
+    closest_margin_gap = min(
+        net_margin_percent - min_margin_percent,
+        (ai_net_margin_percent - minimum_ai_margin) if ai_net_margin_percent is not None else 100.0,
+    )
+    status = "blocked" if not is_profitable else ("at_risk" if closest_margin_gap < 5 else "healthy")
     warning = None
     if not is_profitable:
-        warning = f"Margen neto insuficiente ({net_margin_percent}% < mínimo {min_margin_percent}%). Revisa Fee o cotización."
+        reasons = []
+        if not meets_total_margin:
+            reasons.append(f"margen total {net_margin_percent}% < {min_margin_percent}%")
+        if not meets_ai_margin:
+            shown_ai_margin = ai_net_margin_percent if ai_net_margin_percent is not None else 0.0
+            reasons.append(f"margen de IA {shown_ai_margin}% < {minimum_ai_margin}%")
+        warning = f"Rentabilidad insuficiente ({'; '.join(reasons)}). Revisá fee, colchón o costos."
 
     return {
         "total_revenue_ars": total_revenue_ars,
@@ -224,6 +277,17 @@ def calculate_profitability_breakdown(*,
         "net_profit_ars": net_profit_ars,
         "net_margin_percent": net_margin_percent,
         "min_margin_percent": min_margin_percent,
+        "ai_revenue_ars": round(ai_amount_ars, 2),
+        "ai_provider_cost_ars": provider_cost_ars,
+        "ai_mp_fee_ars": ai_mp_fee_ars,
+        "ai_tax_ars": ai_tax_ars,
+        "ai_net_profit_ars": ai_net_profit_ars,
+        "ai_net_margin_percent": ai_net_margin_percent,
+        "min_ai_margin_percent": minimum_ai_margin,
+        "has_ai_charge": has_ai_charge,
+        "meets_total_margin": meets_total_margin,
+        "meets_ai_margin": meets_ai_margin,
+        "status": status,
         "is_profitable": is_profitable,
         "warning": warning,
     }
@@ -253,6 +317,8 @@ def settlement_preview_fingerprint(statement: dict) -> str:
         "ai_fee_usd", "billable_cost_usd", "usd_to_ars_rate",
         "fx_buffer_percent", "plan_amount_ars", "ai_amount_ars",
         "total_amount_ars", "final_cancellation",
+        "mp_fee_percent", "tax_percent", "min_net_margin_percent",
+        "min_ai_margin_percent", "profitability_enforcement",
     )
     payload = {field: statement.get(field) for field in fields}
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
@@ -276,7 +342,9 @@ def simulate_settlement(*,
                         buffer_source: str = "global",
                         mp_fee_percent: float = 4.5,
                         tax_percent: float = 0.0,
-                        min_margin_percent: float = 15.0) -> dict:
+                        min_margin_percent: float = 15.0,
+                        min_ai_margin_percent: float = 10.0,
+                        profitability_enforcement: str = "block") -> dict:
     """Simulate a settlement statement without modifying Mercado Pago or DB.
 
     The simulation deliberately uses the same frozen billable cost as the real
@@ -305,6 +373,7 @@ def simulate_settlement(*,
         mp_fee_percent=mp_fee_percent,
         tax_percent=tax_percent,
         min_margin_percent=min_margin_percent,
+        min_ai_margin_percent=min_ai_margin_percent,
     )
 
     return {
@@ -357,6 +426,9 @@ def simulate_settlement(*,
             "plan_operating_costs_are_not_included": True,
             "mercadopago_fee_percent": mp_fee_percent,
             "tax_percent": tax_percent,
+            "min_net_margin_percent": min_margin_percent,
+            "min_ai_margin_percent": min_ai_margin_percent,
+            "profitability_enforcement": profitability_enforcement,
         },
         "generated_at": now_iso(),
     }

@@ -1831,11 +1831,11 @@ function WebChatTab() {
               </Button>
             </div>
 
-            <div className="flex items-center gap-2 pt-1">
+            <div className="flex items-center gap-2 pt-1 flex-wrap">
               <Input
                 readOnly
                 value={`${window.location.origin}/c/${createdTestToken}`}
-                className="bg-white border-[#E9E6DC] font-mono text-xs h-9 flex-1 text-slate-700"
+                className="bg-white border-[#E9E6DC] font-mono text-xs h-9 flex-1 text-slate-700 min-w-[200px]"
               />
               <Button
                 type="button"
@@ -1854,7 +1854,16 @@ function WebChatTab() {
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 px-4 h-9 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-sm transition-all shrink-0 shadow-2xs"
               >
-                Probar Chat Web <ExternalLink className="h-3.5 w-3.5" />
+                Probar Chat Válido <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+              <a
+                href="/c/enlace_invalido_prueba"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 h-9 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-sm transition-all shrink-0 border border-slate-200"
+                title="Probar pantalla de error cuando un link no existe o venció"
+              >
+                Probar Enlace Inválido <AlertOctagon className="h-3.5 w-3.5 text-rose-500" />
               </a>
             </div>
           </div>

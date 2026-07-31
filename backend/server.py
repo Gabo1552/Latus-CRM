@@ -462,6 +462,9 @@ def _default_organization_ai_variable_billing() -> dict[str, Any]:
         "billing_start_date": None,
         "fx_buffer_percent": None,
         "ai_fee_percent": None,
+        "min_net_margin_percent": None,
+        "min_ai_margin_percent": None,
+        "profitability_enforcement": None,
     }
 
 
@@ -481,6 +484,22 @@ def _organization_ai_variable_billing(organization: dict) -> dict[str, Any]:
         "state": state,
         "ai_fee_percent": fee_override,
     }
+
+
+def _effective_ai_settlement_policy(organization: dict, policy: dict) -> dict:
+    """Overlay the tenant's explicit economic guardrails on the global policy."""
+    effective = dict(policy)
+    organization_billing = _organization_ai_variable_billing(organization)
+    overrides = {
+        "fx_buffer_percent": organization_billing.get("fx_buffer_percent"),
+        "min_net_margin_percent": organization_billing.get("min_net_margin_percent"),
+        "min_ai_margin_percent": organization_billing.get("min_ai_margin_percent"),
+        "profitability_enforcement": organization_billing.get("profitability_enforcement"),
+    }
+    for field, value in overrides.items():
+        if value is not None and value != "":
+            effective[field] = value
+    return effective
 
 PLAN_CATALOG: dict[str, dict[str, Any]] = {
     "base": {
@@ -1939,6 +1958,16 @@ async def _build_ai_settlement_statement(organization: dict, charge_at: datetime
         usd_to_ars_rate=policy["usd_to_ars_rate"],
         fx_buffer_percent=policy["fx_buffer_percent"],
     )
+    profitability = ai_settlement.calculate_profitability_breakdown(
+        plan_amount_ars=amounts["plan_amount_ars"],
+        ai_amount_ars=amounts["ai_amount_ars"],
+        base_cost_usd=usage["base_cost_usd"],
+        usd_to_ars_rate=policy["usd_to_ars_rate"],
+        mp_fee_percent=policy["mp_fee_percent"],
+        tax_percent=policy["tax_percent"],
+        min_margin_percent=policy["min_net_margin_percent"],
+        min_ai_margin_percent=policy["min_ai_margin_percent"],
+    )
     cycle = charge_at.date().isoformat()
     return {
         "statement_id": f"aistmt_{hashlib.sha256(f'{organization_id}:{cycle}'.encode()).hexdigest()[:20]}",
@@ -1954,6 +1983,12 @@ async def _build_ai_settlement_statement(organization: dict, charge_at: datetime
         "exchange_rate_source": policy["exchange_rate_source"],
         "exchange_rate_observed_at": policy.get("exchange_rate_observed_at"),
         "fx_buffer_percent": policy["fx_buffer_percent"],
+        "mp_fee_percent": policy["mp_fee_percent"],
+        "tax_percent": policy["tax_percent"],
+        "min_net_margin_percent": policy["min_net_margin_percent"],
+        "min_ai_margin_percent": policy["min_ai_margin_percent"],
+        "profitability_enforcement": policy["profitability_enforcement"],
+        "profitability": profitability,
         "provider": "mercadopago",
         "provider_preapproval_id": organization.get("provider_preapproval_id"),
         "organization_billing_state": organization_billing["state"],
@@ -1990,10 +2025,7 @@ async def _build_pilot_settlement_preview(organization: dict, policy: dict) -> d
     if charge_at and billing_start and billing_start >= min(now, charge_at):
         block("billing_not_started", "La fecha de inicio del cobro de IA todavía no comenzó")
 
-    effective_policy = dict(policy)
-    organization_buffer = organization_billing.get("fx_buffer_percent")
-    if organization_buffer is not None:
-        effective_policy["fx_buffer_percent"] = float(organization_buffer)
+    effective_policy = _effective_ai_settlement_policy(organization, policy)
     if not ai_settlement.rate_is_fresh(effective_policy, at=now):
         block("stale_exchange_rate", "La cotización USD/ARS está vencida o no configurada")
     if (
@@ -2011,6 +2043,15 @@ async def _build_pilot_settlement_preview(organization: dict, policy: dict) -> d
         fingerprint = ai_settlement.settlement_preview_fingerprint(statement)
         if float(statement.get("total_amount_ars") or 0) <= 0:
             block("no_charge", "No hay un importe pendiente para aplicar")
+        profitability = statement.get("profitability") or {}
+        if (
+            not profitability.get("is_profitable", False)
+            and effective_policy.get("profitability_enforcement") == "block"
+        ):
+            block(
+                "insufficient_margin",
+                profitability.get("warning") or "La liquidación no alcanza el margen mínimo",
+            )
 
     return {
         "ready": not blockers and statement is not None,
@@ -2026,6 +2067,39 @@ async def _build_pilot_settlement_preview(organization: dict, policy: dict) -> d
         },
         "generated_at": now.isoformat(),
     }
+
+
+async def _record_profitability_alert(organization: dict, statement: dict, *, blocked: bool) -> dict:
+    """Create at most one open profitability alert per organization."""
+    existing = await _raw_collection("system_alerts").find_one({
+        "organization_id": organization["organization_id"],
+        "alert_type": "insufficient_margin",
+        "status": {"$in": ["unread", "read"]},
+    }, {"_id": 0})
+    if existing:
+        return existing
+    from utils.alerts import create_system_alert
+    profitability = statement.get("profitability") or {}
+    return await create_system_alert(
+        db,
+        alert_type="insufficient_margin",
+        organization_id=organization["organization_id"],
+        severity="critical" if blocked else "warning",
+        title=(
+            "Liquidación bloqueada por baja rentabilidad"
+            if blocked else "Liquidación aplicada con margen en riesgo"
+        ),
+        message=profitability.get("warning") or "La liquidación no alcanza el margen configurado",
+        metadata={
+            "settlement_key": statement.get("settlement_key"),
+            "total_margin_percent": profitability.get("net_margin_percent"),
+            "ai_margin_percent": profitability.get("ai_net_margin_percent"),
+            "min_total_margin_percent": profitability.get("min_margin_percent"),
+            "min_ai_margin_percent": profitability.get("min_ai_margin_percent"),
+            "total_amount_ars": statement.get("total_amount_ars"),
+            "enforcement": statement.get("profitability_enforcement"),
+        },
+    )
 
 
 async def _apply_ai_settlement(organization: dict, policy: dict, *,
@@ -2057,10 +2131,7 @@ async def _apply_ai_settlement(organization: dict, policy: dict, *,
             return {"organization_id": organization_id, "status": "skipped", "reason": "charge_too_close"}
         if seconds_until_charge > int(policy["settlement_lead_hours"]) * 3600:
             return {"organization_id": organization_id, "status": "skipped", "reason": "not_due"}
-    effective_policy = dict(policy)
-    organization_buffer = organization_billing.get("fx_buffer_percent")
-    if organization_buffer is not None:
-        effective_policy["fx_buffer_percent"] = float(organization_buffer)
+    effective_policy = _effective_ai_settlement_policy(organization, policy)
     if not ai_settlement.rate_is_fresh(effective_policy, at=now):
         return {"organization_id": organization_id, "status": "skipped", "reason": "stale_exchange_rate"}
     provider_id = str(organization.get("provider_preapproval_id") or "")
@@ -2081,6 +2152,47 @@ async def _apply_ai_settlement(organization: dict, policy: dict, *,
             "reason": "La liquidación cambió desde la vista previa",
             "preview_fingerprint": current_fingerprint,
         }
+    profitability = draft.get("profitability") or {}
+    if not profitability.get("is_profitable", False):
+        enforcement = str(effective_policy.get("profitability_enforcement") or "block")
+        blocked = enforcement == "block"
+        await _record_profitability_alert(organization, draft, blocked=blocked)
+        if blocked:
+            existing_block = await _raw_collection("ai_billing_statements").find_one(
+                {"settlement_key": draft["settlement_key"]}, {"_id": 0},
+            )
+            if (
+                existing_block
+                and existing_block.get("status") == "blocked_margin"
+                and existing_block.get("profitability_fingerprint") == current_fingerprint
+            ):
+                return existing_block
+            blocked_at = now_iso()
+            blocked_statement = {
+                **draft,
+                "status": "blocked_margin",
+                "blocked_at": blocked_at,
+                "profitability_fingerprint": current_fingerprint,
+                "updated_at": blocked_at,
+            }
+            if existing_block:
+                await _raw_collection("ai_billing_statements").update_one(
+                    {"settlement_key": draft["settlement_key"]},
+                    {"$set": blocked_statement},
+                )
+            else:
+                await _raw_collection("ai_billing_statements").insert_one(dict(blocked_statement))
+            await _raw_collection("billing_events").insert_one({
+                "event_id": new_id("billevt"),
+                "organization_id": organization_id,
+                "type": "ai_settlement_profitability_blocked",
+                "statement_id": draft["statement_id"],
+                "amount_ars": draft["total_amount_ars"],
+                "total_margin_percent": profitability.get("net_margin_percent"),
+                "ai_margin_percent": profitability.get("ai_net_margin_percent"),
+                "created_at": blocked_at,
+            })
+            return blocked_statement
     if float(draft.get("total_amount_ars") or 0) <= 0 and draft.get("final_cancellation"):
         existing = await _raw_collection("ai_billing_statements").find_one(
             {"settlement_key": draft["settlement_key"]}, {"_id": 0}
@@ -2121,7 +2233,11 @@ async def _apply_ai_settlement(organization: dict, policy: dict, *,
     )
     if existing and existing.get("status") in {"applied", "paid", "payment_failed"}:
         return existing
-    statement = existing or draft
+    statement = draft if existing and existing.get("status") == "blocked_margin" else (existing or draft)
+    if existing and existing.get("status") == "blocked_margin":
+        await _raw_collection("ai_billing_statements").update_one(
+            {"settlement_key": draft["settlement_key"]}, {"$set": draft},
+        )
     if not existing:
         try:
             await _raw_collection("ai_billing_statements").insert_one(dict(statement))
@@ -2811,6 +2927,7 @@ async def mercadopago_webhook(request: Request):
 @api_router.get("/platform/organizations")
 async def platform_list_organizations(platform_admin: User = Depends(require_platform_admin)):
     from ai import usage as ai_usage
+    from billing import ai_settlement
     organizations = await _raw_collection("organizations").find({}, {"_id": 0}).sort(
         "created_at", -1
     ).to_list(500)
@@ -2837,10 +2954,41 @@ async def platform_list_organizations(platform_admin: User = Depends(require_pla
         for field in ("base_cost_usd", "ai_fee_usd", "billable_cost_usd"):
             item[field] = round(item[field] + float(billing[field]), 6)
     billing_policy = await ai_usage.load_billing_policy(db)
+    settlement_policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
     rows = []
     for organization in organizations:
         organization_id = organization["organization_id"]
         fee_override = organization.get("ai_fee_percent")
+        usage = usage_by_organization.get(organization_id, {
+            "calls": 0, "tokens": 0, "base_cost_usd": 0.0,
+            "ai_fee_usd": 0.0, "billable_cost_usd": 0.0,
+        })
+        effective_policy = _effective_ai_settlement_policy(organization, settlement_policy)
+        rate = float(effective_policy.get("usd_to_ars_rate") or 0.0)
+        plan = PLAN_CATALOG.get(organization.get("plan_code") or "base") or PLAN_CATALOG["base"]
+        if rate > 0:
+            amounts = ai_settlement.calculate_amounts(
+                plan_amount_ars=float(plan.get("monthly_price_ars") or 0.0),
+                billable_cost_usd=float(usage["billable_cost_usd"]),
+                usd_to_ars_rate=rate,
+                fx_buffer_percent=float(effective_policy["fx_buffer_percent"]),
+            )
+            profitability = ai_settlement.calculate_profitability_breakdown(
+                plan_amount_ars=amounts["plan_amount_ars"],
+                ai_amount_ars=amounts["ai_amount_ars"],
+                base_cost_usd=float(usage["base_cost_usd"]),
+                usd_to_ars_rate=rate,
+                mp_fee_percent=float(effective_policy["mp_fee_percent"]),
+                tax_percent=float(effective_policy["tax_percent"]),
+                min_margin_percent=float(effective_policy["min_net_margin_percent"]),
+                min_ai_margin_percent=float(effective_policy["min_ai_margin_percent"]),
+            )
+        else:
+            profitability = {
+                "status": "not_configured", "is_profitable": False,
+                "warning": "Configurá la cotización USD/ARS para calcular rentabilidad",
+                "net_margin_percent": None, "ai_net_margin_percent": None,
+            }
         rows.append({
             **organization,
             "ai_variable_billing": _organization_ai_variable_billing(organization),
@@ -2861,10 +3009,9 @@ async def platform_list_organizations(platform_admin: User = Depends(require_pla
                     else billing_policy["default_fee_percent"]
                 ),
                 "has_custom_fee": fee_override is not None,
-                "this_month": usage_by_organization.get(organization_id, {
-                    "calls": 0, "tokens": 0, "base_cost_usd": 0.0,
-                    "ai_fee_usd": 0.0, "billable_cost_usd": 0.0,
-                }),
+                "this_month": usage,
+                "profitability": profitability,
+                "profitability_enforcement": effective_policy["profitability_enforcement"],
                 "latest_statement": await _latest_ai_statement(organization_id),
             },
         })
@@ -5954,7 +6101,7 @@ async def public_webchat_session(payload: PublicWebChatSessionRequest):
             await db.contacts.insert_one(contact_doc)
         
         conv_id = f"conv_{uuid.uuid4().hex[:12]}"
-        session_token = f"cw_{uuid.uuid4().hex[:16]}"
+        session_token = session_token if (session_token and session_token.startswith("cw_")) else f"cw_{uuid.uuid4().hex[:16]}"
         conv_doc = {
             "id": conv_id,
             "contact_id": contact_id,
@@ -5973,7 +6120,7 @@ async def public_webchat_session(payload: PublicWebChatSessionRequest):
         await db.conversations.insert_one(conv_doc)
     else:
         if not conv_doc.get("webchat_session_token"):
-            session_token = f"cw_{uuid.uuid4().hex[:16]}"
+            session_token = session_token if (session_token and session_token.startswith("cw_")) else f"cw_{uuid.uuid4().hex[:16]}"
             await db.conversations.update_one({"id": conv_doc["id"]}, {"$set": {"webchat_session_token": session_token}})
         else:
             session_token = conv_doc["webchat_session_token"]
@@ -6005,6 +6152,14 @@ async def public_webchat_get_messages(session_token: str):
         ]
     }, {"_id": 0})
     if not conv:
+        if session_token.startswith("cw_"):
+            init_res = await public_webchat_session(PublicWebChatSessionRequest(session_token=session_token))
+            return {
+                "conversation_id": init_res.get("conversation_id"),
+                "bot_enabled": init_res.get("bot_enabled", True),
+                "bot_status": init_res.get("bot_status", "bot_activo"),
+                "messages": init_res.get("messages", [])
+            }
         raise HTTPException(status_code=404, detail="Sesión de chat no encontrada")
     
     msgs = await db.messages.find({"conversation_id": conv["id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
@@ -6494,6 +6649,11 @@ class AIVariableBillingPolicyUpdate(BaseModel):
     fx_buffer_percent: Optional[float] = None
     settlement_lead_hours: Optional[int] = None
     max_rate_age_hours: Optional[int] = None
+    mp_fee_percent: Optional[float] = None
+    tax_percent: Optional[float] = None
+    min_net_margin_percent: Optional[float] = None
+    min_ai_margin_percent: Optional[float] = None
+    profitability_enforcement: Optional[Literal["block", "warn"]] = None
 
 
 @api_router.get("/platform/ai-billing")
@@ -6596,6 +6756,9 @@ class OrganizationAIBillingUpdate(BaseModel):
     billing_start_date: Optional[str] = None
     max_monthly_ai_cost_usd: Optional[float] = None
     limit_action: Optional[Literal["block", "warn", "request_expansion"]] = None
+    min_net_margin_percent: Optional[float] = None
+    min_ai_margin_percent: Optional[float] = None
+    profitability_enforcement: Optional[Literal["block", "warn"]] = None
 
 
 class AISimulationRequest(BaseModel):
@@ -6651,6 +6814,15 @@ async def platform_update_org_ai_variable_billing(
         if not math.isfinite(maximum) or maximum <= 0:
             raise HTTPException(400, "El límite mensual debe ser mayor a cero")
         patch["max_monthly_ai_cost_usd"] = round(maximum, 4)
+    for field, label in (
+        ("min_net_margin_percent", "El margen neto mínimo"),
+        ("min_ai_margin_percent", "El margen mínimo de IA"),
+    ):
+        if field in patch and patch[field] is not None:
+            margin = float(patch[field])
+            if not math.isfinite(margin) or margin < 0 or margin > 100:
+                raise HTTPException(400, f"{label} debe estar entre 0% y 100%")
+            patch[field] = round(margin, 4)
     if "billing_start_date" in patch:
         if patch["billing_start_date"] in (None, ""):
             patch["billing_start_date"] = None
@@ -6733,12 +6905,9 @@ async def platform_simulate_ai_billing(
 
     org_billing = _organization_ai_variable_billing(org)
     organization_buffer = org_billing.get("fx_buffer_percent")
-    fx_buffer = float(
-        organization_buffer
-        if organization_buffer is not None
-        else (policy.get("fx_buffer_percent") or 10.0)
-    )
-    rate = float(policy.get("usd_to_ars_rate") or 0.0)
+    effective_policy = _effective_ai_settlement_policy(org, policy)
+    fx_buffer = float(effective_policy.get("fx_buffer_percent") or 0.0)
+    rate = float(effective_policy.get("usd_to_ars_rate") or 0.0)
     if rate <= 0:
         raise HTTPException(400, "Configurá una cotización USD/ARS antes de simular")
 
@@ -6801,6 +6970,11 @@ async def platform_simulate_ai_billing(
         configured_fee_percent=configured_fee,
         fee_source="organization" if fee_override is not None else "global",
         buffer_source="organization" if organization_buffer is not None else "global",
+        mp_fee_percent=float(effective_policy["mp_fee_percent"]),
+        tax_percent=float(effective_policy["tax_percent"]),
+        min_margin_percent=float(effective_policy["min_net_margin_percent"]),
+        min_ai_margin_percent=float(effective_policy["min_ai_margin_percent"]),
+        profitability_enforcement=str(effective_policy["profitability_enforcement"]),
     )
     return {
         **simulation,
@@ -7022,6 +7196,10 @@ async def platform_financial_dashboard(
     total_ai_billable_usd = 0.0
     total_ai_provider_cost_usd = 0.0
     total_ai_fee_usd = 0.0
+    total_ai_billable_ars = 0.0
+    total_ai_provider_cost_ars = 0.0
+    total_mp_fee_ars = 0.0
+    total_tax_ars = 0.0
 
     for org in organizations:
         org_id = org["organization_id"]
@@ -7043,10 +7221,25 @@ async def platform_financial_dashboard(
         total_ai_provider_cost_usd += u["base_cost_usd"]
         total_ai_fee_usd += u["ai_fee_usd"]
 
-        org_var_billing = org.get("ai_variable_billing") or {}
-        org_buffer = float(org_var_billing.get("fx_buffer_percent") or fx_buffer_default)
+        org_var_billing = _organization_ai_variable_billing(org)
+        effective_policy = _effective_ai_settlement_policy(org, policy)
+        org_buffer = float(effective_policy["fx_buffer_percent"])
         ai_billable_ars = round(u["billable_cost_usd"] * rate * (1 + org_buffer / 100.0), 2)
         total_monthly_ars = round(plan_price + ai_billable_ars, 2)
+        profitability = ai_settlement.calculate_profitability_breakdown(
+            plan_amount_ars=plan_price,
+            ai_amount_ars=ai_billable_ars,
+            base_cost_usd=u["base_cost_usd"],
+            usd_to_ars_rate=rate,
+            mp_fee_percent=float(effective_policy["mp_fee_percent"]),
+            tax_percent=float(effective_policy["tax_percent"]),
+            min_margin_percent=float(effective_policy["min_net_margin_percent"]),
+            min_ai_margin_percent=float(effective_policy["min_ai_margin_percent"]),
+        )
+        total_ai_billable_ars += ai_billable_ars
+        total_ai_provider_cost_ars += profitability["provider_cost_ars"]
+        total_mp_fee_ars += profitability["mp_fee_ars"]
+        total_tax_ars += profitability["tax_ars"]
 
         org_matrix.append({
             "organization_id": org_id,
@@ -7065,15 +7258,19 @@ async def platform_financial_dashboard(
                 **u,
                 "billable_cost_ars": ai_billable_ars,
             },
+            "profitability": profitability,
+            "profitability_enforcement": effective_policy["profitability_enforcement"],
             "total_monthly_ars": total_monthly_ars,
         })
 
-    total_ai_billable_ars = round(total_ai_billable_usd * rate * (1 + fx_buffer_default / 100.0), 2)
-    total_ai_provider_cost_ars = round(total_ai_provider_cost_usd * rate, 2)
+    total_ai_billable_ars = round(total_ai_billable_ars, 2)
+    total_ai_provider_cost_ars = round(total_ai_provider_cost_ars, 2)
     total_ai_fee_ars = round(total_ai_fee_usd * rate, 2)
 
     total_revenue_ars = round(total_subscriptions_ars + total_ai_billable_ars, 2)
-    estimated_net_profit_ars = round(total_revenue_ars - total_ai_provider_cost_ars, 2)
+    estimated_net_profit_ars = round(
+        total_revenue_ars - total_ai_provider_cost_ars - total_mp_fee_ars - total_tax_ars, 2,
+    )
     net_margin_percent = round((estimated_net_profit_ars / total_revenue_ars * 100.0), 1) if total_revenue_ars > 0 else 0.0
 
     stmt_query = {}
@@ -7098,9 +7295,14 @@ async def platform_financial_dashboard(
             "monthly_ai_provider_cost_ars": total_ai_provider_cost_ars,
             "monthly_ai_fee_gross_profit_usd": round(total_ai_fee_usd, 4),
             "monthly_ai_fee_gross_profit_ars": total_ai_fee_ars,
+            "estimated_mp_fee_ars": round(total_mp_fee_ars, 2),
+            "estimated_tax_ars": round(total_tax_ars, 2),
             "total_revenue_ars": total_revenue_ars,
             "estimated_net_profit_ars": estimated_net_profit_ars,
             "net_margin_percent": net_margin_percent,
+            "healthy_organizations": sum(1 for o in org_matrix if o["profitability"]["status"] == "healthy"),
+            "at_risk_organizations": sum(1 for o in org_matrix if o["profitability"]["status"] == "at_risk"),
+            "blocked_organizations": sum(1 for o in org_matrix if o["profitability"]["status"] == "blocked"),
         },
         "organizations": org_matrix,
         "latest_statements": latest_statements,
