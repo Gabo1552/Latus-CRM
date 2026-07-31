@@ -354,10 +354,22 @@ class TestAIVariableSettlement:
             "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
             json={"usd_to_ars_rate": 1500, "fx_buffer_percent": 8,
                   "settlement_lead_hours": 24, "max_rate_age_hours": 72,
+                  "mp_fee_percent": 5.2, "tax_percent": 3.0,
+                  "min_net_margin_percent": 18,
+                  "min_ai_margin_percent": 12,
+                  "profitability_enforcement": "block",
                   "enabled": True},
         )
         assert configured.status_code == 200
         assert configured.json()["enabled"] is True
+        assert configured.json()["mp_fee_percent"] == 5.2
+        assert configured.json()["min_ai_margin_percent"] == 12
+        assert configured.json()["profitability_enforcement"] == "block"
+        invalid_margin = client.put(
+            "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
+            json={"min_ai_margin_percent": 101},
+        )
+        assert invalid_margin.status_code == 400
         assert client.get(
             "/api/platform/ai-settlement-policy", headers=_h("T-AGENT")
         ).status_code == 403
@@ -546,6 +558,86 @@ class TestAIVariableSettlement:
         )
         assert rejected.status_code == 400
         assert "explícita" in rejected.text
+
+    def test_unprofitable_ai_charge_is_blocked_alerted_and_can_use_tenant_warning_override(self, srv, monkeypatch):
+        server, fake, client = srv
+        from datetime import datetime, timedelta, timezone
+
+        organization = client.get("/api/organizations/current", headers=_h("T-ADMIN")).json()
+        organization_id = organization["organization_id"]
+        now = datetime.now(timezone.utc)
+        start = (now - timedelta(days=29)).isoformat()
+        _run(fake.organizations.update_one(
+            {"organization_id": organization_id},
+            {"$set": {
+                "plan_code": "starter", "subscription_status": "active",
+                "provider_status": "authorized", "provider_preapproval_id": "pre_margin",
+                "current_period_end": (now + timedelta(hours=2)).isoformat(),
+                "provider_last_payment_at": start,
+                "ai_variable_billing": {"state": "active", "billing_start_date": start},
+            }},
+        ))
+        _run(fake.ai_usage_logs.insert_one({
+            "organization_id": organization_id,
+            "created_at": (now - timedelta(days=1)).isoformat(),
+            "status": "success", "total_tokens": 1_000,
+            "provider_cost_usd": 1.0, "base_cost_usd": 1.0,
+            "ai_fee_percent": 0.0, "ai_fee_usd": 0.0,
+            "billable_cost_usd": 1.0,
+        }))
+        configured = client.put(
+            "/api/platform/ai-settlement-policy", headers=_h("T-ADMIN"),
+            json={
+                "usd_to_ars_rate": 1000, "fx_buffer_percent": 0,
+                "mp_fee_percent": 4.5, "tax_percent": 0,
+                "min_net_margin_percent": 10, "min_ai_margin_percent": 5,
+                "profitability_enforcement": "block", "enabled": True,
+            },
+        )
+        assert configured.status_code == 200, configured.text
+        provider_calls = []
+
+        async def fake_mp(method, path, *, payload=None):
+            provider_calls.append((method, path, payload))
+            return {"id": "pre_margin", "status": "authorized"}
+
+        monkeypatch.setattr(server, "_mercadopago_request", fake_mp)
+        blocked = client.post("/api/platform/ai-settlements/run", headers=_h("T-ADMIN"))
+        assert blocked.status_code == 200, blocked.text
+        result = blocked.json()["items"][0]
+        assert result["status"] == "blocked_margin"
+        assert result["profitability"]["meets_total_margin"] is True
+        assert result["profitability"]["meets_ai_margin"] is False
+        assert provider_calls == []
+        assert fake.ai_billing_statements.docs[-1]["status"] == "blocked_margin"
+        alerts = [a for a in fake.system_alerts.docs if a.get("alert_type") == "insufficient_margin"]
+        assert len(alerts) == 1
+        assert alerts[0]["severity"] == "critical"
+        blocked_events = [
+            e for e in fake.billing_events.docs
+            if e.get("type") == "ai_settlement_profitability_blocked"
+        ]
+        assert len(blocked_events) == 1
+
+        repeated = client.post("/api/platform/ai-settlements/run", headers=_h("T-ADMIN"))
+        assert repeated.status_code == 200
+        assert len([a for a in fake.system_alerts.docs if a.get("alert_type") == "insufficient_margin"]) == 1
+        assert len([
+            e for e in fake.billing_events.docs
+            if e.get("type") == "ai_settlement_profitability_blocked"
+        ]) == 1
+
+        override = client.patch(
+            f"/api/platform/organizations/{organization_id}/ai-variable-billing",
+            headers=_h("T-ADMIN"),
+            json={"profitability_enforcement": "warn", "min_ai_margin_percent": 5},
+        )
+        assert override.status_code == 200, override.text
+        applied = client.post("/api/platform/ai-settlements/run", headers=_h("T-ADMIN"))
+        assert applied.status_code == 200, applied.text
+        assert applied.json()["items"][0]["status"] == "applied"
+        assert provider_calls[-1][2]["auto_recurring"]["transaction_amount"] == 46_000
+        assert fake.ai_billing_statements.docs[-1]["profitability_enforcement"] == "warn"
 
     def test_due_settlement_updates_subscription_once_and_payment_closes_it(self, srv, monkeypatch):
         server, fake, client = srv
