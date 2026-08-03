@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { Plus, Users, Search, Phone, Mail, Building2 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
@@ -13,7 +14,6 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import LeadDrawer from "@/components/LeadDrawer";
 import { useAuth } from "@/context/AuthContext";
 import { hasPermission } from "@/lib/permissions";
 
@@ -25,13 +25,13 @@ const leadSourceMeta = {
 
 export default function Contacts() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const canUse = hasPermission(user, "crm_use");
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", phone: "", email: "", company: "" });
   const [activeTab, setActiveTab] = useState("clients");
-  const [selectedLeadId, setSelectedLeadId] = useState(null);
   const [sourceFilter, setSourceFilter] = useState("all");
 
   const contactsQ = useQuery({ queryKey: ["contacts"], queryFn: () => api.get("/contacts").then((r) => r.data) });
@@ -39,7 +39,6 @@ export default function Contacts() {
     queryKey: ["leads", { status: "all", priority: "all", assigned_to: "all" }],
     queryFn: () => api.get("/leads").then((r) => r.data)
   });
-  const { data: users = [] } = useQuery({ queryKey: ["users"], queryFn: () => api.get("/users").then((r) => r.data) });
 
   const create = useMutation({
     mutationFn: () => api.post("/contacts", form),
@@ -145,13 +144,7 @@ export default function Contacts() {
             {filtered.map((c) => (
               <div
                 key={c.id}
-                onClick={() => {
-                  if (c.lead) {
-                    setSelectedLeadId(c.lead.id);
-                  } else {
-                    toast.error("Legajo no disponible");
-                  }
-                }}
+                onClick={() => navigate(`/contacts/${c.id}`)}
                 data-testid={`contact-card-${c.id}`}
                 className="bg-white border border-[#E9E6DC] rounded-sm p-5 hover:border-zinc-300 transition-colors cursor-pointer"
               >
@@ -182,7 +175,7 @@ export default function Contacts() {
                 {c.lead && (
                   <div className="mt-3 pt-3 border-t border-[#E9E6DC] flex items-center justify-between text-xs text-[#888888]">
                     <span>Lead: {c.lead.title}</span>
-                    <span className="font-bold text-[#0E8DDB]">Ver legajo &rarr;</span>
+                    <span className="font-bold text-[#0E8DDB]">Ver ficha 360° &rarr;</span>
                   </div>
                 )}
                 {c.tags?.length > 0 && (
@@ -196,17 +189,6 @@ export default function Contacts() {
         )}
       </div>
 
-      {selectedLeadId && (
-        <LeadDrawer
-          leadId={selectedLeadId}
-          onClose={() => {
-            setSelectedLeadId(null);
-            qc.invalidateQueries({ queryKey: ["contacts"] });
-            qc.invalidateQueries({ queryKey: ["leads"] });
-          }}
-          users={users}
-        />
-      )}
     </AppLayout>
   );
 }

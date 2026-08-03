@@ -30,6 +30,8 @@ TENANT_SCOPED_COLLECTIONS = frozenset({
     "products",
     "roles",
     "settings",
+    "sales",
+    "inventory_movements",
     "tags",
     "tasks",
     "wa_status",

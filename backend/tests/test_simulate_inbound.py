@@ -14,6 +14,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -163,11 +164,13 @@ class _Coll:
                 if "$inc" in update:
                     for k, v in update["$inc"].items():
                         d[k] = (d.get(k) or 0) + v
-                return
+                return SimpleNamespace(matched_count=1, modified_count=1)
         if upsert:
             new = {k: v for k, v in (query or {}).items() if not isinstance(v, dict)}
             if "$set" in update: new.update(update["$set"])
             self.docs.append(new)
+            return SimpleNamespace(matched_count=0, modified_count=0, upserted_id=True)
+        return SimpleNamespace(matched_count=0, modified_count=0)
 
     async def update_many(self, *_a, **_k): pass
     async def delete_one(self, query):
@@ -204,7 +207,8 @@ class _FakeDB:
                      "wa_status", "whatsapp_events", "app_secrets", "platform_secrets", "tasks",
                      "appointments", "notes", "bot_events", "bot_settings", "ai_usage_logs",
                      "pricing_config", "products", "work_areas", "work_area_members", "billing_requests",
-                     "billing_events", "ai_billing_statements", "system_alerts"):
+                     "billing_events", "ai_billing_statements", "system_alerts", "sales",
+                     "inventory_movements"):
             setattr(self, name, _Coll(name))
         for name in ("organizations", "memberships", "whatsapp_routes"):
             setattr(self, name, _Coll(name))

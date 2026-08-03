@@ -298,6 +298,11 @@ export default function Catalogo() {
                               style={{ background: s.bg, color: s.color }}>
                           {STOCK_OPTS.find(o => o.v === p.stock_status)?.l || p.stock_status}
                         </span>
+                        {p.track_stock && (
+                          <p className={`mt-1 text-[11px] font-semibold ${p.low_stock ? "text-amber-700" : "text-latus-muted"}`}>
+                            {p.stock_quantity} unidades{p.low_stock ? " · stock bajo" : ""}
+                          </p>
+                        )}
                       </td>
                       <td className="px-4 py-4 text-right">
                         {canWrite && (
@@ -363,12 +368,16 @@ function ProductModal({ product, categories, onClose, onSaved }) {
   } : {
     name: "", sku: "", category: "", description: "",
     price: "", currency: "ARS", stock_status: "disponible",
+    track_stock: false, stock_quantity: 0, low_stock_threshold: 2,
     active: true, tags: [], image_url: "", promo_price: "",
     promo_limit_type: "none", promo_start_at: "", promo_end_at: "",
     promo_unit_limit: "", promo_units_used: 0,
     commercial_conditions: "", external_link: "",
   });
   const [tagDraft, setTagDraft] = useState("");
+  const [stockDelta, setStockDelta] = useState("");
+  const [stockReason, setStockReason] = useState("adjustment");
+  const [stockNotes, setStockNotes] = useState("");
 
   const save = useMutation({
     mutationFn: (payload) => isEdit
@@ -382,6 +391,21 @@ function ProductModal({ product, categories, onClose, onSaved }) {
     onSuccess: () => { toast.success("Producto eliminado"); onSaved(); },
     onError: () => toast.error("No se pudo eliminar"),
   });
+  const adjustStock = useMutation({
+    mutationFn: () => api.post("/inventory/adjustments", {
+      product_id: product.product_id,
+      quantity_delta: Number(stockDelta),
+      reason: stockReason,
+      notes: stockNotes || null,
+    }),
+    onSuccess: () => {
+      toast.success("Movimiento de stock registrado");
+      setStockDelta("");
+      setStockNotes("");
+      onSaved();
+    },
+    onError: (error) => toast.error(error.response?.data?.detail || "No se pudo actualizar el stock"),
+  });
 
   const onSave = () => {
     if (!d.name?.trim()) { toast.error("El nombre es requerido"); return; }
@@ -389,6 +413,10 @@ function ProductModal({ product, categories, onClose, onSaved }) {
       toast.error("El enlace externo debe empezar con http:// o https://"); return;
     }
     const payload = { ...d };
+    payload.track_stock = !!payload.track_stock;
+    payload.low_stock_threshold = Number(payload.low_stock_threshold || 0);
+    if (isEdit) delete payload.stock_quantity;
+    else payload.stock_quantity = Number(payload.stock_quantity || 0);
     if (payload.price === "") delete payload.price;
     if (payload.promo_price === "") {
       payload.promo_price = null;
@@ -415,6 +443,7 @@ function ProductModal({ product, categories, onClose, onSaved }) {
     delete payload.promo_status;
     delete payload.promo_units_remaining;
     delete payload.effective_price;
+    delete payload.low_stock;
     delete payload.promo_units_used;
     save.mutate(payload);
   };
@@ -530,14 +559,43 @@ function ProductModal({ product, categories, onClose, onSaved }) {
               <SelectContent>{CURRENCIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
             </Select>
           </div>
-          <div>
-            <Label className="text-xs font-bold text-[#888888]">Stock</Label>
-            <Select value={d.stock_status || "consultar"} onValueChange={(v) => setD({ ...d, stock_status: v })}>
-              <SelectTrigger data-testid="modal-stock" className="rounded-sm h-9 mt-1 text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>{STOCK_OPTS.map(o => <SelectItem key={o.v} value={o.v}>{o.l}</SelectItem>)}</SelectContent>
-            </Select>
+          <div className="sm:col-span-2 rounded-lg border border-[#E9E6DC] bg-latus-cream/45 p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div><p className="text-xs font-bold uppercase tracking-wider text-[#0B1B26]">Control de inventario</p><p className="mt-1 text-xs text-[#888888]">Descuenta unidades al confirmar ventas y conserva un historial de movimientos.</p></div>
+              <Switch checked={!!d.track_stock} onCheckedChange={(track_stock) => setD({ ...d, track_stock })} />
+            </div>
+            {d.track_stock ? (
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <Label className="text-xs font-bold text-[#888888]">{isEdit ? "Stock actual" : "Stock inicial"}</Label>
+                  <Input type="number" min="0" value={d.stock_quantity ?? 0} disabled={isEdit} onChange={(event) => setD({ ...d, stock_quantity: event.target.value })} className="mt-1 h-9 bg-white" />
+                  {isEdit && <p className="mt-1 text-[10px] text-[#888888]">Usá un movimiento para modificarlo.</p>}
+                </div>
+                <div>
+                  <Label className="text-xs font-bold text-[#888888]">Avisar cuando queden</Label>
+                  <Input type="number" min="0" value={d.low_stock_threshold ?? 0} onChange={(event) => setD({ ...d, low_stock_threshold: event.target.value })} className="mt-1 h-9 bg-white" />
+                </div>
+                {isEdit && (
+                  <div className="sm:col-span-2 rounded-lg border border-latus-warm-border bg-white p-3">
+                    <p className="text-xs font-bold text-latus-ink">Registrar movimiento</p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-[110px_160px_1fr_auto]">
+                      <Input type="number" value={stockDelta} onChange={(event) => setStockDelta(event.target.value)} placeholder="Ej.: 10 o -2" className="h-9" />
+                      <Select value={stockReason} onValueChange={setStockReason}><SelectTrigger className="h-9"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="purchase">Compra</SelectItem><SelectItem value="adjustment">Ajuste</SelectItem><SelectItem value="damage">Daño o pérdida</SelectItem><SelectItem value="return">Devolución</SelectItem><SelectItem value="initial">Inventario inicial</SelectItem></SelectContent></Select>
+                      <Input value={stockNotes} onChange={(event) => setStockNotes(event.target.value)} placeholder="Motivo o comprobante" className="h-9" />
+                      <Button type="button" variant="outline" disabled={!Number(stockDelta) || adjustStock.isPending} onClick={() => adjustStock.mutate()} className="h-9">Registrar</Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="mt-4">
+                <Label className="text-xs font-bold text-[#888888]">Disponibilidad manual</Label>
+                <Select value={d.stock_status || "consultar"} onValueChange={(v) => setD({ ...d, stock_status: v })}>
+                  <SelectTrigger data-testid="modal-stock" className="mt-1 h-9 bg-white text-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent>{STOCK_OPTS.map(o => <SelectItem key={o.v} value={o.v}>{o.l}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
           <div className="sm:col-span-2">
             <Label className="text-xs font-bold text-[#888888]">Tags</Label>

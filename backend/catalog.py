@@ -22,7 +22,8 @@ ALLOWED_PROMO_LIMIT_TYPES = {"none", "date", "units"}
 
 CSV_HEADERS = [
     "name", "sku", "category", "description", "price", "currency",
-    "stock_status", "active", "tags", "image_url", "promo_price",
+    "stock_status", "track_stock", "stock_quantity", "low_stock_threshold",
+    "active", "tags", "image_url", "promo_price",
     "promo_limit_type", "promo_start_at", "promo_end_at", "promo_unit_limit",
     "commercial_conditions", "external_link",
 ]
@@ -175,6 +176,16 @@ def promotion_state(product: dict, *, at: datetime | None = None) -> dict[str, A
 def product_view(product: dict | None) -> dict | None:
     clean = _strip(product)
     if clean is not None:
+        if clean.get("track_stock"):
+            clean["stock_status"] = (
+                "disponible" if int(clean.get("stock_quantity") or 0) > 0 else "sin_stock"
+            )
+            clean["low_stock"] = (
+                int(clean.get("stock_quantity") or 0)
+                <= int(clean.get("low_stock_threshold") or 0)
+            )
+        else:
+            clean["low_stock"] = False
         clean.update(promotion_state(clean))
     return clean
 
@@ -255,6 +266,31 @@ def validate_product(payload: dict, *, partial: bool = False) -> dict:
         out["stock_status"] = s
     elif not partial:
         out["stock_status"] = "consultar"
+    if "track_stock" in payload:
+        enabled = _coerce_bool(payload.get("track_stock"))
+        if enabled is None:
+            raise ValueError("El control de stock debe ser sí o no")
+        out["track_stock"] = enabled
+    elif not partial:
+        out["track_stock"] = False
+    if "stock_quantity" in payload:
+        quantity = _coerce_int(payload.get("stock_quantity"))
+        if quantity is None:
+            quantity = 0
+        if quantity < 0:
+            raise ValueError("La cantidad de stock no puede ser negativa")
+        out["stock_quantity"] = quantity
+    elif not partial:
+        out["stock_quantity"] = 0
+    if "low_stock_threshold" in payload:
+        threshold = _coerce_int(payload.get("low_stock_threshold"))
+        if threshold is None:
+            threshold = 0
+        if threshold < 0:
+            raise ValueError("El aviso de stock bajo no puede ser negativo")
+        out["low_stock_threshold"] = threshold
+    elif not partial:
+        out["low_stock_threshold"] = 0
     if "active" in payload:
         b = _coerce_bool(payload["active"])
         if b is None:
@@ -297,6 +333,10 @@ async def create_product(db, payload: dict, *, user_id: str | None) -> dict:
         clean.update({"promo_limit_type": "none", "promo_start_at": None,
                       "promo_end_at": None, "promo_unit_limit": None})
     validate_promotion_config({**clean, "promo_units_used": 0})
+    if clean.get("track_stock"):
+        clean["stock_status"] = (
+            "disponible" if int(clean.get("stock_quantity") or 0) > 0 else "sin_stock"
+        )
     if clean.get("sku"):
         dupe = await db.products.find_one(
             {"sku": clean["sku"], "deleted_at": None}, {"_id": 0, "product_id": 1})
@@ -315,6 +355,9 @@ async def create_product(db, payload: dict, *, user_id: str | None) -> dict:
         "price": clean.get("price"),
         "currency": clean.get("currency", "ARS"),
         "stock_status": clean.get("stock_status", "consultar"),
+        "track_stock": bool(clean.get("track_stock")),
+        "stock_quantity": int(clean.get("stock_quantity") or 0),
+        "low_stock_threshold": int(clean.get("low_stock_threshold") or 0),
         "active": clean.get("active", True),
         "tags": clean.get("tags") or [],
         "image_url": clean.get("image_url"),
@@ -337,7 +380,16 @@ async def update_product(db, product_id: str, payload: dict, *,
         {"product_id": product_id, "deleted_at": None}, {"_id": 0})
     if not existing:
         return None
+    if "stock_quantity" in payload:
+        requested_stock = _coerce_int(payload.get("stock_quantity"))
+        current_stock = int(existing.get("stock_quantity") or 0)
+        if requested_stock is not None and requested_stock != current_stock:
+            raise ValueError("El stock debe modificarse mediante un movimiento de inventario")
+    if payload.get("track_stock") is False and existing.get("track_stock") \
+            and int(existing.get("stock_quantity") or 0) != 0:
+        raise ValueError("Dejá el stock en cero antes de desactivar su control")
     clean = validate_product(payload, partial=True)
+    clean.pop("stock_quantity", None)
     if clean.get("sku"):
         dupe = await db.products.find_one(
             {"sku": clean["sku"], "deleted_at": None,
@@ -350,6 +402,10 @@ async def update_product(db, product_id: str, payload: dict, *,
                       "promo_end_at": None, "promo_unit_limit": None})
         combined.update(clean)
     validate_promotion_config(combined)
+    if combined.get("track_stock"):
+        clean["stock_status"] = (
+            "disponible" if int(combined.get("stock_quantity") or 0) > 0 else "sin_stock"
+        )
     clean["updated_at"] = _now_iso()
     clean["updated_by"] = user_id
     await db.products.update_one(

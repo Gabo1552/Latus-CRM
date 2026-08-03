@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Users, Target, MessageSquare, KanbanSquare,
   CheckSquare, Shield, Settings, LogOut, DollarSign, Package, Calendar,
-  Menu, X, PanelLeftClose, PanelLeftOpen, Sparkles, Building2, CreditCard, KeyRound
+  Menu, X, PanelLeftClose, PanelLeftOpen, Sparkles, Building2, CreditCard, KeyRound, ShoppingCart
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { initials, roleLabel } from "@/lib/constants";
@@ -16,6 +16,7 @@ const NAV = [
   { to: "/calendario", label: "Calendario", icon: Calendar, testid: "nav-calendario", permission: "calendar_view" },
   { to: "/leads", label: "Leads", icon: Target, testid: "nav-leads", permission: "crm_view" },
   { to: "/pipeline", label: "Pipeline", icon: KanbanSquare, testid: "nav-pipeline", permission: "crm_view" },
+  { to: "/ventas", label: "Ventas", icon: ShoppingCart, testid: "nav-ventas", permission: "crm_view" },
   { to: "/contacts", label: "Clientes", icon: Users, testid: "nav-contacts", permission: "crm_view" },
   { to: "/tasks", label: "Tareas", icon: CheckSquare, testid: "nav-tasks", permission: "crm_view" },
 ];

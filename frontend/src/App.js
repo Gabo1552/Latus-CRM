@@ -9,12 +9,14 @@ import Inbox from "@/pages/Inbox";
 import Leads from "@/pages/Leads";
 import Pipeline from "@/pages/Pipeline";
 import Contacts from "@/pages/Contacts";
+import Customer360 from "@/pages/Customer360";
 import Tasks from "@/pages/Tasks";
 import Admin from "@/pages/Admin";
 import Configuracion from "@/pages/Configuracion";
 import ConsumoIA from "@/pages/ConsumoIA";
 import Catalogo from "@/pages/Catalogo";
 import Calendario from "@/pages/Calendario";
+import Ventas from "@/pages/Ventas";
 import Suscripcion from "@/pages/Suscripcion";
 import Plataforma from "@/pages/Plataforma";
 import PublicWebChat from "@/pages/PublicWebChat";
@@ -90,7 +92,9 @@ function AppRouter() {
       <Route path="/pipeline" element={<Permitted permission="crm_view"><Pipeline /></Permitted>} />
       <Route path="/calendario" element={<Permitted permission="calendar_view"><Calendario /></Permitted>} />
       <Route path="/contacts" element={<Permitted permission="crm_view"><Contacts /></Permitted>} />
+      <Route path="/contacts/:contactId" element={<Permitted permission="crm_view"><Customer360 /></Permitted>} />
       <Route path="/tasks" element={<Permitted permission="crm_view"><Tasks /></Permitted>} />
+      <Route path="/ventas" element={<Permitted permission="crm_view"><Ventas /></Permitted>} />
       <Route path="/admin" element={<Permitted permissions={["users_view", "settings_view", "whatsapp_view"]}><Admin /></Permitted>} />
       <Route path="/configuracion" element={<Permitted configuration><Configuracion /></Permitted>} />
       <Route path="/consumo-ia" element={<Permitted permission="ai_view"><ConsumoIA /></Permitted>} />

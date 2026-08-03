@@ -3,10 +3,15 @@ import asyncio
 import pytest
 
 from utils.tenancy import (
+    TENANT_SCOPED_COLLECTIONS,
     TenantCollection,
     reset_organization_id,
     set_organization_id,
 )
+
+
+def test_commerce_collections_are_tenant_scoped():
+    assert {"sales", "inventory_movements"}.issubset(TENANT_SCOPED_COLLECTIONS)
 
 
 class RecordingCollection:

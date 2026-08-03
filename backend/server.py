@@ -851,6 +851,37 @@ class LeadUpdate(BaseModel):
     products: Optional[List[LeadProduct]] = None
 
 
+class SaleLineInput(BaseModel):
+    product_id: str = Field(min_length=1, max_length=120)
+    quantity: int = Field(default=1, ge=1, le=100_000)
+    unit_price: Optional[float] = Field(default=None, ge=0)
+
+
+class SaleCreateRequest(BaseModel):
+    contact_id: Optional[str] = Field(default=None, max_length=120)
+    lead_id: Optional[str] = Field(default=None, max_length=120)
+    customer_name: Optional[str] = Field(default=None, max_length=240)
+    notes: Optional[str] = Field(default=None, max_length=2_000)
+    lines: List[SaleLineInput] = Field(min_length=1, max_length=100)
+
+
+class SalePaymentRequest(BaseModel):
+    amount: float = Field(gt=0)
+    method: Literal["cash", "transfer", "card", "mercadopago", "other"]
+    reference: Optional[str] = Field(default=None, max_length=240)
+
+
+class SaleCancelRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class InventoryAdjustmentRequest(BaseModel):
+    product_id: str = Field(min_length=1, max_length=120)
+    quantity_delta: int = Field(ge=-1_000_000, le=1_000_000)
+    reason: Literal["purchase", "adjustment", "damage", "return", "initial"]
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+
 class Conversation(BaseModel):
     id: str = Field(default_factory=lambda: new_id("conv"))
     contact_id: str
@@ -4705,6 +4736,28 @@ async def get_contact(contact_id: str, user: User = Depends(require_perm("crm_vi
     if not doc:
         raise HTTPException(status_code=404, detail="Contact not found")
     return Contact(**doc)
+
+
+@api_router.get("/contacts/{contact_id}/360")
+async def get_contact_360(
+    contact_id: str,
+    activity_limit: int = Query(default=150, ge=1, le=500),
+    user: User = Depends(require_perm("crm_view")),
+):
+    """Return the unified, permission-aware customer record."""
+    from customer360 import build_customer_360
+
+    permissions = set(await get_role_permissions(user.role))
+    result = await build_customer_360(
+        db,
+        contact_id,
+        user_id=user.user_id,
+        permissions=permissions,
+        activity_limit=activity_limit,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return result
 
 
 @api_router.patch("/contacts/{contact_id}", response_model=Contact)
@@ -8614,12 +8667,14 @@ async def catalog_get(product_id: str, user: User = Depends(require_perm("catalo
 async def catalog_create(payload: dict = Body(...),
                          user: User = Depends(require_catalog_writer)):
     from catalog import create_product
+    from commerce import record_initial_inventory
     try:
         doc = await create_product(db, payload, user_id=user.user_id)
     except ValueError as e:
         msg = str(e)
         code = 409 if "SKU" in msg else 400
         raise HTTPException(code, msg)
+    await record_initial_inventory(db, doc, user_id=user.user_id)
     return doc
 
 
@@ -8694,6 +8749,165 @@ async def catalog_stats(user: User = Depends(require_perm("catalog_view"))):
         "by_category": by_cat,
         "last_updated": (last[0]["updated_at"] if last else None),
     }
+
+
+# ---------------------------------------------------------------------------
+# Sales and transactional inventory
+# ---------------------------------------------------------------------------
+
+async def _can_manage_sale(sale: dict, user: User) -> bool:
+    permissions = await get_role_permissions(user.role)
+    return permission_granted(permissions, "crm_admin") or sale.get("created_by") == user.user_id
+
+
+@api_router.get("/sales")
+async def sales_list(
+    status: Optional[str] = None,
+    contact_id: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(require_perm("crm_view")),
+):
+    from commerce import CommerceError, list_sales
+    permissions = await get_role_permissions(user.role)
+    owner = None if permission_granted(permissions, "crm_admin") else user.user_id
+    try:
+        return await list_sales(
+            db, status=status, contact_id=contact_id, created_by=owner,
+            limit=limit, offset=offset,
+        )
+    except CommerceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@api_router.get("/sales/summary")
+async def sales_get_summary(user: User = Depends(require_perm("crm_view"))):
+    from commerce import sales_summary
+    permissions = await get_role_permissions(user.role)
+    owner = None if permission_granted(permissions, "crm_admin") else user.user_id
+    return await sales_summary(db, created_by=owner)
+
+
+@api_router.get("/sales/products")
+async def sales_available_products(user: User = Depends(require_perm("crm_view"))):
+    """Minimal active catalog projection needed to compose a sale."""
+    from catalog import product_view
+    products = await db.products.find(
+        {"deleted_at": None, "active": True},
+        {"_id": 0},
+    ).sort("name", 1).to_list(500)
+    return [product_view(product) for product in products]
+
+
+@api_router.post("/sales")
+async def sales_create(
+    payload: SaleCreateRequest,
+    user: User = Depends(require_perm("crm_use")),
+):
+    from commerce import CommerceError, create_sale_draft
+    permissions = await get_role_permissions(user.role)
+    if any(line.unit_price is not None for line in payload.lines) \
+            and not permission_granted(permissions, "crm_admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Sólo quien administra Ventas puede modificar precios manualmente",
+        )
+    try:
+        return await create_sale_draft(db, payload.model_dump(), user_id=user.user_id)
+    except CommerceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@api_router.get("/sales/{sale_id}")
+async def sales_get(sale_id: str, user: User = Depends(require_perm("crm_view"))):
+    from commerce import get_sale
+    sale = await get_sale(db, sale_id)
+    if not sale:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    if not await _can_manage_sale(sale, user):
+        raise HTTPException(status_code=403, detail="No podés ver una venta de otra persona")
+    return sale
+
+
+@api_router.post("/sales/{sale_id}/confirm")
+async def sales_confirm(sale_id: str, user: User = Depends(require_perm("crm_use"))):
+    from commerce import CommerceError, confirm_sale, get_sale
+    current = await get_sale(db, sale_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    if not await _can_manage_sale(current, user):
+        raise HTTPException(status_code=403, detail="No podés confirmar una venta de otra persona")
+    try:
+        return await confirm_sale(db, sale_id, user_id=user.user_id)
+    except CommerceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@api_router.post("/sales/{sale_id}/payments")
+async def sales_add_payment(
+    sale_id: str,
+    payload: SalePaymentRequest,
+    user: User = Depends(require_perm("crm_use")),
+):
+    from commerce import CommerceError, add_payment, get_sale
+    current = await get_sale(db, sale_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    if not await _can_manage_sale(current, user):
+        raise HTTPException(status_code=403, detail="No podés cobrar una venta de otra persona")
+    try:
+        return await add_payment(
+            db, sale_id, amount=payload.amount, method=payload.method,
+            reference=payload.reference, user_id=user.user_id,
+        )
+    except CommerceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@api_router.post("/sales/{sale_id}/cancel")
+async def sales_cancel(
+    sale_id: str,
+    payload: SaleCancelRequest,
+    user: User = Depends(require_perm("crm_use")),
+):
+    from commerce import CommerceError, cancel_sale, get_sale
+    current = await get_sale(db, sale_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    if not await _can_manage_sale(current, user):
+        raise HTTPException(status_code=403, detail="No podés cancelar una venta de otra persona")
+    try:
+        return await cancel_sale(db, sale_id, reason=payload.reason.strip(), user_id=user.user_id)
+    except CommerceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@api_router.get("/inventory/movements")
+async def inventory_list_movements(
+    product_id: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(require_perm("catalog_view")),
+):
+    from commerce import list_inventory_movements
+    return await list_inventory_movements(
+        db, product_id=product_id, limit=limit, offset=offset,
+    )
+
+
+@api_router.post("/inventory/adjustments")
+async def inventory_adjust(
+    payload: InventoryAdjustmentRequest,
+    user: User = Depends(require_perm("catalog_admin")),
+):
+    from commerce import CommerceError, adjust_inventory
+    try:
+        return await adjust_inventory(
+            db, product_id=payload.product_id, quantity_delta=payload.quantity_delta,
+            reason=payload.reason, notes=payload.notes, user_id=user.user_id,
+        )
+    except CommerceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 async def _can_use_bot_for_conv(conv: dict, user: User) -> bool:
@@ -10250,6 +10464,34 @@ async def _ensure_indexes() -> None:
             [("organization_id", 1), ("whatsapp_id", 1)],
             sparse=True, name="ix_org_contacts_whatsapp_id",
         )
+        await db.leads.create_index(
+            [("organization_id", 1), ("contact_id", 1), ("updated_at", -1)],
+            name="ix_org_leads_contact_updated",
+        )
+        await db.conversations.create_index(
+            [("organization_id", 1), ("contact_id", 1), ("last_message_at", -1)],
+            name="ix_org_conversations_contact_last_message",
+        )
+        await db.messages.create_index(
+            [("organization_id", 1), ("conversation_id", 1), ("created_at", -1)],
+            name="ix_org_messages_conversation_created",
+        )
+        await db.notes.create_index(
+            [("organization_id", 1), ("lead_id", 1), ("created_at", -1)],
+            name="ix_org_notes_lead_created",
+        )
+        await db.tasks.create_index(
+            [("organization_id", 1), ("lead_id", 1), ("created_at", -1)],
+            name="ix_org_tasks_lead_created",
+        )
+        await db.appointments.create_index(
+            [("organization_id", 1), ("contact_id", 1), ("start_time", -1)],
+            name="ix_org_appointments_contact_start",
+        )
+        await db.bot_events.create_index(
+            [("organization_id", 1), ("conversation_id", 1), ("created_at", -1)],
+            name="ix_org_bot_events_conversation_created",
+        )
         await db.bot_events.create_index(
             [("organization_id", 1), ("triggered_by_message_id", 1)],
             unique=True, name="ux_org_bot_events_trigger",
@@ -10270,6 +10512,26 @@ async def _ensure_indexes() -> None:
         await db.products.create_index([("organization_id", 1), ("name", 1)], name="ix_org_products_name")
         await db.products.create_index([("organization_id", 1), ("category", 1)], name="ix_org_products_category")
         await db.products.create_index([("organization_id", 1), ("tags", 1)], name="ix_org_products_tags")
+        await db.sales.create_index(
+            [("organization_id", 1), ("sale_id", 1)], unique=True,
+            name="ux_org_sales_id",
+        )
+        await db.sales.create_index(
+            [("organization_id", 1), ("status", 1), ("created_at", -1)],
+            name="ix_org_sales_status_created",
+        )
+        await db.sales.create_index(
+            [("organization_id", 1), ("contact_id", 1), ("created_at", -1)],
+            name="ix_org_sales_contact_created",
+        )
+        await db.inventory_movements.create_index(
+            [("organization_id", 1), ("movement_id", 1)], unique=True,
+            name="ux_org_inventory_movement_id",
+        )
+        await db.inventory_movements.create_index(
+            [("organization_id", 1), ("product_id", 1), ("created_at", -1)],
+            name="ix_org_inventory_product_created",
+        )
         await db.password_reset_tokens.create_index("token_hash", unique=True, name="ux_password_reset_token_hash")
         await db.password_reset_tokens.create_index(
             "expires_at", expireAfterSeconds=0, name="ttl_password_reset_expires"
