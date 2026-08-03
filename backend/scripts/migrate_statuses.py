@@ -1,4 +1,5 @@
 import asyncio
+import os
 from motor.motor_asyncio import AsyncIOMotorClient
 
 SPANISH_TO_ENGLISH_STATUS = {
@@ -14,7 +15,9 @@ SPANISH_TO_ENGLISH_STATUS = {
 }
 
 async def main():
-    uri = "mongodb+srv://Latus_CRM:Fenix2020@latus.gf84sra.mongodb.net/?appName=Latus"
+    uri = (os.environ.get("MONGO_URL") or "").strip()
+    if not uri:
+        raise RuntimeError("MONGO_URL no está configurado")
     client = AsyncIOMotorClient(uri)
     
     for db_name in ["Latus", "Latus_CRM"]:

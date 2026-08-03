@@ -2,6 +2,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Respons
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 import os
 import base64
@@ -19,6 +20,7 @@ import hmac
 import json
 import math
 import re
+import ipaddress
 from pathlib import Path
 from dataclasses import replace
 from email.message import EmailMessage
@@ -129,6 +131,7 @@ def validate_environment_guardrails() -> None:
             "APP_BASE_URL": app_base_url,
             "PUBLIC_BASE_URL": public_base_url,
             "CORS_ORIGINS": ",".join(cors_origins),
+            "APP_ENCRYPTION_KEY": (os.environ.get("APP_ENCRYPTION_KEY") or "").strip(),
         }.items() if not value
     ]
     if missing:
@@ -247,7 +250,13 @@ class _DBProxy:
 
 db = _DBProxy()
 
-app = FastAPI(title="Latus CRM API", openapi_url="/api/openapi.json", docs_url="/api/docs", redoc_url="/api/redoc")
+_docs_enabled = _environment_name() == "development"
+app = FastAPI(
+    title="Latus CRM API",
+    openapi_url="/api/openapi.json" if _docs_enabled else None,
+    docs_url="/api/docs" if _docs_enabled else None,
+    redoc_url="/api/redoc" if _docs_enabled else None,
+)
 api_router = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -283,6 +292,16 @@ def _strip_oid(doc: dict | None) -> dict | None:
     if isinstance(doc, dict) and "_id" in doc:
         doc = {k: v for k, v in doc.items() if k != "_id"}
     return doc
+
+
+def _safe_external_https_url(value: Any) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text or len(text) > 2000:
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+        return None
+    return text
 
 
 _INTERNAL_ORGANIZATION_FIELDS = {
@@ -763,12 +782,12 @@ class Contact(BaseModel):
 
 
 class ContactCreate(BaseModel):
-    name: str
-    phone: str
-    email: Optional[str] = None
-    company: Optional[str] = None
-    tags: List[str] = []
-    notes: Optional[str] = None
+    name: str = Field(min_length=1, max_length=200)
+    phone: str = Field(min_length=3, max_length=40)
+    email: Optional[str] = Field(default=None, max_length=320)
+    company: Optional[str] = Field(default=None, max_length=200)
+    tags: List[str] = Field(default_factory=list, max_length=50)
+    notes: Optional[str] = Field(default=None, max_length=5000)
 
 
 class ContactUpdate(BaseModel):
@@ -865,8 +884,8 @@ class Message(BaseModel):
 
 
 class MessageCreate(BaseModel):
-    body: str
-    sender_type: str = "agent"
+    body: str = Field(min_length=1, max_length=4000)
+    sender_type: Literal["agent"] = "agent"
 
 
 class Task(BaseModel):
@@ -882,8 +901,8 @@ class Task(BaseModel):
 
 
 class TaskCreate(BaseModel):
-    title: str
-    description: Optional[str] = None
+    title: str = Field(min_length=1, max_length=300)
+    description: Optional[str] = Field(default=None, max_length=5000)
     lead_id: Optional[str] = None
     due_date: Optional[str] = None
     status: str = "todo"
@@ -936,9 +955,9 @@ class Appointment(BaseModel):
 class AppointmentCreate(BaseModel):
     contact_id: Optional[str] = None
     lead_id: Optional[str] = None
-    title: str
-    description: Optional[str] = None
-    location: Optional[str] = None
+    title: str = Field(min_length=1, max_length=300)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    location: Optional[str] = Field(default=None, max_length=500)
     event_type: Literal["appointment", "event"] = "appointment"
     start_time: str
     end_time: str
@@ -986,7 +1005,7 @@ class Note(BaseModel):
 
 class NoteCreate(BaseModel):
     lead_id: str
-    body: str
+    body: str = Field(min_length=1, max_length=5000)
 
 
 class Tag(BaseModel):
@@ -1031,6 +1050,35 @@ def _request_session_token(request: Request) -> Optional[str]:
     return token
 
 
+def _session_token_hash(token: str) -> str:
+    """Store session credentials as one-way hashes, like passwords."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+async def _find_session_by_token(token: str) -> Optional[dict]:
+    sessions = _raw_collection("user_sessions")
+    session = await sessions.find_one(
+        {"session_token_hash": _session_token_hash(token)}, {"_id": 0}
+    )
+    if session:
+        return session
+    # Backwards-compatible read while existing deployments migrate.
+    return await sessions.find_one({"session_token": token}, {"_id": 0})
+
+
+def _session_document_filter(session: dict) -> dict:
+    if session.get("session_token_hash"):
+        return {"session_token_hash": session["session_token_hash"]}
+    return {"session_token": session.get("session_token")}
+
+
+async def _delete_session_by_token(token: str) -> None:
+    sessions = _raw_collection("user_sessions")
+    await sessions.delete_one({"session_token_hash": _session_token_hash(token)})
+    # Remove a possible pre-migration record too.
+    await sessions.delete_one({"session_token": token})
+
+
 async def _membership_for_user(user_id: str, organization_id: Optional[str] = None) -> Optional[dict]:
     memberships = _raw_collection("memberships")
     query: dict[str, Any] = {"user_id": user_id, "status": "active"}
@@ -1057,7 +1105,7 @@ async def _resolve_session_organization(session: dict, user_doc: Optional[dict] 
             return None
     organization_id = membership["organization_id"]
     await _raw_collection("user_sessions").update_one(
-        {"session_token": session["session_token"]},
+        _session_document_filter(session),
         {"$set": {"organization_id": organization_id}},
     )
     return organization_id
@@ -1092,7 +1140,7 @@ async def _decorate_user_for_organization(user_doc: dict, organization_id: str) 
 
 
 def _subscription_route_is_exempt(request: Request) -> bool:
-    path = request.url.path
+    path = str(request.scope.get("path") or "")
     if path.startswith("/api/platform/") or path.startswith("/api/billing/"):
         return True
     if path in {
@@ -1111,7 +1159,7 @@ async def get_current_user(request: Request) -> User:
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    session = await _raw_collection("user_sessions").find_one({"session_token": token}, {"_id": 0})
+    session = await _find_session_by_token(token)
     if not session:
         raise HTTPException(status_code=401, detail="Invalid session")
 
@@ -1180,6 +1228,9 @@ async def require_write(user: User = Depends(get_current_user)) -> User:
 
 @api_router.post("/auth/session")
 async def process_session(request: Request, response: Response):
+    await _enforce_request_rate_limit(
+        request, "auth:oauth-session", limit=20, window_seconds=600,
+    )
     body = await request.json()
     session_id = body.get("session_id")
     if not session_id:
@@ -1218,6 +1269,11 @@ async def process_session(request: Request, response: Response):
         await db.users.update_one({"user_id": user_id}, {"$set": upd})
         organization_id = await _ensure_existing_user_organization({**existing, **upd})
     else:
+        if _environment_name() != "development":
+            raise HTTPException(
+                status_code=403,
+                detail="La cuenta todavía no fue habilitada por un administrador",
+            )
         user_id = new_id("user")
         real_users = await db.users.count_documents({"is_demo": {"$ne": True}, "deleted_at": {"$exists": False}})
         role = "admin" if real_users == 0 else "agent"
@@ -1240,9 +1296,9 @@ async def process_session(request: Request, response: Response):
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
     await db.user_sessions.insert_one({
         "user_id": user_id,
-        "session_token": session_token,
+        "session_token_hash": _session_token_hash(session_token),
         "organization_id": organization_id,
-        "expires_at": expires_at.isoformat(),
+        "expires_at": expires_at,
         "created_at": now_iso(),
     })
 
@@ -1490,9 +1546,12 @@ async def create_organization(payload: OrganizationCreate, request: Request,
     })
     token = _request_session_token(request)
     if token:
-        await _raw_collection("user_sessions").update_one(
-            {"session_token": token}, {"$set": {"organization_id": organization["organization_id"]}}
-        )
+        active_session = await _find_session_by_token(token)
+        if active_session:
+            await _raw_collection("user_sessions").update_one(
+                _session_document_filter(active_session),
+                {"$set": {"organization_id": organization["organization_id"]}},
+            )
     set_organization_id(organization["organization_id"])
     await _seed_roles()
     return {**_strip_oid(organization), "role": "admin", "is_current": True}
@@ -1512,8 +1571,11 @@ async def switch_organization(organization_id: str, request: Request,
     token = _request_session_token(request)
     if not token:
         raise HTTPException(status_code=401, detail="Sesión no encontrada")
+    active_session = await _find_session_by_token(token)
+    if not active_session or active_session.get("user_id") != user.user_id:
+        raise HTTPException(status_code=401, detail="Sesión no encontrada")
     await _raw_collection("user_sessions").update_one(
-        {"session_token": token, "user_id": user.user_id},
+        _session_document_filter(active_session),
         {"$set": {"organization_id": organization_id, "updated_at": now_iso()}},
     )
     set_organization_id(organization_id)
@@ -3311,17 +3373,24 @@ async def platform_create_organization(
                 })
             admin_user_info = {"user_id": user_id, "email": admin_email, "created": False}
         else:
-            raw_pwd = payload.admin_password or "Latus12345!"
+            raw_pwd = payload.admin_password or generate_temp_password(20)
+            ok, msg = validate_password_policy(raw_pwd)
+            if not ok:
+                raise HTTPException(status_code=400, detail=msg)
             user_id = new_id("user")
             hashed_pwd = hash_password(raw_pwd)
             user_doc = {
                 "user_id": user_id,
                 "email": admin_email,
                 "name": (payload.admin_name or "").strip() or name,
-                "hashed_password": hashed_pwd,
+                "password_hash": hashed_pwd,
                 "role": "admin",
+                "active": True,
+                "auth_provider": "local",
+                "is_demo": False,
                 "default_organization_id": org_doc["organization_id"],
                 "created_at": now.isoformat(),
+                "updated_at": now.isoformat(),
             }
             await _raw_collection("users").insert_one(user_doc)
             await _raw_collection("memberships").insert_one({
@@ -3441,7 +3510,7 @@ async def logout(request: Request, response: Response):
         if auth.startswith("Bearer "):
             token = auth[7:]
     if token:
-        await db.user_sessions.delete_one({"session_token": token})
+        await _delete_session_by_token(token)
     response.delete_cookie("session_token", path="/")
     return {"ok": True}
 
@@ -3452,7 +3521,7 @@ async def logout(request: Request, response: Response):
 
 from utils.passwords import (  # noqa: E402
     hash_password, verify_password, validate_password_policy,
-    generate_temp_password, login_too_many, login_register_failure, login_reset,
+    generate_temp_password,
 )
 
 
@@ -3489,9 +3558,9 @@ async def _issue_session(user_id: str, response: Response) -> str:
     organization_id = await _ensure_existing_user_organization(user_doc)
     await db.user_sessions.insert_one({
         "user_id": user_id,
-        "session_token": session_token,
+        "session_token_hash": _session_token_hash(session_token),
         "organization_id": organization_id,
-        "expires_at": expires_at.isoformat(),
+        "expires_at": expires_at,
         "created_at": now_iso(),
     })
     response.set_cookie(
@@ -3626,7 +3695,7 @@ async def create_password_reset_token(*, user_id: str, purpose: str = "reset_pas
         "purpose": purpose,
         "token_hash": _hash_reset_token(token),
         "created_at": now_iso(),
-        "expires_at": expires_at.isoformat(),
+        "expires_at": expires_at,
         "used_at": None,
         "revoked_at": None,
     })
@@ -3702,25 +3771,26 @@ async def send_welcome_email(*, user_doc: dict, auth_provider: str,
 
 
 @api_router.post("/auth/login", response_model=User)
-async def auth_login(payload: LocalLoginBody, response: Response):
+async def auth_login(payload: LocalLoginBody, request: Request, response: Response):
     email = (payload.email or "").lower().strip()
     if not email or not payload.password:
         raise HTTPException(status_code=400, detail="Email y contraseña requeridos")
-    if login_too_many(email):
-        raise HTTPException(status_code=429, detail="Demasiados intentos, esperá unos minutos")
+    email_key = hashlib.sha256(email.encode("utf-8")).hexdigest()[:24]
+    await _enforce_request_rate_limit(
+        request, "auth:login:ip", limit=30, window_seconds=300,
+    )
+    await _enforce_request_rate_limit(
+        request, f"auth:login:account:{email_key}", limit=8, window_seconds=300,
+    )
     user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user or user.get("deleted_at") or not user.get("active", True):
-        login_register_failure(email)
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
     ap = (user.get("auth_provider") or "google").lower()
     if ap not in ("local", "both"):
-        login_register_failure(email)
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
     hashed = user.get("password_hash") or ""
     if not verify_password(payload.password, hashed):
-        login_register_failure(email)
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
-    login_reset(email)
     await _issue_session(user["user_id"], response)
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"last_login_at": now_iso()}})
     user_doc = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
@@ -3728,7 +3798,11 @@ async def auth_login(payload: LocalLoginBody, response: Response):
 
 
 @api_router.post("/auth/password/change")
-async def auth_change_password(payload: ChangePasswordBody, user: User = Depends(get_current_user)):
+async def auth_change_password(
+    payload: ChangePasswordBody,
+    response: Response,
+    user: User = Depends(get_current_user),
+):
     full = await db.users.find_one({"user_id": user.user_id}, {"_id": 0})
     if not full:
         raise HTTPException(status_code=401, detail="Usuario no encontrado")
@@ -3744,6 +3818,10 @@ async def auth_change_password(payload: ChangePasswordBody, user: User = Depends
         {"user_id": user.user_id},
         {"$set": {"password_hash": hash_password(payload.new_password), "updated_at": now_iso()}},
     )
+    # A password change must revoke every previously issued session. The
+    # current browser receives a freshly generated credential.
+    await _raw_collection("user_sessions").delete_many({"user_id": user.user_id})
+    await _issue_session(user.user_id, response)
     return {"ok": True}
 
 
@@ -3752,6 +3830,13 @@ async def auth_forgot_password(payload: ForgotPasswordBody, request: Request):
     email = (payload.email or "").lower().strip()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Email inválido")
+    email_key = hashlib.sha256(email.encode("utf-8")).hexdigest()[:24]
+    await _enforce_request_rate_limit(
+        request, "auth:forgot:ip", limit=20, window_seconds=3600,
+    )
+    await _enforce_request_rate_limit(
+        request, f"auth:forgot:account:{email_key}", limit=5, window_seconds=3600,
+    )
     user = await db.users.find_one({"email": email, "deleted_at": None, "active": True}, {"_id": 0})
     if user:
         ap = (user.get("auth_provider") or "google").lower()
@@ -3763,7 +3848,10 @@ async def auth_forgot_password(payload: ForgotPasswordBody, request: Request):
 
 
 @api_router.post("/auth/password/reset")
-async def auth_reset_password(payload: ResetPasswordBody):
+async def auth_reset_password(payload: ResetPasswordBody, request: Request):
+    await _enforce_request_rate_limit(
+        request, "auth:reset:ip", limit=15, window_seconds=3600,
+    )
     if not payload.token:
         raise HTTPException(status_code=400, detail="Token inválido")
     ok, msg = validate_password_policy(payload.new_password)
@@ -3786,11 +3874,17 @@ async def auth_reset_password(payload: ResetPasswordBody):
     ap = (user.get("auth_provider") or "google").lower()
     if ap not in ("local", "both"):
         raise HTTPException(status_code=400, detail="Este usuario no usa contraseña local")
+    claimed_at = now_iso()
+    claim_result = await db.password_reset_tokens.update_one(
+        {"id": doc["id"], "used_at": None, "revoked_at": None},
+        {"$set": {"used_at": claimed_at}},
+    )
+    if claim_result is not None and getattr(claim_result, "modified_count", 1) != 1:
+        raise HTTPException(status_code=400, detail="El enlace de recuperación ya fue usado")
     await db.users.update_one(
         {"user_id": user["user_id"]},
         {"$set": {"password_hash": hash_password(payload.new_password), "updated_at": now_iso()}},
     )
-    await db.password_reset_tokens.update_one({"id": doc["id"]}, {"$set": {"used_at": now_iso()}})
     await db.user_sessions.delete_many({"user_id": user["user_id"]})
     return {"ok": True}
 
@@ -4249,6 +4343,7 @@ async def admin_reset_password(uid: str, request: Request,
         "password_reset_by": admin.user_id,
         "password_reset_at": now_iso(),
     }})
+    await _raw_collection("user_sessions").delete_many({"user_id": uid})
     logger.info("admin reset password user=%s by=%s", uid, admin.user_id)
     email_sent = await send_password_recovery_email(user_doc=target, request=request)
     # The generated password is only available in this response, so the admin
@@ -4284,7 +4379,12 @@ async def admin_delete_user(uid: str, admin: User = Depends(require_perm("users_
 
 from whatsapp import wa_config_effective, env_values as _wa_env_values  # noqa: E402
 from whatsapp.storage import per_field_sources, save_db_config, SENSITIVE_FIELDS as _WA_SENSITIVE  # noqa: E402
-from utils.crypto import is_available as crypto_available  # noqa: E402
+from utils.crypto import (  # noqa: E402
+    EncryptionUnavailable,
+    decrypt as decrypt_secret,
+    encrypt as encrypt_secret,
+    is_available as crypto_available,
+)
 
 
 class WhatsAppConfigUpdate(BaseModel):
@@ -5053,8 +5153,17 @@ async def get_app_settings() -> dict:
     s = dict(DEFAULT_SETTINGS)
     if doc:
         for k in DEFAULT_SETTINGS:
-            if k in doc and doc[k] is not None:
+            if k != "smtp_password" and k in doc and doc[k] is not None:
                 s[k] = doc[k]
+        if doc.get("smtp_password_enc"):
+            try:
+                s["smtp_password"] = decrypt_secret(doc["smtp_password_enc"])
+            except EncryptionUnavailable:
+                logger.error("No se pudo descifrar la credencial SMTP de la empresa activa")
+                s["smtp_password"] = ""
+        elif doc.get("smtp_password"):
+            # Compatibility until the startup migration rewrites the record.
+            s["smtp_password"] = doc["smtp_password"]
     s["task_statuses"] = _normalize_task_statuses(s.get("task_statuses"))
     s["catalog_categories"] = _normalize_catalog_categories(s.get("catalog_categories"))
     return s
@@ -5118,7 +5227,17 @@ async def update_settings(payload: SettingsUpdate, admin: User = Depends(require
         update["smtp_use_ssl"] = False
     if "smtp_password" in update and update["smtp_password"] == "":
         update.pop("smtp_password")
-    await db.settings.update_one({"key": "app"}, {"$set": {"key": "app", **update}}, upsert=True)
+    unset_fields: dict[str, str] = {}
+    if update.get("smtp_password"):
+        try:
+            update["smtp_password_enc"] = encrypt_secret(update.pop("smtp_password"))
+        except EncryptionUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        unset_fields["smtp_password"] = ""
+    mongo_update: dict[str, Any] = {"$set": {"key": "app", **update}}
+    if unset_fields:
+        mongo_update["$unset"] = unset_fields
+    await db.settings.update_one({"key": "app"}, mongo_update, upsert=True)
     return _admin_settings_view(await get_app_settings())
 
 
@@ -5328,12 +5447,16 @@ async def whatsapp_webhook_event(request: Request):
         return {"ok": True}
     set_organization_id(route["organization_id"])
     cfg = await wa_config_effective(db)
-    # Signature check (only enforced when APP_SECRET is configured)
+    # Signature verification is mandatory outside local development. A
+    # missing secret must fail closed; otherwise anyone can impersonate Meta.
     sig_header = request.headers.get("X-Hub-Signature-256") or request.headers.get("x-hub-signature-256")
     if cfg.app_secret:
         if not verify_signature(cfg.app_secret, raw, sig_header):
             logger.warning("WhatsApp webhook signature mismatch")
             raise HTTPException(status_code=403, detail="invalid signature")
+    elif _environment_name() != "development":
+        logger.error("WhatsApp APP_SECRET missing; rejecting unsigned webhook")
+        raise HTTPException(status_code=503, detail="WhatsApp webhook signature is not configured")
     else:
         logger.warning("WhatsApp APP_SECRET not configured - signature verification skipped (dev mode)")
 
@@ -5461,7 +5584,7 @@ async def _ingest_inbound_message(m) -> None:
         if not has_existing_campaign:
             upd["lead_source"] = "Meta Ads"
             upd["meta_ad_id"] = referral.get("source_id")
-            upd["meta_ad_url"] = referral.get("source_url")
+            upd["meta_ad_url"] = _safe_external_https_url(referral.get("source_url"))
             upd["meta_source_type"] = referral.get("source_type")
             upd["meta_ad_title"] = referral.get("headline")
             upd["meta_ad_body"] = referral.get("body")
@@ -6330,11 +6453,29 @@ class PublicWebChatSendRequest(BaseModel):
 _WEBCHAT_RATE_BUCKETS: dict[str, list[float]] = {}
 
 
-def _enforce_webchat_rate_limit(request: Request, scope: str, *, limit: int, window_seconds: int) -> None:
+def _request_client_identifier(request: Request) -> str:
+    """Resolve the last public address added to the proxy chain.
+
+    Reading the first X-Forwarded-For value lets a client prepend arbitrary
+    addresses and evade throttling.
+    """
+    candidates = [
+        item.strip()
+        for item in (request.headers.get("x-forwarded-for") or "").split(",")
+        if item.strip()
+    ]
+    for candidate in reversed(candidates):
+        try:
+            parsed = ipaddress.ip_address(candidate)
+            if not (parsed.is_private or parsed.is_loopback or parsed.is_reserved):
+                return str(parsed)
+        except ValueError:
+            continue
+    return request.client.host if request.client else "unknown"
+
+
+def _enforce_memory_rate_limit(bucket_key: str, *, limit: int, window_seconds: int) -> None:
     now = datetime.now(timezone.utc).timestamp()
-    forwarded_for = (request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
-    client_host = forwarded_for or (request.client.host if request.client else "unknown")
-    bucket_key = hashlib.sha256(f"{scope}:{client_host}".encode()).hexdigest()
     recent = [ts for ts in _WEBCHAT_RATE_BUCKETS.get(bucket_key, []) if now - ts < window_seconds]
     if len(recent) >= limit:
         raise HTTPException(429, "Demasiadas solicitudes. Esperá un momento y volvé a intentar")
@@ -6345,6 +6486,41 @@ def _enforce_webchat_rate_limit(request: Request, scope: str, *, limit: int, win
         for key, values in list(_WEBCHAT_RATE_BUCKETS.items())[:2_000]:
             if not values or values[-1] < stale_before:
                 _WEBCHAT_RATE_BUCKETS.pop(key, None)
+
+
+async def _enforce_request_rate_limit(
+    request: Request, scope: str, *, limit: int, window_seconds: int,
+) -> None:
+    client_id = _request_client_identifier(request)
+    bucket_number = int(datetime.now(timezone.utc).timestamp()) // window_seconds
+    bucket_key = hashlib.sha256(
+        f"{scope}:{client_id}:{bucket_number}".encode("utf-8")
+    ).hexdigest()
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=window_seconds * 2)
+    try:
+        doc = await _raw_collection("security_rate_limits").find_one_and_update(
+            {"_id": bucket_key},
+            {
+                "$inc": {"count": 1},
+                "$setOnInsert": {
+                    "category": scope.split(":", 1)[0][:40],
+                    "scope_hash": hashlib.sha256(scope.encode("utf-8")).hexdigest(),
+                    "created_at": datetime.now(timezone.utc),
+                    "expires_at": expires_at,
+                },
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+    except (AttributeError, TypeError):
+        # Lightweight test adapters and local development retain an in-memory
+        # fallback. Production Motor supports the atomic operation above.
+        _enforce_memory_rate_limit(
+            bucket_key, limit=limit, window_seconds=window_seconds,
+        )
+        return
+    if int((doc or {}).get("count") or 0) > limit:
+        raise HTTPException(429, "Demasiadas solicitudes. Esperá un momento y volvé a intentar")
 
 
 async def _activate_webchat_tenant(*, session_token: Optional[str] = None,
@@ -6445,7 +6621,7 @@ async def public_webchat_session(payload: PublicWebChatSessionRequest, request: 
     await _activate_webchat_tenant(
         session_token=session_token or None, organization_key=organization_key or None,
     )
-    _enforce_webchat_rate_limit(
+    await _enforce_request_rate_limit(
         request, f"session:{session_token or organization_key}", limit=12, window_seconds=600,
     )
     bot_settings = await _load_enabled_webchat_settings()
@@ -6541,7 +6717,7 @@ async def public_webchat_session(payload: PublicWebChatSessionRequest, request: 
 async def public_webchat_get_messages(session_token: str, request: Request):
     """Retrieves message history for a web chat session."""
     await _activate_webchat_tenant(session_token=session_token)
-    _enforce_webchat_rate_limit(request, f"poll:{session_token}", limit=90, window_seconds=60)
+    await _enforce_request_rate_limit(request, f"poll:{session_token}", limit=90, window_seconds=60)
     await _load_enabled_webchat_settings()
     conv = await db.conversations.find_one({
         "webchat_session_token": session_token,
@@ -6565,7 +6741,7 @@ async def public_webchat_send_message(session_token: str, payload: PublicWebChat
                                       request: Request, background_tasks: BackgroundTasks):
     """Receives an inbound message from the web chat visitor and triggers the AI bot pipeline."""
     await _activate_webchat_tenant(session_token=session_token)
-    _enforce_webchat_rate_limit(request, f"send:{session_token}", limit=20, window_seconds=60)
+    await _enforce_request_rate_limit(request, f"send:{session_token}", limit=20, window_seconds=60)
     await _load_enabled_webchat_settings()
     conv = await db.conversations.find_one({
         "webchat_session_token": session_token,
@@ -6676,7 +6852,7 @@ async def send_webchat_whatsapp_summary_internal(db, conv_id: str) -> dict:
 @api_router.post("/public/webchat/{session_token}/finish")
 async def public_webchat_finish(session_token: str, request: Request):
     await _activate_webchat_tenant(session_token=session_token)
-    _enforce_webchat_rate_limit(request, f"finish:{session_token}", limit=6, window_seconds=60)
+    await _enforce_request_rate_limit(request, f"finish:{session_token}", limit=6, window_seconds=60)
     conv = await db.conversations.find_one(
         {"webchat_session_token": session_token, "channel": "webchat"}, {"_id": 0},
     )
@@ -9544,22 +9720,9 @@ async def _seed(force: bool = False):
         if not (seed_enabled and previous_demo_users > 0):
             return
         force = True
-    if not force:
-        admin_count = await db.users.count_documents({"role": "admin", "active": True, "deleted_at": None})
-        if admin_count == 0:
-            logger.info("No active admin users found. Bootstrapping default local admin user (admin@latus.test).")
-            await db.users.update_one(
-                {"user_id": "user_local_admin"},
-                {"$set": {
-                    "user_id": "user_local_admin", "email": "admin@latus.test",
-                    "name": "Administrador Local", "role": "admin", "active": True,
-                    "auth_provider": "local", "password_hash": hash_password("Latus1234"),
-                    "is_demo": False, "created_at": now_iso(), "updated_at": now_iso(),
-                }}, upsert=True,
-            )
-        if not seed_enabled:
-            logger.info("_seed skipped: LATUS_SEED_DEMO not set")
-            return
+    if not force and not seed_enabled:
+        logger.info("_seed skipped: LATUS_SEED_DEMO not set")
+        return
 
     from demo_data import build_demo_dataset
 
@@ -9654,7 +9817,7 @@ async def _ensure_default_organization() -> str:
             "user_id": session.get("user_id"), "status": "active",
         }, {"_id": 0})
         await sessions.update_one(
-            {"session_token": session.get("session_token")},
+            _session_document_filter(session),
             {"$set": {"organization_id": (
                 session_membership.get("organization_id") if session_membership else organization_id
             )}},
@@ -9831,6 +9994,41 @@ async def _bootstrap_tenant_data() -> None:
         await _migrate_promote_first_google_admin()
     finally:
         reset_organization_id(token)
+    await _migrate_sensitive_storage()
+
+
+async def _migrate_sensitive_storage() -> None:
+    """Revoke legacy plaintext sessions and encrypt tenant SMTP credentials."""
+    sessions = _raw_collection("user_sessions")
+    # Plaintext bearer credentials may already have been copied into logs or old
+    # test reports. Preserving them as hashes would keep those known credentials
+    # valid, so revoke them once and require a fresh login instead.
+    await sessions.delete_many({"session_token": {"$exists": True}})
+
+    organizations = await _raw_collection("organizations").find(
+        {"status": {"$ne": "deleted"}}, {"_id": 0, "organization_id": 1}
+    ).to_list(10_000)
+    for organization in organizations:
+        organization_id = organization.get("organization_id")
+        if not organization_id:
+            continue
+        context_token = set_organization_id(organization_id)
+        try:
+            settings_doc = await db.settings.find_one({"key": "app"}, {"_id": 0}) or {}
+            plaintext = settings_doc.get("smtp_password")
+            if plaintext and not settings_doc.get("smtp_password_enc"):
+                await db.settings.update_one(
+                    {"key": "app"},
+                    {
+                        "$set": {
+                            "smtp_password_enc": encrypt_secret(str(plaintext)),
+                            "security_migrated_at": now_iso(),
+                        },
+                        "$unset": {"smtp_password": ""},
+                    },
+                )
+        finally:
+            reset_organization_id(context_token)
 
 
 @app.on_event("startup")
@@ -9892,12 +10090,22 @@ async def health_ready():
                 db_error = f"migración multiempresa: {migration_status}"
     except Exception as e:  # pragma: no cover - exercised in deploy
         db_ok = False
-        db_error = f"{type(e).__name__}: {str(e)[:160]}"
+        db_error = (
+            f"{type(e).__name__}: {str(e)[:160]}"
+            if _environment_name() == "development"
+            else "dependencia no disponible"
+        )
     return {"ok": db_ok, "db": "up" if db_ok else f"down ({db_error})",
             "version": APP_VERSION, "migration": migration_status}
 
 
 async def _migrate_promote_first_google_admin() -> None:
+    if not (
+        _environment_name() == "development"
+        and (os.environ.get("LATUS_ALLOW_LEGACY_ADMIN_PROMOTION") or "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    ):
+        return
     """Idempotent migration: if no real Google admin exists, promote the
     earliest-created real Google user to admin.
 
@@ -10016,6 +10224,16 @@ async def _ensure_indexes() -> None:
         await _raw_collection("user_sessions").create_index(
             [("user_id", 1), ("organization_id", 1)], name="ix_sessions_user_org",
         )
+        await _raw_collection("user_sessions").create_index(
+            "session_token_hash", unique=True, sparse=True,
+            name="ux_sessions_token_hash",
+        )
+        await _raw_collection("user_sessions").create_index(
+            "expires_at", expireAfterSeconds=0, name="ttl_sessions_expires",
+        )
+        await _raw_collection("security_rate_limits").create_index(
+            "expires_at", expireAfterSeconds=0, name="ttl_security_rate_limits",
+        )
         await _raw_collection("whatsapp_routes").create_index(
             "phone_number_id", unique=True, name="ux_whatsapp_route_phone",
         )
@@ -10053,7 +10271,9 @@ async def _ensure_indexes() -> None:
         await db.products.create_index([("organization_id", 1), ("category", 1)], name="ix_org_products_category")
         await db.products.create_index([("organization_id", 1), ("tags", 1)], name="ix_org_products_tags")
         await db.password_reset_tokens.create_index("token_hash", unique=True, name="ux_password_reset_token_hash")
-        await db.password_reset_tokens.create_index("expires_at", name="ix_password_reset_expires")
+        await db.password_reset_tokens.create_index(
+            "expires_at", expireAfterSeconds=0, name="ttl_password_reset_expires"
+        )
         await db.appointments.create_index(
             [("organization_id", 1), ("assigned_to", 1), ("start_time", 1)],
             name="ix_org_appointments_assignee_start",
@@ -10470,7 +10690,7 @@ _WRITE_EXEMPT_PATHS = {
 @app.middleware("http")
 async def block_viewer_on_writes(request: Request, call_next):
     method = request.method
-    path = request.url.path
+    path = str(request.scope.get("path") or "")
     is_exempt = path in _WRITE_EXEMPT_PATHS or (
         path.startswith("/api/organizations/") and path.endswith("/switch")
     )
@@ -10482,7 +10702,7 @@ async def block_viewer_on_writes(request: Request, call_next):
                 token = auth[7:]
         if token:
             try:
-                session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+                session = await _find_session_by_token(token)
                 if session:
                     user_doc = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
                     if user_doc:
@@ -10518,10 +10738,14 @@ default_staging_origins = [
     "https://latus-crm-staging.up.railway.app",
 ]
 configured_origins = _split_cors_origins()
+environment_name = _environment_name()
+implicit_origins = (
+    development_origins if environment_name == "development"
+    else default_staging_origins if environment_name == "staging"
+    else []
+)
 origins = list(dict.fromkeys(
-    development_origins
-    + default_staging_origins
-    + configured_origins
+    implicit_origins + configured_origins
 ))
 
 app.add_middleware(
@@ -10533,6 +10757,86 @@ app.add_middleware(
 )
 
 
+def _trusted_request_origin(request: Request) -> Optional[str]:
+    origin = (request.headers.get("origin") or "").strip().rstrip("/")
+    if origin:
+        return origin
+    referer = (request.headers.get("referer") or "").strip()
+    if not referer:
+        return None
+    parsed = urlparse(referer)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+@app.middleware("http")
+async def csrf_and_security_headers(request: Request, call_next):
+    """Protect cross-site cookie sessions and add browser hardening headers."""
+    method = request.method.upper()
+    path = str(request.scope.get("path") or "")
+    has_cookie_session = bool(request.cookies.get("session_token"))
+    has_bearer = (request.headers.get("authorization") or "").startswith("Bearer ")
+    try:
+        content_length = int(request.headers.get("content-length") or "0")
+    except ValueError:
+        content_length = -1
+    max_request_bytes = (
+        64 * 1024 if path.startswith("/api/public/webchat")
+        else 2 * 1024 * 1024 if path.startswith("/api/webhooks/")
+        else 8 * 1024 * 1024
+    )
+    if content_length < 0 or content_length > max_request_bytes:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            {"detail": "La solicitud supera el tamaño permitido"},
+            status_code=413,
+            headers={"Cache-Control": "no-store"},
+        )
+    external_path = (
+        path.startswith("/api/webhooks/")
+        or path.startswith("/api/public/webchat")
+    )
+    if (
+        method in _WRITE_METHODS
+        and has_cookie_session
+        and not has_bearer
+        and not external_path
+    ):
+        request_origin = _trusted_request_origin(request)
+        fetch_site = (request.headers.get("sec-fetch-site") or "").strip().lower()
+        origin_allowed = bool(request_origin and request_origin in origins)
+        missing_browser_origin = not request_origin and (
+            environment_name != "development" or fetch_site == "cross-site"
+        )
+        if not origin_allowed and (request_origin or missing_browser_origin):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                {"detail": "Origen de solicitud no autorizado"}, status_code=403,
+                headers={"Cache-Control": "no-store"},
+            )
+
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()"
+    )
+    if path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+        if environment_name != "development":
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+            )
+    if environment_name != "development":
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload"
+        )
+    return response
+
+
 @app.middleware("http")
 async def organization_context_middleware(request: Request, call_next):
     """Select the session's tenant before any route or permission middleware."""
@@ -10541,20 +10845,19 @@ async def organization_context_middleware(request: Request, call_next):
         session_token = _request_session_token(request)
         organization_id = None
         if session_token:
-            session = await _raw_collection("user_sessions").find_one(
-                {"session_token": session_token}, {"_id": 0}
-            )
+            session = await _find_session_by_token(session_token)
             if session:
                 user_doc = await _raw_collection("users").find_one(
                     {"user_id": session.get("user_id")}, {"_id": 0}
                 )
                 organization_id = await _resolve_session_organization(session, user_doc)
         
-        is_public_webchat = request.url.path.startswith("/api/public/webchat")
+        request_path = str(request.scope.get("path") or "")
+        is_public_webchat = request_path.startswith("/api/public/webchat")
         if not organization_id and not is_public_webchat and (
-            request.url.path.startswith("/api/public/")
-            or request.url.path.startswith("/api/webhook/")
-            or request.url.path.startswith("/public/")
+            request_path.startswith("/api/public/")
+            or request_path.startswith("/api/webhook/")
+            or request_path.startswith("/public/")
         ):
             organization_id = "default"
 

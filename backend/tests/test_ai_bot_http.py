@@ -3,13 +3,17 @@ import os
 import pytest
 import requests
 
+BASE_URL = os.environ.get("E2E_BACKEND_URL", "").rstrip("/")
+SESSION_TOKEN = os.environ.get("E2E_SESSION_TOKEN", "")
 pytestmark = pytest.mark.skipif(
-    os.environ.get("RUN_EXTERNAL_TESTS") != "1",
-    reason="Pruebas E2E externas: ejecutar con RUN_EXTERNAL_TESTS=1",
+    os.environ.get("RUN_EXTERNAL_TESTS") != "1" or not BASE_URL or not SESSION_TOKEN,
+    reason=(
+        "Pruebas E2E externas: requieren RUN_EXTERNAL_TESTS=1, "
+        "E2E_BACKEND_URL y E2E_SESSION_TOKEN"
+    ),
 )
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://lead-scan-scheduler.preview.latusagent.com").rstrip("/")
-ADMIN = {"Authorization": "Bearer test_session_admin_persist", "Content-Type": "application/json"}
+ADMIN = {"Authorization": f"Bearer {SESSION_TOKEN}", "Content-Type": "application/json"}
 
 
 @pytest.fixture(scope="module")

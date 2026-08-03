@@ -38,7 +38,7 @@
     "/app/backend/tests/test_ai_bot_http.py (new) — 12 HTTP-level tests covering /admin/bot-settings GET/PATCH, ctxmax/threshold/model validation, /bot/reactivate, /summary/regenerate, /bot/suggest-reply, plus 3 regression tests."
   ],
   "success_rate": {"backend": "75% (9/12 new HTTP tests pass; 3 failures are real bugs reported above)", "frontend": "92% (1 missing ctxmax client-side validation toast; everything else verified)"},
-  "test_credentials": "Bearer test_session_admin_persist (admin@latus.test). Cookie session_token=test_session_admin_persist on lead-scan-scheduler.preview.latusagent.com (sameSite=None, secure).",
+  "test_credentials": "[ELIMINADAS] Las credenciales predecibles de la prueba histórica deben considerarse revocadas.",
   "seed_data_creation": "No new seed. Persisted bot-settings now have confidence_threshold=0.55 and recent_messages_context_max=12 (restored from test). Added one TEST_regression_msg attempt that 500'd so no message was actually written.",
   "retest_needed": true,
   "main_agent_can_self_test": true,

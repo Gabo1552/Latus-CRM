@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import api from "@/lib/api";
 import AppLayout from "@/components/AppLayout";
 import { CONV_STATUSES, PRIORITIES, LEAD_STATUSES, money, statusMeta } from "@/lib/constants";
+import { safeExternalUrl } from "@/lib/security";
 import { StatusBadge, Avatar } from "@/components/Bits";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -841,9 +842,9 @@ export default function Inbox() {
                         <img src={active.contact.meta_ad_image_url} alt="Ad Visual" className="max-w-full h-auto rounded-sm border border-slate-200 object-cover max-h-36" />
                       </div>
                     )}
-                    {active.contact.meta_ad_url && (
+                    {safeExternalUrl(active.contact.meta_ad_url) && (
                       <div>
-                        <a href={active.contact.meta_ad_url} target="_blank" rel="noopener noreferrer" className="text-xs text-[#0E8DDB] font-semibold hover:underline flex items-center gap-1">
+                        <a href={safeExternalUrl(active.contact.meta_ad_url)} target="_blank" rel="noopener noreferrer" className="text-xs text-[#0E8DDB] font-semibold hover:underline flex items-center gap-1">
                           Ver anuncio original <ExternalLink className="h-3 w-3" />
                         </a>
                       </div>

@@ -6,7 +6,7 @@
 > referencia para `auto_frontend_testing_agent`.
 
 ## Pre-requisitos
-- Sesión admin: cookie `session_token=test_session_admin_persist` (ver
+- Sesión admin: cookie temporal obtenida mediante el inicio de sesión (ver
   `/app/memory/test_credentials.md`).
 - Backend RUNNING. `GET /api/openapi.json` → 200.
 

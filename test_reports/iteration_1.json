@@ -26,7 +26,7 @@
     "Seeded session_token records via mongosh: user_testadmin01 (admin) and user_testagent01 (sales_agent) for RBAC testing"
   ],
   "success_rate": {"backend": "100%", "frontend": "100%"},
-  "test_credentials": "Bearer test_session_admin_persist (admin@flowdesk.test, role=admin) and Bearer test_session_agent_persist (agent@flowdesk.test, role=sales_agent). Seeded into user_sessions/users collections.",
+  "test_credentials": "[ELIMINADAS] Las credenciales predecibles de la prueba histórica deben considerarse revocadas.",
   "seed_data_creation": "Created 2 sessions: test_session_admin_persist for user_testadmin01 (admin) and test_session_agent_persist for user_testagent01 (sales_agent). Also created a few TEST_-prefixed contacts/leads/tasks during CRUD tests; leads/tasks self-cleaned via DELETE; TEST_Contact_X remains (no contact delete endpoint).",
   "retest_needed": false,
   "main_agent_can_self_test": true,

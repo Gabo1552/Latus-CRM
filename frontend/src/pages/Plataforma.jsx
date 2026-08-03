@@ -409,7 +409,7 @@ function CreateCompanyModal({ onClose, onCreate, creating }) {
     billing_email: "",
     admin_name: "",
     admin_email: "",
-    admin_password: "Latus12345!",
+    admin_password: "",
     ai_fee_percent: "",
     internal_notes: "",
   });
@@ -489,7 +489,17 @@ function CreateCompanyModal({ onClose, onCreate, creating }) {
             <Input className={inputClass} type="email" value={draft.admin_email} onChange={(e) => set("admin_email", e.target.value)} placeholder="juan@empresa.com" />
           </label>
           <label className="text-xs font-bold text-latus-ink sm:col-span-2">Contraseña Temporal Inicial
-            <Input className={inputClass} value={draft.admin_password} onChange={(e) => set("admin_password", e.target.value)} placeholder="Latus12345!" />
+            <Input
+              className={inputClass}
+              type="password"
+              autoComplete="new-password"
+              value={draft.admin_password}
+              onChange={(e) => set("admin_password", e.target.value)}
+              placeholder="Dejar vacío para generar una contraseña segura"
+            />
+            <span className="mt-1 block font-normal text-latus-muted">
+              Si no ingresás una, el sistema genera una clave aleatoria y la muestra una sola vez al crear la empresa.
+            </span>
           </label>
           <label className="text-xs font-bold text-latus-ink sm:col-span-2">Fee % IA Específico (Opcional)
             <Input className={inputClass} type="number" min="0" max="500" step="0.1" value={draft.ai_fee_percent} onChange={(e) => set("ai_fee_percent", e.target.value)} placeholder="Usar fee global de la plataforma" />

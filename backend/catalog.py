@@ -450,5 +450,10 @@ def export_csv(items: list[dict]) -> bytes:
         # booleans → "true"/"false"
         if isinstance(row.get("active"), bool):
             row["active"] = "true" if row["active"] else "false"
+        # Prevent spreadsheet formula injection when an exported catalog is
+        # opened in Excel or Google Sheets.
+        for key, value in row.items():
+            if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")):
+                row[key] = "'" + value
         w.writerow(row)
     return buf.getvalue().encode("utf-8")

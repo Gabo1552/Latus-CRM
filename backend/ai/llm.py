@@ -64,5 +64,7 @@ def _parse_json_response(raw: str) -> dict[str, Any]:
     try:
         return json.loads(s)
     except Exception as e:
-        logger.warning("LLM JSON parse failed: %s | raw=%r", e, raw[:200])
+        # Model output can contain customer messages and personal data. Never
+        # copy it into infrastructure logs.
+        logger.warning("LLM JSON parse failed: %s | response_length=%s", e, len(raw or ""))
         return {}

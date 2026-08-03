@@ -349,13 +349,10 @@ class TestPostMessages:
         assert body["delivery_status"] == "sent"
         assert body["sender_type"] == "agent"
 
-    def test_post_messages_contact_returns_clean_doc(self, srv):
+    def test_post_messages_cannot_spoof_contact_sender(self, srv):
         _, fake, client = srv
         r = client.post("/api/conversations/conv_1/messages", headers=_h(),
                         json={"sender_type": "contact", "body": "tengo una duda"})
-        assert r.status_code == 200, r.text
-        body = r.json()
-        json.dumps(body)
-        assert "_id" not in body
-        assert body["direction"] == "inbound"
-        assert fake.conversations.docs[0]["unread"] == 1
+        assert r.status_code == 422, r.text
+        assert not fake.messages.docs
+        assert fake.conversations.docs[0]["unread"] == 0

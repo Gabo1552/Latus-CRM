@@ -4,6 +4,7 @@ import { X, StickyNote, CheckSquare, Phone, Building2, Send, Check } from "lucid
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { LEAD_STATUSES, PRIORITIES, money } from "@/lib/constants";
+import { safeExternalUrl } from "@/lib/security";
 import { StatusBadge, Avatar } from "@/components/Bits";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -182,10 +183,10 @@ export default function LeadDrawer({ leadId, onClose, users = [] }) {
                         <p className="text-[#52525B] font-mono text-[11px] truncate" title={lead.contact.meta_ad_id}>{lead.contact.meta_ad_id}</p>
                       </div>
                     )}
-                    {lead.contact.meta_ad_url && (
+                    {safeExternalUrl(lead.contact.meta_ad_url) && (
                       <div>
                         <p className="text-[10px] font-bold text-[#888888] uppercase">Link al anuncio</p>
-                        <a href={lead.contact.meta_ad_url} target="_blank" rel="noopener noreferrer" className="text-[#0E8DDB] hover:underline font-semibold block truncate">
+                        <a href={safeExternalUrl(lead.contact.meta_ad_url)} target="_blank" rel="noopener noreferrer" className="text-[#0E8DDB] hover:underline font-semibold block truncate">
                           Ver anuncio &rarr;
                         </a>
                       </div>
