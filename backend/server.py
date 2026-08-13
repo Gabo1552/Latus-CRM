@@ -10470,6 +10470,61 @@ async def _migrate_promote_first_google_admin() -> None:
         logger.exception("_migrate_promote_first_google_admin failed")
 
 
+async def _dedupe_webchat_session_tokens() -> int:
+    """Keep one canonical conversation for each legacy webchat token.
+
+    Older test/import flows could attach the same token to more than one
+    conversation before the unique index existed. Prefer an actual webchat
+    conversation and then the most recently active record; stale duplicates
+    lose only the resumable token and remain available in the CRM history.
+    """
+    conversations = _raw_collection("conversations")
+    try:
+        duplicates = await conversations.aggregate([
+            {"$match": {
+                "webchat_session_token": {"$type": "string", "$ne": ""},
+            }},
+            {"$addFields": {
+                "_webchat_token_priority": {
+                    "$cond": [{"$eq": ["$channel", "webchat"]}, 1, 0],
+                },
+            }},
+            {"$sort": {
+                "_webchat_token_priority": -1,
+                "last_message_at": -1,
+                "created_at": -1,
+                "_id": -1,
+            }},
+            {"$group": {
+                "_id": "$webchat_session_token",
+                "conversation_ids": {"$push": "$_id"},
+                "count": {"$sum": 1},
+            }},
+            {"$match": {"count": {"$gt": 1}}},
+        ], allowDiskUse=True).to_list(10_000)
+    except (AttributeError, TypeError):
+        # Lightweight test adapters do not necessarily implement aggregation.
+        return 0
+
+    cleared = 0
+    migrated_at = now_iso()
+    for duplicate in duplicates:
+        stale_ids = list(duplicate.get("conversation_ids") or [])[1:]
+        if not stale_ids:
+            continue
+        result = await conversations.update_many(
+            {"_id": {"$in": stale_ids}},
+            {
+                "$unset": {"webchat_session_token": ""},
+                "$set": {"webchat_token_deduplicated_at": migrated_at},
+            },
+        )
+        cleared += int(getattr(result, "modified_count", len(stale_ids)) or 0)
+    if cleared:
+        logger.warning("Cleared %s duplicate legacy webchat session token(s)", cleared)
+    return cleared
+
+
 async def _ensure_indexes() -> None:
     """Idempotently create indexes needed by integrations and tenancy."""
     try:
@@ -10500,6 +10555,7 @@ async def _ensure_indexes() -> None:
             "webchat_public_key", unique=True, sparse=True,
             name="ux_organizations_webchat_public_key",
         )
+        await _dedupe_webchat_session_tokens()
         await _raw_collection("conversations").create_index(
             "webchat_session_token", unique=True, sparse=True,
             name="ux_conversations_webchat_session_token",
