@@ -4914,13 +4914,20 @@ async def create_note(payload: NoteCreate, user: User = Depends(require_perm("cr
 # Notifications (helpers + endpoints)
 # ---------------------------------------------------------------------------
 
-async def _make_notification(ntype, title, body, entity_type, entity_id, user_id, priority="medium"):
+async def _make_notification(
+    ntype, title, body, entity_type, entity_id, user_id, priority="medium",
+    dedupe_key: Optional[str] = None,
+):
     if not user_id:
         return
-    existing = await db.notifications.find_one({
-        "type": ntype, "related_entity_id": entity_id,
-        "assigned_user_id": user_id, "is_read": False,
-    })
+    existing_query = (
+        {"automation_key": dedupe_key, "assigned_user_id": user_id}
+        if dedupe_key else {
+            "type": ntype, "related_entity_id": entity_id,
+            "assigned_user_id": user_id, "is_read": False,
+        }
+    )
+    existing = await db.notifications.find_one(existing_query)
     if existing:
         return
     notif = Notification(
@@ -4928,7 +4935,13 @@ async def _make_notification(ntype, title, body, entity_type, entity_id, user_id
         related_entity_type=entity_type, related_entity_id=entity_id,
         assigned_user_id=user_id, priority=priority,
     )
-    await db.notifications.insert_one(notif.model_dump())
+    notification_doc = notif.model_dump()
+    if dedupe_key:
+        notification_doc["automation_key"] = dedupe_key
+    try:
+        await db.notifications.insert_one(notification_doc)
+    except DuplicateKeyError:
+        return
 
     # Send email notification if enabled and it is an unattended lead alert
     if ntype == "lead_no_response":
@@ -4956,10 +4969,15 @@ async def _make_notification(ntype, title, body, entity_type, entity_id, user_id
                     )
 
 
-async def _notify_target(assigned_to, ntype, title, body, entity_type, entity_id, priority="medium"):
+async def _notify_target(
+    assigned_to, ntype, title, body, entity_type, entity_id, priority="medium",
+    dedupe_key: Optional[str] = None,
+):
     """Notify the assigned user, or fall back to all admins + supervisors."""
     if assigned_to:
-        await _make_notification(ntype, title, body, entity_type, entity_id, assigned_to, priority)
+        await _make_notification(
+            ntype, title, body, entity_type, entity_id, assigned_to, priority, dedupe_key,
+        )
     else:
         memberships = await _raw_collection("memberships").find({
             "organization_id": get_organization_id(),
@@ -4972,8 +4990,10 @@ async def _notify_target(assigned_to, ntype, title, body, entity_type, entity_id
                 {"_id": 0, "user_id": 1},
             ).to_list(100)
         for membership in memberships:
-            await _make_notification(ntype, title, body, entity_type, entity_id,
-                                     membership["user_id"], priority)
+            await _make_notification(
+                ntype, title, body, entity_type, entity_id,
+                membership["user_id"], priority, dedupe_key,
+            )
 
 
 @api_router.get("/notifications")
@@ -5316,7 +5336,7 @@ async def send_test_email(payload: SendTestEmailBody, admin: User = Depends(requ
     return {"ok": True}
 
 
-async def scan_lead_no_response() -> List[dict]:
+async def scan_lead_no_response(*, create_notifications: bool = True) -> List[dict]:
     """Idempotently create lead_no_response notifications and return qualifying conversations.
 
     When ``lead_no_response_business_hours_only`` is enabled the elapsed time
@@ -5376,21 +5396,87 @@ async def scan_lead_no_response() -> List[dict]:
         cname = contacts.get(c["contact_id"], {}).get("name", "un cliente")
         qualifying.append(c)
         # Defer notification creation if business-only and currently outside hours.
-        if not inside_business_now:
+        if not create_notifications or not inside_business_now:
             continue
         await _notify_target(
             c.get("assigned_to"), "lead_no_response",
             f"Lead sin respuesta: {cname}",
             f"El cliente escribió hace más de {threshold} h y aún no recibe respuesta.",
             "conversation", c["id"], "high",
+            dedupe_key=f"lead_no_response:{c['id']}:{msg.get('id') or msg.get('external_message_id') or msg.get('created_at')}",
         )
     return qualifying
+
+
+async def scan_task_notifications() -> dict:
+    """Create deterministic due-soon/overdue alerts outside request handling."""
+    done_statuses = await get_task_done_statuses()
+    current = datetime.now(timezone.utc)
+    soon = current + timedelta(hours=24)
+    tasks = await db.tasks.find({}, {"_id": 0}).to_list(5000)
+    overdue = due_soon = 0
+    for task in tasks:
+        if task.get("status") in done_statuses or not task.get("due_date"):
+            continue
+        raw_due = str(task["due_date"])
+        try:
+            due = datetime.fromisoformat(raw_due if "T" in raw_due else raw_due + "T23:59:59")
+        except (TypeError, ValueError):
+            continue
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        if due < current:
+            ntype = "overdue_task"
+            title = f"Tarea vencida: {task['title']}"
+            body = "Esta tarea pasó su fecha de vencimiento."
+            priority = "high"
+            overdue += 1
+        elif due <= soon:
+            ntype = "task_due_soon"
+            title = f"Tarea próxima a vencer: {task['title']}"
+            body = "Esta tarea vence en las próximas 24 horas."
+            priority = "medium"
+            due_soon += 1
+        else:
+            continue
+        await _notify_target(
+            task.get("assigned_to"), ntype, title, body, "task", task["id"], priority,
+            dedupe_key=f"{ntype}:{task['id']}:{raw_due}",
+        )
+    return {"overdue": overdue, "due_soon": due_soon}
 
 
 @api_router.post("/automations/lead-no-response/scan")
 async def run_lead_no_response_scan(user: User = Depends(get_current_user)):
     qualifying = await scan_lead_no_response()
     return {"created_for": len(qualifying)}
+
+
+@api_router.get("/automations/status")
+async def automation_worker_status(
+    user: User = Depends(require_any_perm("settings_view", "ai_view")),
+):
+    lease = await _raw_collection("automation_leases").find_one(
+        {"_id": "scheduled_automations"}, {"_id": 0}
+    )
+    if not lease:
+        return {"configured": False, "status": "not_started"}
+    public = {
+        "configured": True,
+        "status": lease.get("status"),
+        "last_completed_at": lease.get("last_completed_at"),
+        "last_succeeded_at": lease.get("last_succeeded_at"),
+        "last_failed_at": lease.get("last_failed_at"),
+        "next_run_at": lease.get("next_run_at"),
+    }
+    if user.is_platform_admin:
+        public.update({
+            "owner": lease.get("owner"),
+            "attempts": lease.get("attempts"),
+            "last_error": lease.get("last_error"),
+            "last_result": lease.get("last_result"),
+        })
+    return public
 
 # ---------------------------------------------------------------------------
 # WhatsApp Cloud API integration
@@ -9742,9 +9828,9 @@ async def dashboard_metrics(
     done_statuses = await get_task_done_statuses()
     open_tasks = len([t for t in tasks if t.get("status") not in done_statuses])
 
-    # --- Detect overdue / due-soon tasks and generate notifications ---
+    # Dashboard reads are side-effect free. The automation worker creates the
+    # due-soon/overdue notifications; this loop only prepares the visual list.
     now = datetime.now(timezone.utc)
-    soon = now + timedelta(hours=24)
     overdue_tasks = []
     for t in tasks:
         if t.get("status") in done_statuses or not t.get("due_date"):
@@ -9760,11 +9846,6 @@ async def dashboard_metrics(
         info = {**t, "lead": lead}
         if due < now:
             overdue_tasks.append(info)
-            await _notify_target(t.get("assigned_to"), "overdue_task", f"Tarea vencida: {t['title']}",
-                                 "Esta tarea pasó su fecha de vencimiento.", "task", t["id"], "high")
-        elif due <= soon:
-            await _notify_target(t.get("assigned_to"), "task_due_soon", f"Tarea próxima a vencer: {t['title']}",
-                                 "Esta tarea vence en las próximas 24 horas.", "task", t["id"], "medium")
 
     def conv_brief(c):
         ct = contacts.get(c["contact_id"], {})
@@ -9783,8 +9864,8 @@ async def dashboard_metrics(
         "lead_title": (t.get("lead") or {}).get("title"),
     } for t in overdue_tasks]
 
-    # lead_no_response automation: scan + collect qualifying conversations
-    no_response_convs = await scan_lead_no_response()
+    # The worker creates alerts. The dashboard only calculates the current list.
+    no_response_convs = await scan_lead_no_response(create_notifications=False)
     if not is_admin_or_supervisor:
         no_response_convs = [c for c in no_response_convs if c.get("assigned_to") == user.user_id]
     no_response = [conv_brief(c) for c in no_response_convs]
@@ -10258,11 +10339,20 @@ async def on_startup():
     # intentional and keeps the unsafe release out of service.
     await _bootstrap_tenant_data()
 
-    # Scheduler is sync and doesn't touch DB — fine to start in foreground.
-    try:
-        _start_scheduler()
-    except Exception:  # pragma: no cover
-        logger.exception("startup step '_start_scheduler' failed (continuing)")
+    # Production/staging run automation in the independent Railway worker.
+    # Development keeps the legacy in-process scheduler for local convenience.
+    run_in_web_raw = (os.environ.get("RUN_AUTOMATIONS_IN_WEB") or "").strip().lower()
+    run_in_web = (
+        run_in_web_raw in {"1", "true", "yes", "on"}
+        if run_in_web_raw else _environment_name() == "development"
+    )
+    if run_in_web:
+        try:
+            _start_scheduler()
+        except Exception:  # pragma: no cover
+            logger.exception("startup step '_start_scheduler' failed (continuing)")
+    else:
+        logger.info("In-process scheduler disabled; expecting the automation worker service")
     logger.info("Latus CRM started (multiempresa migration ready)")
 
 
@@ -10491,6 +10581,18 @@ async def _ensure_indexes() -> None:
         await db.bot_events.create_index(
             [("organization_id", 1), ("conversation_id", 1), ("created_at", -1)],
             name="ix_org_bot_events_conversation_created",
+        )
+        await db.notifications.create_index(
+            [("organization_id", 1), ("assigned_user_id", 1), ("automation_key", 1)],
+            unique=True,
+            name="ux_org_notification_automation_key",
+            partialFilterExpression={"automation_key": {"$type": "string"}},
+        )
+        await _raw_collection("automation_leases").create_index(
+            "next_run_at", name="ix_automation_leases_next_run",
+        )
+        await _raw_collection("automation_leases").create_index(
+            "locked_until", name="ix_automation_leases_locked_until",
         )
         await db.bot_events.create_index(
             [("organization_id", 1), ("triggered_by_message_id", 1)],
@@ -10853,8 +10955,7 @@ _scheduler = None  # singleton at module level — safe-start guard
 
 
 def _start_scheduler():
-    """Idempotently start the APScheduler that re-runs the lead-no-response
-    scan every 5 minutes. Safe across worker restarts (only one per process)."""
+    """Legacy local scheduler using the same distributed worker lease."""
     global _scheduler
     if _scheduler is not None:
         return
@@ -10868,37 +10969,13 @@ def _start_scheduler():
     sched = AsyncIOScheduler(timezone="UTC")
 
     async def _job():
-        organizations = await _raw_collection("organizations").find(
-            {"status": "active"}, {"organization_id": 1, "_id": 0}
-        ).to_list(10000)
-        for organization in organizations:
-            organization_id = organization.get("organization_id")
-            if not organization_id:
-                continue
-            token = set_organization_id(organization_id)
-            try:
-                try:
-                    await scan_lead_no_response()
-                except Exception:  # pragma: no cover - log only
-                    logger.exception("scheduled scan_lead_no_response failed org=%s", organization_id)
-                try:
-                    await close_inactive_conversations(db)
-                except Exception:
-                    logger.exception("scheduled close_inactive_conversations failed org=%s", organization_id)
-                try:
-                    await check_and_send_scheduled_reports()
-                except Exception:  # pragma: no cover - log only
-                    logger.exception("scheduled check_and_send_scheduled_reports failed org=%s", organization_id)
-                try:
-                    await send_due_appointment_reminders()
-                except Exception:  # pragma: no cover - log only
-                    logger.exception("scheduled send_due_appointment_reminders failed org=%s", organization_id)
-            finally:
-                reset_organization_id(token)
-        try:
-            await process_due_ai_settlements()
-        except Exception:  # pragma: no cover - log only
-            logger.exception("scheduled AI billing settlement scan failed")
+        from automation_worker import run_scheduled_cycle
+        await run_scheduled_cycle(
+            runtime=__import__(__name__),
+            owner=f"web:{os.getpid()}",
+            interval_seconds=300,
+            lease_seconds=900,
+        )
 
     sched.add_job(
         _job,
@@ -10911,7 +10988,7 @@ def _start_scheduler():
     )
     sched.start()
     _scheduler = sched
-    logger.info("APScheduler started: lead_no_response_scan every 5m")
+    logger.info("Local APScheduler started: distributed automation cycle every 5m")
 
 
 async def backfill_notifications():

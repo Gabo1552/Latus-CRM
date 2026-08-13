@@ -41,6 +41,10 @@ Esta guía detalla la arquitectura, configuración y el paso a paso exacto para 
 | `RESEND_API_KEY` | Clave Resend | Clave Resend | Clave de envío de e-mails transaccionales. |
 | `RESEND_FROM_EMAIL` | `notificaciones@somoslatus.com` | `notificaciones@somoslatus.com` | Remitente de e-mails. |
 | `RESEND_FROM_NAME` | `Latus CRM (Staging)` | `Latus CRM` | Nombre visible del remitente. |
+| `RUN_AUTOMATIONS_IN_WEB` | `false` | `false` | Mantiene las tareas periódicas fuera del backend web. Solo usar `true` temporalmente si todavía no existe el worker. |
+| `AUTOMATION_POLL_SECONDS` | `30` | `30` | Frecuencia con la que el worker consulta si existe un ciclo pendiente. |
+| `AUTOMATION_INTERVAL_SECONDS` | `300` | `300` | Intervalo normal entre ciclos de automatización. |
+| `AUTOMATION_LEASE_SECONDS` | `900` | `900` | Tiempo máximo de reserva de un ciclo antes de permitir recuperación por otra réplica. |
 
 ### 2. Variables para Vercel (Frontend)
 
@@ -80,6 +84,34 @@ Esta guía detalla la arquitectura, configuración y el paso a paso exacto para 
    - `https://TU-BACKEND/api/health` responde `environment: production`.
    - `https://TU-BACKEND/api/health/ready` responde `ok: true`.
 7. Si alguna protección rechaza el arranque, corrige las variables; no desactives la validación.
+
+### Servicio independiente de automatizaciones
+
+Cada entorno necesita un segundo servicio Railway conectado al mismo repositorio y a la misma base de datos de su backend:
+
+1. Duplica el servicio backend dentro del proyecto Railway del entorno.
+2. Nómbralo `latus-crm-worker-staging` o `latus-crm-worker-production`.
+3. Configura `backend` como directorio raíz.
+4. No generes dominio público: el trabajador no recibe tráfico HTTP.
+5. Usa como comando de inicio:
+   ```text
+   python worker.py
+   ```
+6. Copia exactamente las variables del backend del mismo entorno, incluidos `MONGO_URL`, `DB_NAME`, credenciales de WhatsApp, IA, Mercado Pago y correo.
+7. Agrega al backend web y al worker:
+   ```env
+   RUN_AUTOMATIONS_IN_WEB=false
+   AUTOMATION_POLL_SECONDS=30
+   AUTOMATION_INTERVAL_SECONDS=300
+   AUTOMATION_LEASE_SECONDS=900
+   ```
+8. Despliega primero el backend web y después el worker.
+9. En los logs del worker debe aparecer `Automation worker ready` y luego `Automation cycle completed`.
+10. Desde una cuenta administradora consulta `GET /api/automations/status`; debe responder `configured: true` y mostrar `last_succeeded_at`.
+
+MongoDB conserva una concesión global por entorno. Si Railway inicia dos réplicas o reinicia una instancia durante un ciclo, solamente una puede procesarlo. Los recordatorios de turnos también conservan su reclamo individual y las alertas automáticas usan claves determinísticas para no duplicarse.
+
+> No conectes el worker de Staging a la base de Producción ni reutilices sus variables. Cada entorno debe tener su propio servicio trabajador.
 
 ### Primera migración de la instalación actual
 
