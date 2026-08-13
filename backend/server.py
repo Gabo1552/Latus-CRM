@@ -10525,6 +10525,57 @@ async def _dedupe_webchat_session_tokens() -> int:
     return cleared
 
 
+async def _dedupe_product_skus() -> int:
+    """Preserve products while removing duplicate legacy SKU assignments."""
+    products = _raw_collection("products")
+    try:
+        duplicates = await products.aggregate([
+            {"$match": {"sku": {"$type": "string", "$ne": ""}}},
+            {"$addFields": {
+                "_sku_priority": {
+                    "$cond": [{"$and": [
+                        {"$eq": ["$deleted_at", None]},
+                        {"$ne": ["$active", False]},
+                    ]}, 1, 0],
+                },
+            }},
+            {"$sort": {
+                "_sku_priority": -1,
+                "updated_at": -1,
+                "created_at": -1,
+                "_id": -1,
+            }},
+            {"$group": {
+                "_id": {"organization_id": "$organization_id", "sku": "$sku"},
+                "product_ids": {"$push": "$_id"},
+                "count": {"$sum": 1},
+            }},
+            {"$match": {"count": {"$gt": 1}}},
+        ], allowDiskUse=True).to_list(10_000)
+    except (AttributeError, TypeError):
+        return 0
+
+    cleared = 0
+    migrated_at = now_iso()
+    for duplicate in duplicates:
+        stale_ids = list(duplicate.get("product_ids") or [])[1:]
+        if not stale_ids:
+            continue
+        duplicate_sku = (duplicate.get("_id") or {}).get("sku")
+        result = await products.update_many(
+            {"_id": {"$in": stale_ids}},
+            {"$set": {
+                "sku": None,
+                "legacy_duplicate_sku": duplicate_sku,
+                "sku_deduplicated_at": migrated_at,
+            }},
+        )
+        cleared += int(getattr(result, "modified_count", len(stale_ids)) or 0)
+    if cleared:
+        logger.warning("Cleared %s duplicate legacy product SKU assignment(s)", cleared)
+    return cleared
+
+
 async def _ensure_indexes() -> None:
     """Idempotently create indexes needed by integrations and tenancy."""
     try:
@@ -10669,6 +10720,7 @@ async def _ensure_indexes() -> None:
         await db.ai_usage_logs.create_index(
             [("organization_id", 1), ("conversation_id", 1)],
             sparse=True, name="ix_org_ai_usage_conv")
+        await _dedupe_product_skus()
         await db.products.create_index(
             [("organization_id", 1), ("sku", 1)], unique=True,
             name="ux_org_products_sku",
