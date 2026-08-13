@@ -10576,6 +10576,32 @@ async def _dedupe_product_skus() -> int:
     return cleared
 
 
+async def _ensure_password_reset_expiry_index() -> None:
+    """Replace the legacy non-TTL expiry index without touching token data.
+
+    Older installations created ``expires_at`` as a regular index named
+    ``ix_password_reset_expires``. MongoDB refuses to create the TTL index while
+    that equivalent key pattern exists, so inspect the existing definitions and
+    only drop an incompatible single-field expiry index.
+    """
+    collection = _raw_collection("password_reset_tokens")
+    indexes = await collection.index_information()
+    expected_key = [("expires_at", 1)]
+
+    for name, spec in indexes.items():
+        key = [tuple(item) for item in (spec.get("key") or [])]
+        if key != expected_key:
+            continue
+        if spec.get("expireAfterSeconds") == 0:
+            return
+        await collection.drop_index(name)
+        logger.info("Replaced legacy password reset expiry index %s", name)
+
+    await collection.create_index(
+        "expires_at", expireAfterSeconds=0, name="ttl_password_reset_expires"
+    )
+
+
 async def _ensure_indexes() -> None:
     """Idempotently create indexes needed by integrations and tenancy."""
     try:
@@ -10749,9 +10775,7 @@ async def _ensure_indexes() -> None:
             name="ix_org_inventory_product_created",
         )
         await db.password_reset_tokens.create_index("token_hash", unique=True, name="ux_password_reset_token_hash")
-        await db.password_reset_tokens.create_index(
-            "expires_at", expireAfterSeconds=0, name="ttl_password_reset_expires"
-        )
+        await _ensure_password_reset_expiry_index()
         await db.appointments.create_index(
             [("organization_id", 1), ("assigned_to", 1), ("start_time", 1)],
             name="ix_org_appointments_assignee_start",

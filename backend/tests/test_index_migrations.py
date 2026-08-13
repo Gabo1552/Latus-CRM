@@ -65,6 +65,22 @@ class Products:
         return SimpleNamespace(modified_count=1)
 
 
+class PasswordResetTokens:
+    def __init__(self, indexes):
+        self.indexes = indexes
+        self.dropped = []
+        self.created = []
+
+    async def index_information(self):
+        return self.indexes
+
+    async def drop_index(self, name):
+        self.dropped.append(name)
+
+    async def create_index(self, key, **kwargs):
+        self.created.append((key, kwargs))
+
+
 def test_deduplicates_legacy_webchat_tokens_before_unique_index(monkeypatch):
     import server
 
@@ -96,3 +112,38 @@ def test_deduplicates_legacy_product_skus_without_deleting_products(monkeypatch)
     assert update["$set"]["sku"] is None
     assert update["$set"]["legacy_duplicate_sku"] == "SKU-1"
     assert update["$set"]["sku_deduplicated_at"]
+
+
+def test_replaces_legacy_non_ttl_password_reset_index(monkeypatch):
+    import server
+
+    collection = PasswordResetTokens({
+        "_id_": {"key": [("_id", 1)]},
+        "ix_password_reset_expires": {"key": [("expires_at", 1)]},
+    })
+    monkeypatch.setattr(server, "_raw_collection", lambda name: collection)
+
+    run(server._ensure_password_reset_expiry_index())
+
+    assert collection.dropped == ["ix_password_reset_expires"]
+    assert collection.created == [(
+        "expires_at",
+        {"expireAfterSeconds": 0, "name": "ttl_password_reset_expires"},
+    )]
+
+
+def test_keeps_compatible_password_reset_ttl_index(monkeypatch):
+    import server
+
+    collection = PasswordResetTokens({
+        "existing_ttl": {
+            "key": [("expires_at", 1)],
+            "expireAfterSeconds": 0,
+        },
+    })
+    monkeypatch.setattr(server, "_raw_collection", lambda name: collection)
+
+    run(server._ensure_password_reset_expiry_index())
+
+    assert collection.dropped == []
+    assert collection.created == []
