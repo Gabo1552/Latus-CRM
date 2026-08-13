@@ -780,6 +780,12 @@ class Contact(BaseModel):
     first_ad_message_at: Optional[str] = None
     raw_referral: Optional[dict] = None
 
+    @field_validator("phone", mode="before")
+    @classmethod
+    def normalize_legacy_phone(cls, value):
+        """Keep legacy/imported contacts with a null phone readable."""
+        return "" if value is None else str(value)
+
 
 class ContactCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)

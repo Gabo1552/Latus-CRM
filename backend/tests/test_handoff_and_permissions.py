@@ -131,6 +131,27 @@ def test_sync_assigned_to_on_update_lead(srv):
     conv = _run(fake.conversations.find_one({"id": "conv_123"}))
     assert conv["assigned_to"] is None
 
+
+def test_list_contacts_accepts_legacy_null_phone(srv):
+    _server, fake, client = srv
+    _run(fake.contacts.insert_one({
+        "id": "contact_legacy_null_phone",
+        "name": "Contacto importado",
+        "phone": None,
+    }))
+
+    response = client.get(
+        "/api/contacts",
+        headers={"Authorization": "Bearer T-ADMIN"},
+    )
+
+    assert response.status_code == 200
+    contact = next(
+        item for item in response.json()
+        if item["id"] == "contact_legacy_null_phone"
+    )
+    assert contact["phone"] == ""
+
 def test_sync_assigned_to_on_update_conversation(srv):
     server, fake, client = srv
     # Seed data with required title
