@@ -74,16 +74,19 @@ export default function Calendario() {
         assigned_to: canViewTeam && teamFilter !== "all" ? teamFilter : undefined,
       },
     }).then((response) => response.data),
+    staleTime: 15_000,
   });
 
   const { data: schedulingConfig } = useQuery({
     queryKey: ["calendar-scheduling-config"],
     queryFn: () => api.get("/calendar/scheduling-config").then((response) => response.data),
+    staleTime: 60_000,
   });
 
   const { data: contacts = [] } = useQuery({
-    queryKey: ["calendar-contacts"],
+    queryKey: ["contacts"],
     queryFn: () => api.get("/contacts").then((response) => response.data),
+    staleTime: 60_000,
   });
 
   useEffect(() => {
@@ -96,9 +99,10 @@ export default function Calendario() {
   }, [schedulingConfig, availabilityDraft]);
 
   const { data: users = [] } = useQuery({
-    queryKey: ["calendar-users"],
+    queryKey: ["users"],
     queryFn: () => api.get("/users").then((response) => response.data),
     enabled: canViewTeam,
+    staleTime: 60_000,
   });
 
   const activeUsers = useMemo(

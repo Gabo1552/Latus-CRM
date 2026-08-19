@@ -35,6 +35,7 @@ const PROFITABILITY_STATES = {
   healthy: { label: "Rentable", tone: "border-emerald-200 bg-emerald-50 text-emerald-700" },
   at_risk: { label: "Margen ajustado", tone: "border-amber-200 bg-amber-50 text-amber-800" },
   blocked: { label: "No rentable", tone: "border-rose-200 bg-rose-50 text-rose-700" },
+  exempt: { label: "No facturable", tone: "border-sky-200 bg-sky-50 text-sky-700" },
   not_configured: { label: "Sin calcular", tone: "border-slate-200 bg-slate-100 text-slate-600" },
 };
 
@@ -809,6 +810,7 @@ function SuperadminExecutiveDashboardPanel({
       return api.get("/platform/financial-dashboard", { params }).then((r) => r.data);
     },
     enabled: period !== "custom" || (!!startDate && !!endDate),
+    staleTime: 30_000,
   });
 
   const d = dashQ.data?.summary;
@@ -939,6 +941,7 @@ export default function Plataforma() {
   const organizationsQ = useQuery({
     queryKey: ["platform-organizations"],
     queryFn: () => api.get("/platform/organizations").then((response) => response.data),
+    staleTime: 30_000,
   });
   const createOrganization = useMutation({
     mutationFn: (body) => api.post("/platform/organizations", body).then((r) => r.data),
@@ -969,6 +972,15 @@ export default function Plataforma() {
     },
     onError: (error) => toast.error(error.response?.data?.detail || "No se pudo actualizar la licencia"),
   });
+  const resetDemo = useMutation({
+    mutationFn: (organizationId) => api.post(`/platform/organizations/${organizationId}/reset-demo`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["platform-organizations"] });
+      qc.invalidateQueries({ queryKey: ["platform-financial-dashboard"] });
+      toast.success("Demo restaurada con fechas y datos actualizados");
+    },
+    onError: (error) => toast.error(error.response?.data?.detail || "No se pudo restaurar la demo"),
+  });
   const organizations = useMemo(() => organizationsQ.data || [], [organizationsQ.data]);
   const filtered = useMemo(() => {
     let list = organizations;
@@ -978,9 +990,12 @@ export default function Plataforma() {
     const term = search.trim().toLowerCase();
     return term ? list.filter((item) => `${item.name} ${item.organization_id} ${item.billing_email || ""}`.toLowerCase().includes(term)) : list;
   }, [organizations, search, selectedOrgId]);
-  const active = organizations.filter((item) => item.access?.allowed).length;
+  const active = organizations.filter((item) => item.is_billable && item.access?.allowed).length;
   const pending = organizations.filter((item) => item.latest_request?.status === "pending").length;
-  const aiBillable = organizations.reduce((total, item) => total + Number(item.ai_billing?.this_month?.billable_cost_usd || 0), 0);
+  const aiBillable = organizations.reduce(
+    (total, item) => total + Number(item.ai_billing?.commercial_billable_cost_usd || 0),
+    0,
+  );
 
   const handleExportCSV = async () => {
     try {
@@ -1036,7 +1051,7 @@ export default function Plataforma() {
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {[
             { label: "Empresas registradas", value: organizations.length, icon: Building2, tone: "bg-sky-50 text-sky-700" },
-            { label: "Licencias habilitadas", value: active, icon: CheckCircle2, tone: "bg-emerald-50 text-emerald-700" },
+            { label: "Licencias de clientes", value: active, icon: CheckCircle2, tone: "bg-emerald-50 text-emerald-700" },
             { label: "Solicitudes pendientes", value: pending, icon: ShieldAlert, tone: "bg-amber-50 text-amber-800" },
             { label: "IA facturable este mes", value: `USD ${aiBillable.toFixed(2)}`, icon: BadgeDollarSign, tone: "bg-violet-50 text-violet-700" },
           ].map(({ label, value, icon: Icon, tone }) => (
@@ -1071,7 +1086,7 @@ export default function Plataforma() {
                 <tbody className="divide-y divide-latus-warm-border">
                   {filtered.map((organization) => (
                     <tr key={organization.organization_id} className="hover:bg-latus-cream/50">
-                      <td className="px-5 py-4"><p className="font-extrabold text-latus-ink">{organization.name}</p><p className="mt-1 font-mono text-[11px] text-latus-muted">{organization.organization_id}</p>{organization.latest_request?.status === "pending" && <p className="mt-2 text-xs font-bold text-amber-700">Solicitó {PLAN_NAMES[organization.latest_request.plan_code]}</p>}</td>
+                      <td className="px-5 py-4"><div className="flex flex-wrap items-center gap-2"><p className="font-extrabold text-latus-ink">{organization.name}</p>{!organization.is_billable && <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-sky-700">{organization.is_demo || organization.organization_kind === "demo" ? "Demo" : "Interna"} · no facturable</span>}</div><p className="mt-1 font-mono text-[11px] text-latus-muted">{organization.organization_id}</p>{organization.latest_request?.status === "pending" && <p className="mt-2 text-xs font-bold text-amber-700">Solicitó {PLAN_NAMES[organization.latest_request.plan_code]}</p>}</td>
                       <td className="px-4 py-4 text-sm font-bold text-latus-ink">{PLAN_NAMES[organization.plan_code] || organization.plan_code}</td>
                       <td className="px-4 py-4 text-sm text-latus-muted">{SUBSCRIPTION_LABELS[organization.subscription_status] || organization.subscription_status}</td>
                       <td className="px-4 py-4 text-sm text-latus-muted">{PROVIDER_LABELS[organization.provider_status] || (organization.provider_status ? organization.provider_status : "Sin vincular")}</td>
@@ -1081,6 +1096,7 @@ export default function Plataforma() {
                       <td className="px-4 py-4"><p className="text-sm font-extrabold text-latus-ink">USD {Number(organization.ai_billing?.this_month?.billable_cost_usd || 0).toFixed(2)}</p><p className="mt-1 text-xs text-latus-muted">Base USD {Number(organization.ai_billing?.this_month?.base_cost_usd || 0).toFixed(2)} · fee {organization.ai_billing?.fee_percent ?? 0}%</p>{(() => { const profitability = organization.ai_billing?.profitability || {}; const meta = PROFITABILITY_STATES[profitability.status] || PROFITABILITY_STATES.not_configured; return <span className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${meta.tone}`}>{meta.label}{profitability.ai_net_margin_percent != null ? ` · IA ${profitability.ai_net_margin_percent}%` : ""}</span>; })()}</td>
                       <td className="px-4 py-4"><span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-extrabold ${statusTone(organization.access?.allowed)}`}>{organization.access?.allowed ? "Habilitado" : "Bloqueado"}</span></td>
                       <td className="px-5 py-4 text-right">
+                        {organization.is_demo && <Button type="button" variant="outline" size="sm" disabled={resetDemo.isPending} onClick={() => { if (window.confirm(`¿Restaurar la demo de ${organization.name}? Se descartarán únicamente los cambios realizados dentro de esa empresa demostrativa.`)) resetDemo.mutate(organization.organization_id); }} className="rounded-lg border-sky-300 bg-sky-50 text-sky-800 hover:bg-sky-100 text-xs font-bold mr-2"><RefreshCw className={`h-3.5 w-3.5 mr-1 ${resetDemo.isPending ? "animate-spin" : ""}`} />Restaurar demo</Button>}
                         <Button type="button" variant="outline" size="sm" onClick={() => setSimulatingOrg(organization)} className="rounded-lg border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 text-xs font-bold mr-2">Simular</Button>
                         {organization.ai_variable_billing?.state === "pilot" && <Button type="button" variant="outline" size="sm" onClick={() => setPilotReviewOrg(organization)} className="mr-2 rounded-lg border-violet-300 bg-violet-50 text-violet-900 hover:bg-violet-100 text-xs font-bold">Revisar piloto</Button>}
                         <Button type="button" variant="outline" size="sm" onClick={() => setSelected(organization)} className="rounded-lg border-latus-warm-border"><Pencil className="h-3.5 w-3.5 mr-1" />Administrar</Button>

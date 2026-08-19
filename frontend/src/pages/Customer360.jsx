@@ -33,6 +33,11 @@ const STATUS_LABELS = {
   completed: "Completado", cancelled: "Cancelado", draft: "Borrador",
   confirmed: "Confirmada", paid: "Pagada", partial: "Pago parcial", todo: "Pendiente",
   in_progress: "En curso", done: "Completada", received: "Recibido",
+  sent: "Enviado", delivered: "Entregado", read: "Leído", failed: "Falló",
+};
+
+const CHANNEL_LABELS = {
+  whatsapp: "WhatsApp", webchat: "Chat web", calendar: "Calendario", crm: "CRM",
 };
 
 const TYPE_META = {
@@ -86,7 +91,7 @@ function Timeline({ events }) {
                     <p className="font-bold text-latus-ink">{event.title}</p>
                     <StatusPill value={event.status} />
                   </div>
-                  <p className="mt-0.5 text-[11px] font-bold uppercase tracking-wider text-latus-blue">{meta.label}{event.channel ? ` · ${event.channel}` : ""}</p>
+                  <p className="mt-0.5 text-[11px] font-bold uppercase tracking-wider text-latus-blue">{meta.label}{event.channel ? ` · ${CHANNEL_LABELS[event.channel] || event.channel}` : ""}</p>
                 </div>
                 <time className="shrink-0 text-xs text-latus-muted">{formatDate(event.occurred_at)}</time>
               </div>
@@ -107,8 +112,9 @@ export default function Customer360() {
     queryKey: ["customer-360", contactId],
     queryFn: () => api.get(`/contacts/${contactId}/360`).then((response) => response.data),
     enabled: !!contactId,
+    staleTime: 30_000,
   });
-  const usersQ = useQuery({ queryKey: ["users"], queryFn: () => api.get("/users").then((response) => response.data) });
+  const usersQ = useQuery({ queryKey: ["users"], queryFn: () => api.get("/users").then((response) => response.data), staleTime: 60_000 });
 
   const data = customerQ.data;
   const userNames = useMemo(() => Object.fromEntries((usersQ.data || []).map((user) => [user.user_id, user.name])), [usersQ.data]);

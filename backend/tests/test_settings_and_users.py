@@ -560,6 +560,54 @@ class TestUsersCRUD:
 # Billing and platform licenses
 # ====================================================================
 class TestBillingFoundation:
+    def test_internal_and_demo_organizations_are_not_billable(self, srv):
+        server, _fake, _client = srv
+
+        assert server._organization_is_billable({"organization_id": "org_customer"}) is True
+        assert server._organization_is_billable({"organization_kind": "customer"}) is True
+        assert server._organization_is_billable({"organization_kind": "internal"}) is False
+        assert server._organization_is_billable({"is_demo": True}) is False
+        assert server._organization_is_billable({"billing_exempt": True}) is False
+        assert server._organization_is_billable({"organization_id": "org_latus_internal"}) is False
+
+    def test_platform_admin_can_refresh_only_a_demo_tenant(self, srv, monkeypatch):
+        _server, fake, client = srv
+        monkeypatch.setenv("PLATFORM_ADMIN_EMAILS", "admin@latus.test")
+        demo_id = "org_demo_refresh"
+        customer_id = "org_customer_preserved"
+        _run(fake.organizations.insert_one({
+            "organization_id": demo_id, "name": "AutoNorte",
+            "status": "active", "is_demo": True,
+        }))
+        _run(fake.organizations.insert_one({
+            "organization_id": customer_id, "name": "Cliente real",
+            "status": "active", "is_demo": False,
+        }))
+        _run(fake.contacts.insert_one({
+            "id": "old_demo_contact", "organization_id": demo_id, "name": "Dato viejo",
+        }))
+        _run(fake.contacts.insert_one({
+            "id": "real_contact", "organization_id": customer_id, "name": "No borrar",
+        }))
+
+        response = client.post(
+            f"/api/platform/organizations/{demo_id}/reset-demo", headers=_h(),
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["inserted"]["contacts"] == 10
+        assert _run(fake.contacts.count_documents({"organization_id": demo_id})) == 10
+        assert _run(fake.contacts.count_documents({"organization_id": customer_id})) == 1
+        refreshed = _run(fake.organizations.find_one({"organization_id": demo_id}))
+        assert refreshed["organization_kind"] == "demo"
+        assert refreshed["billing_exempt"] is True
+        assert refreshed["automation_enabled"] is False
+
+        blocked = client.post(
+            f"/api/platform/organizations/{customer_id}/reset-demo", headers=_h(),
+        )
+        assert blocked.status_code == 400
+
     def test_subscription_summary_and_plan_request(self, srv):
         server, fake, client = srv
         summary = client.get("/api/billing/subscription", headers=_h())

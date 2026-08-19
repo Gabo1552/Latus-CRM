@@ -219,7 +219,12 @@ async def run_automation_cycle(runtime=None) -> dict:
         import server as runtime  # lazy import avoids circular imports
 
     organizations = await runtime._raw_collection("organizations").find(
-        {"status": "active"}, {"organization_id": 1, "_id": 0}
+        {
+            "status": "active",
+            "is_demo": {"$ne": True},
+            "automation_enabled": {"$ne": False},
+        },
+        {"organization_id": 1, "_id": 0},
     ).to_list(10_000)
     output: dict[str, Any] = {
         "started_at": _utcnow().isoformat(),

@@ -231,7 +231,7 @@ def build_dealership_demo_dataset(now: datetime | None = None) -> dict:
         ("Test drive Taos Comfortline", "dealer_service_testdrive", "dealer_user_sales_2", 3, 11, 0, 45, "dealer_contact_06", "dealer_lead_06", "dealer_conv_06"),
         ("Entrega técnica Toyota Hilux", "dealer_service_delivery", "dealer_user_delivery", 4, 15, 0, 90, "dealer_contact_04", "dealer_lead_04", "dealer_conv_04"),
         ("Asesoría de financiación Peugeot 208", "dealer_service_financing", "dealer_user_sales_1", 1, 12, 0, 30, "dealer_contact_05", "dealer_lead_05", "dealer_conv_05"),
-        ("Entrega Volkswagen Yaris", "dealer_service_delivery", "dealer_user_delivery", 5, 10, 30, 90, "dealer_contact_08", "dealer_lead_08", "dealer_conv_08"),
+        ("Entrega Toyota Yaris", "dealer_service_delivery", "dealer_user_delivery", 5, 10, 30, 90, "dealer_contact_08", "dealer_lead_08", "dealer_conv_08"),
     ]
     appointments = []
     for index, row in enumerate(appointment_rows, 1):

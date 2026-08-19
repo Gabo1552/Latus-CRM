@@ -117,6 +117,14 @@ class _Cursor:
                             reverse=(direction == -1))
         return self
 
+    def skip(self, n):
+        self._docs = self._docs[n:]
+        return self
+
+    def limit(self, n):
+        self._docs = self._docs[:n]
+        return self
+
     async def to_list(self, n=None):
         return list(self._docs if n is None else self._docs[:n])
 

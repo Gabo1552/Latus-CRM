@@ -131,6 +131,20 @@ class TestCatalogCRUD:
         prices = [i["price"] for i in r.json()["items"]]
         assert prices == [300, 200, 100]
 
+    def test_08b_pagination_applies_offset_in_database_cursor(self, srv):
+        _, _, c = srv
+        for name in ("Producto A", "Producto B", "Producto C"):
+            c.post("/api/catalog/products", headers=_h("T-ADMIN"), json={"name": name})
+
+        response = c.get(
+            "/api/catalog/products?sort=name&offset=1&limit=1",
+            headers=_h("T-AGENT"),
+        )
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 3
+        assert [item["name"] for item in response.json()["items"]] == ["Producto B"]
+
     def test_09_update_changes_updated_at(self, srv):
         _, _, c = srv
         r = c.post("/api/catalog/products", headers=_h("T-ADMIN"),

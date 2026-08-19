@@ -92,16 +92,19 @@ export default function Catalogo() {
     queryKey: ["catalog-list", params],
     queryFn: () => api.get(`/catalog/products?${params}`).then((r) => r.data),
     enabled: !!user,
+    staleTime: 30_000,
   });
   const catsQ = useQuery({
     queryKey: ["catalog-categories"],
     queryFn: () => api.get("/catalog/categories").then((r) => r.data),
     enabled: !!user,
+    staleTime: 60_000,
   });
   const statsQ = useQuery({
     queryKey: ["catalog-stats"],
     queryFn: () => api.get("/catalog/stats").then((r) => r.data),
     enabled: !!user,
+    staleTime: 30_000,
   });
   const reload = () => {
     qc.invalidateQueries({ queryKey: ["catalog-list"] });
@@ -113,6 +116,7 @@ export default function Catalogo() {
     queryKey: ["settings"],
     queryFn: () => api.get("/settings").then((r) => r.data),
     enabled: !!user,
+    staleTime: 60_000,
   });
   const categoryColors = settingsQ.data?.catalog_category_colors || {};
 

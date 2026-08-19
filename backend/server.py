@@ -477,6 +477,7 @@ SUBSCRIPTION_STATUSES = {
 }
 LICENSE_STATUSES = {"not_configured", "active", "grace_period", "suspended", "expired"}
 AI_VARIABLE_BILLING_STATES = {"disabled", "simulation", "pilot", "active"}
+ORGANIZATION_KINDS = {"customer", "internal", "demo"}
 
 
 def _default_organization_ai_variable_billing() -> dict[str, Any]:
@@ -507,6 +508,29 @@ def _organization_ai_variable_billing(organization: dict) -> dict[str, Any]:
         "state": state,
         "ai_fee_percent": fee_override,
     }
+
+
+def _organization_kind(organization: dict) -> str:
+    kind = str(organization.get("organization_kind") or "").lower()
+    if kind in ORGANIZATION_KINDS:
+        return kind
+    if organization.get("is_demo") is True:
+        return "demo"
+    if organization.get("organization_id") == "org_latus_internal":
+        return "internal"
+    return "customer"
+
+
+def _organization_is_billable(organization: dict) -> bool:
+    """Return whether a tenant belongs in commercial revenue projections.
+
+    Older customer records do not have these flags, so they remain billable by
+    default. Internal and demo tenants must be opted out explicitly and never
+    inflate MRR or projected AI revenue.
+    """
+    if organization.get("billing_exempt") is True:
+        return False
+    return _organization_kind(organization) == "customer"
 
 
 def _effective_ai_settlement_policy(organization: dict, policy: dict) -> dict:
@@ -699,6 +723,12 @@ class Organization(BaseModel):
     ai_variable_billing: dict[str, Any] = Field(
         default_factory=_default_organization_ai_variable_billing
     )
+    organization_kind: str = "customer"
+    billing_exempt: bool = False
+    automation_enabled: bool = True
+    is_demo: bool = False
+    internal_notes: Optional[str] = None
+    billing_manual_override: bool = False
     requested_plan_code: Optional[str] = None
     billing_request_status: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
@@ -3251,17 +3281,21 @@ async def mercadopago_webhook(request: Request):
 async def platform_list_organizations(platform_admin: User = Depends(require_platform_admin)):
     from ai import usage as ai_usage
     from billing import ai_settlement
-    organizations = await _raw_collection("organizations").find({}, {"_id": 0}).sort(
-        "created_at", -1
-    ).to_list(500)
-    organizations = [item for item in organizations if item.get("organization_id")]
     month_start = datetime.combine(
         datetime.now(timezone.utc).date().replace(day=1),
         datetime.min.time(), tzinfo=timezone.utc,
     ).isoformat()
-    usage_logs = await _raw_collection("ai_usage_logs").find(
-        {"created_at": {"$gte": month_start}}, {"_id": 0}
-    ).to_list(100_000)
+    organizations, usage_logs, billing_policy, settlement_policy = await asyncio.gather(
+        _raw_collection("organizations").find({}, {"_id": 0}).sort(
+            "created_at", -1
+        ).to_list(500),
+        _raw_collection("ai_usage_logs").find(
+            {"created_at": {"$gte": month_start}}, {"_id": 0}
+        ).to_list(100_000),
+        ai_usage.load_billing_policy(db),
+        ai_settlement.load_policy(_raw_collection("pricing_config")),
+    )
+    organizations = [item for item in organizations if item.get("organization_id")]
     usage_by_organization: dict[str, dict] = {}
     for log in usage_logs:
         organization_id = log.get("organization_id")
@@ -3276,11 +3310,11 @@ async def platform_list_organizations(platform_admin: User = Depends(require_pla
         item["tokens"] += int(log.get("total_tokens") or 0)
         for field in ("base_cost_usd", "ai_fee_usd", "billable_cost_usd"):
             item[field] = round(item[field] + float(billing[field]), 6)
-    billing_policy = await ai_usage.load_billing_policy(db)
-    settlement_policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
-    rows = []
-    for organization in organizations:
+    semaphore = asyncio.Semaphore(20)
+
+    async def build_row(organization: dict) -> dict:
         organization_id = organization["organization_id"]
+        is_billable = _organization_is_billable(organization)
         fee_override = organization.get("ai_fee_percent")
         usage = usage_by_organization.get(organization_id, {
             "calls": 0, "tokens": 0, "base_cost_usd": 0.0,
@@ -3289,7 +3323,13 @@ async def platform_list_organizations(platform_admin: User = Depends(require_pla
         effective_policy = _effective_ai_settlement_policy(organization, settlement_policy)
         rate = float(effective_policy.get("usd_to_ars_rate") or 0.0)
         plan = PLAN_CATALOG.get(organization.get("plan_code") or "base") or PLAN_CATALOG["base"]
-        if rate > 0:
+        if not is_billable:
+            profitability = {
+                "status": "exempt", "is_profitable": True,
+                "warning": "Empresa interna o demostrativa: no se factura",
+                "net_margin_percent": None, "ai_net_margin_percent": None,
+            }
+        elif rate > 0:
             amounts = ai_settlement.calculate_amounts(
                 plan_amount_ars=float(plan.get("monthly_price_ars") or 0.0),
                 billable_cost_usd=float(usage["billable_cost_usd"]),
@@ -3312,19 +3352,29 @@ async def platform_list_organizations(platform_admin: User = Depends(require_pla
                 "warning": "Configurá la cotización USD/ARS para calcular rentabilidad",
                 "net_margin_percent": None, "ai_net_margin_percent": None,
             }
-        rows.append({
+        async with semaphore:
+            active_users, contacts, latest_request, latest_statement = await asyncio.gather(
+                _raw_collection("memberships").count_documents({
+                    "organization_id": organization_id, "status": "active",
+                }),
+                _raw_collection("contacts").count_documents({
+                    "organization_id": organization_id,
+                }),
+                _raw_collection("billing_requests").find_one(
+                    {"organization_id": organization_id}, {"_id": 0},
+                    sort=[("created_at", -1)],
+                ),
+                _latest_ai_statement(organization_id),
+            )
+        return {
             **organization,
+            "is_billable": is_billable,
+            "organization_kind": _organization_kind(organization),
             "ai_variable_billing": _organization_ai_variable_billing(organization),
             "access": subscription_access_state(organization),
-            "active_users": await _raw_collection("memberships").count_documents({
-                "organization_id": organization_id, "status": "active",
-            }),
-            "contacts": await _raw_collection("contacts").count_documents({
-                "organization_id": organization_id,
-            }),
-            "latest_request": await _raw_collection("billing_requests").find_one(
-                {"organization_id": organization_id}, {"_id": 0}, sort=[("created_at", -1)]
-            ),
+            "active_users": active_users,
+            "contacts": contacts,
+            "latest_request": latest_request,
             "ai_billing": {
                 "fee_percent": (
                     ai_usage.validate_fee_percent(fee_override)
@@ -3333,12 +3383,107 @@ async def platform_list_organizations(platform_admin: User = Depends(require_pla
                 ),
                 "has_custom_fee": fee_override is not None,
                 "this_month": usage,
+                "commercial_billable_cost_usd": (
+                    usage["billable_cost_usd"] if is_billable else 0.0
+                ),
                 "profitability": profitability,
                 "profitability_enforcement": effective_policy["profitability_enforcement"],
-                "latest_statement": await _latest_ai_statement(organization_id),
+                "latest_statement": latest_statement,
             },
-        })
+        }
+
+    rows = await asyncio.gather(*(build_row(organization) for organization in organizations))
     return rows
+
+
+DEMO_REFRESH_DATASET_COLLECTIONS = (
+    "work_areas", "tags", "products", "contacts", "leads", "conversations",
+    "messages", "notes", "tasks", "appointments", "sales", "inventory_movements",
+    "bot_events", "ai_usage_logs",
+)
+DEMO_REFRESH_CLEANUP_COLLECTIONS = {
+    *DEMO_REFRESH_DATASET_COLLECTIONS,
+    "bot_settings", "settings", "notifications", "whatsapp_events", "whatsapp_routes",
+}
+
+
+def _build_demo_refresh_documents(organization_id: str) -> dict[str, list[dict]]:
+    """Build a fresh, date-relative dealership scenario for one demo tenant."""
+    from dealership_demo_data import build_dealership_demo_dataset
+
+    dataset = build_dealership_demo_dataset()
+    documents = {
+        collection_name: [
+            {**document, "organization_id": organization_id}
+            for document in dataset[collection_name]
+        ]
+        for collection_name in DEMO_REFRESH_DATASET_COLLECTIONS
+    }
+    bot_settings = {**dataset["bot_settings"], "organization_id": organization_id}
+    bot_settings["_id"] = f"{organization_id}:default"
+    documents["bot_settings"] = [bot_settings]
+    documents["settings"] = [
+        {**dataset["app_settings"], "organization_id": organization_id},
+        {
+            "key": "seeded",
+            "scenario": "autonorte_concesionaria_argentina_v1",
+            "at": now_iso(),
+            "is_demo": True,
+            "organization_id": organization_id,
+        },
+    ]
+    return documents
+
+
+@api_router.post("/platform/organizations/{organization_id}/reset-demo")
+async def platform_reset_demo_organization(
+    organization_id: str,
+    platform_admin: User = Depends(require_platform_admin),
+):
+    """Restore only the selected demo tenant without touching customers or sessions."""
+    organization = await _raw_collection("organizations").find_one(
+        {"organization_id": organization_id}, {"_id": 0},
+    )
+    if not organization:
+        raise HTTPException(status_code=404, detail="Empresa no encontrada")
+    if organization.get("is_demo") is not True:
+        raise HTTPException(
+            status_code=400,
+            detail="Solo se pueden restaurar empresas marcadas como demostrativas",
+        )
+
+    documents = _build_demo_refresh_documents(organization_id)
+    deleted: dict[str, int] = {}
+    inserted: dict[str, int] = {}
+    for collection_name in sorted(DEMO_REFRESH_CLEANUP_COLLECTIONS):
+        result = await _raw_collection(collection_name).delete_many(
+            {"organization_id": organization_id},
+        )
+        deleted[collection_name] = int(getattr(result, "deleted_count", 0) or 0)
+    for collection_name, rows in documents.items():
+        collection = _raw_collection(collection_name)
+        for row in rows:
+            await collection.insert_one(row)
+        inserted[collection_name] = len(rows)
+
+    refreshed_at = now_iso()
+    await _raw_collection("organizations").update_one(
+        {"organization_id": organization_id},
+        {"$set": {
+            "organization_kind": "demo",
+            "billing_exempt": True,
+            "automation_enabled": False,
+            "demo_last_refreshed_at": refreshed_at,
+            "updated_at": refreshed_at,
+        }},
+    )
+    return {
+        "ok": True,
+        "organization_id": organization_id,
+        "refreshed_at": refreshed_at,
+        "deleted": deleted,
+        "inserted": inserted,
+    }
 
 
 @api_router.post("/platform/organizations")
@@ -8298,15 +8443,9 @@ async def platform_financial_dashboard(
     from billing import ai_settlement
     from utils.alerts import list_system_alerts
 
-    policy = await ai_settlement.load_policy(_raw_collection("pricing_config"))
-    rate = float(policy.get("usd_to_ars_rate") or 1250.0)
-    fx_buffer_default = float(policy.get("fx_buffer_percent") or 10.0)
-
     org_filter = {}
     if organization_id and organization_id not in ("__all__", ""):
         org_filter["organization_id"] = organization_id
-
-    organizations = await _raw_collection("organizations").find(org_filter, {"_id": 0}).sort("created_at", -1).to_list(500)
 
     p_start, p_end = _resolve_dashboard_date_range(period, start_date, end_date)
 
@@ -8320,7 +8459,33 @@ async def platform_financial_dashboard(
         if p_end:
             logs_query["created_at"]["$lt"] = p_end
 
-    usage_logs = await _raw_collection("ai_usage_logs").find(logs_query, {"_id": 0}).to_list(100_000)
+    paid_query: dict[str, Any] = {"status": "paid"}
+    stmt_query: dict[str, Any] = {}
+    if organization_id and organization_id not in ("__all__", ""):
+        paid_query["organization_id"] = organization_id
+        stmt_query["organization_id"] = organization_id
+
+    policy, organizations, usage_logs, paid_statements, latest_statements, alerts = await asyncio.gather(
+        ai_settlement.load_policy(_raw_collection("pricing_config")),
+        _raw_collection("organizations").find(org_filter, {"_id": 0})
+        .sort("created_at", -1).to_list(500),
+        _raw_collection("ai_usage_logs").find(logs_query, {"_id": 0}).to_list(100_000),
+        _raw_collection("ai_billing_statements").find(paid_query, {"_id": 0})
+        .sort("paid_at", -1).to_list(10_000),
+        _raw_collection("ai_billing_statements").find(stmt_query, {"_id": 0})
+        .sort("created_at", -1).to_list(20),
+        list_system_alerts(
+            db,
+            organization_id=(
+                organization_id
+                if organization_id and organization_id != "__all__"
+                else None
+            ),
+            limit=10,
+        ),
+    )
+    rate = float(policy.get("usd_to_ars_rate") or 0.0)
+    fx_buffer_default = float(policy.get("fx_buffer_percent") or 10.0)
 
     usage_by_org: dict[str, dict] = {}
     for log in usage_logs:
@@ -8337,12 +8502,6 @@ async def platform_financial_dashboard(
         item["ai_fee_usd"] = round(item["ai_fee_usd"] + float(b["ai_fee_usd"]), 6)
         item["billable_cost_usd"] = round(item["billable_cost_usd"] + float(b["billable_cost_usd"]), 6)
 
-    paid_query: dict[str, Any] = {"status": "paid"}
-    if organization_id and organization_id not in ("__all__", ""):
-        paid_query["organization_id"] = organization_id
-    paid_statements = await _raw_collection("ai_billing_statements").find(
-        paid_query, {"_id": 0},
-    ).sort("paid_at", -1).to_list(10_000)
     range_start = _parse_billing_datetime(p_start)
     range_end = _parse_billing_datetime(p_end)
     realized_by_org: dict[str, dict] = {}
@@ -8375,6 +8534,7 @@ async def platform_financial_dashboard(
 
     for org in organizations:
         org_id = org["organization_id"]
+        is_billable = _organization_is_billable(org)
         plan_code = org.get("plan_code") or "base"
         plan = PLAN_CATALOG.get(plan_code) or PLAN_CATALOG["base"]
         plan_price = float(plan.get("monthly_price_ars") or 0.0)
@@ -8383,31 +8543,42 @@ async def platform_financial_dashboard(
         allowed = access.get("allowed", False)
         subscription_status = org.get("subscription_status") or "not_configured"
         license_status = org.get("license_status") or "not_configured"
-        mrr_active = subscription_status == "active" and license_status not in {"suspended", "expired"}
+        mrr_active = (
+            is_billable
+            and subscription_status == "active"
+            and license_status not in {"suspended", "expired"}
+        )
         projected_plan_amount_ars = plan_price if mrr_active else 0.0
 
         u = usage_by_org.get(org_id, {
             "calls": 0, "tokens": 0, "base_cost_usd": 0.0, "ai_fee_usd": 0.0, "billable_cost_usd": 0.0,
         })
+        commercial_usage = u if is_billable else {
+            "calls": 0, "tokens": 0, "base_cost_usd": 0.0,
+            "ai_fee_usd": 0.0, "billable_cost_usd": 0.0,
+        }
         realized = realized_by_org.get(org_id, _empty_realized_financials())
-        _add_realized_financials(realized_totals, realized)
+        if is_billable:
+            _add_realized_financials(realized_totals, realized)
 
         if mrr_active:
             total_subscriptions_ars += projected_plan_amount_ars
 
-        total_ai_billable_usd += u["billable_cost_usd"]
-        total_ai_provider_cost_usd += u["base_cost_usd"]
-        total_ai_fee_usd += u["ai_fee_usd"]
+        total_ai_billable_usd += commercial_usage["billable_cost_usd"]
+        total_ai_provider_cost_usd += commercial_usage["base_cost_usd"]
+        total_ai_fee_usd += commercial_usage["ai_fee_usd"]
 
         org_var_billing = _organization_ai_variable_billing(org)
         effective_policy = _effective_ai_settlement_policy(org, policy)
         org_buffer = float(effective_policy["fx_buffer_percent"])
-        ai_billable_ars = round(u["billable_cost_usd"] * rate * (1 + org_buffer / 100.0), 2)
+        ai_billable_ars = round(
+            commercial_usage["billable_cost_usd"] * rate * (1 + org_buffer / 100.0), 2,
+        )
         total_monthly_ars = round(projected_plan_amount_ars + ai_billable_ars, 2)
         profitability = ai_settlement.calculate_profitability_breakdown(
             plan_amount_ars=projected_plan_amount_ars,
             ai_amount_ars=ai_billable_ars,
-            base_cost_usd=u["base_cost_usd"],
+            base_cost_usd=commercial_usage["base_cost_usd"],
             usd_to_ars_rate=rate,
             mp_fee_percent=float(effective_policy["mp_fee_percent"]),
             tax_percent=float(effective_policy["tax_percent"]),
@@ -8423,6 +8594,8 @@ async def platform_financial_dashboard(
         org_matrix.append({
             "organization_id": org_id,
             "name": org.get("name") or "Sin nombre",
+            "is_billable": is_billable,
+            "organization_kind": _organization_kind(org),
             "plan_code": plan_code,
             "plan_name": plan.get("name") or plan_code,
             "plan_price_ars": plan_price,
@@ -8437,6 +8610,7 @@ async def platform_financial_dashboard(
             "ai_usage": {
                 **u,
                 "billable_cost_ars": ai_billable_ars,
+                "commercial_billable_cost_usd": commercial_usage["billable_cost_usd"],
             },
             "profitability": profitability,
             "profitability_enforcement": effective_policy["profitability_enforcement"],
@@ -8462,16 +8636,13 @@ async def platform_financial_dashboard(
         realized_totals["net_profit_ars"] / realized_totals["total_revenue_ars"] * 100.0, 1,
     ) if realized_totals["total_revenue_ars"] > 0 else 0.0
 
-    stmt_query = {}
-    if organization_id and organization_id not in ("__all__", ""):
-        stmt_query["organization_id"] = organization_id
-    latest_statements = await _raw_collection("ai_billing_statements").find(stmt_query, {"_id": 0}).sort("created_at", -1).to_list(20)
-    alerts = await list_system_alerts(db, organization_id=organization_id if organization_id and organization_id != "__all__" else None, limit=10)
-
     return {
         "summary": {
             "total_organizations": len(organizations),
-            "active_licenses": sum(1 for o in org_matrix if o["access_allowed"]),
+            "billable_organizations": sum(1 for o in org_matrix if o["is_billable"]),
+            "active_licenses": sum(
+                1 for o in org_matrix if o["is_billable"] and o["access_allowed"]
+            ),
             "mrr_active_organizations": sum(1 for o in org_matrix if o["mrr_active"]),
             "usd_to_ars_rate": rate,
             "fx_buffer_percent": fx_buffer_default,
@@ -8702,12 +8873,14 @@ async def catalog_list(
         raise HTTPException(400, "Parámetro 'sort' inválido")
     field = sort.lstrip("-")
     direction = -1 if sort.startswith("-") else 1
-    total = await db.products.count_documents(query)
-    items = await db.products.find(
-        query,
-        {"_id": 0, "deleted_at": 0},
-    ).sort(field, direction).to_list(offset + limit)
-    return {"items": [product_view(item) for item in items[offset:offset + limit]], "total": total,
+    total, items = await asyncio.gather(
+        db.products.count_documents(query),
+        db.products.find(
+            query,
+            {"_id": 0, "deleted_at": 0},
+        ).sort(field, direction).skip(offset).limit(limit).to_list(limit),
+    )
+    return {"items": [product_view(item) for item in items], "total": total,
             "limit": limit, "offset": offset}
 
 
@@ -8814,10 +8987,11 @@ async def catalog_restore(product_id: str,
 
 @api_router.get("/catalog/categories")
 async def catalog_categories(user: User = Depends(require_perm("catalog_view"))):
-    settings = await get_app_settings()
+    settings, cats = await asyncio.gather(
+        get_app_settings(),
+        db.products.distinct("category", {"deleted_at": None, "category": {"$ne": None}}),
+    )
     configured = settings.get("catalog_categories", [])
-    cats = await db.products.distinct("category", {"deleted_at": None,
-                                                   "category": {"$ne": None}})
     merged = _normalize_catalog_categories([*configured, *[c for c in cats if c]])
     return {"categories": merged}
 
@@ -8825,17 +8999,20 @@ async def catalog_categories(user: User = Depends(require_perm("catalog_view")))
 @api_router.get("/catalog/stats")
 async def catalog_stats(user: User = Depends(require_perm("catalog_view"))):
     base = {"deleted_at": None}
-    total = await db.products.count_documents(base)
-    active = await db.products.count_documents({**base, "active": True})
-    out_of_stock = await db.products.count_documents({**base, "stock_status": "sin_stock"})
+    total, active, out_of_stock, category_rows, last = await asyncio.gather(
+        db.products.count_documents(base),
+        db.products.count_documents({**base, "active": True}),
+        db.products.count_documents({**base, "stock_status": "sin_stock"}),
+        db.products.find(base, {"_id": 0, "category": 1}).to_list(50_000),
+        db.products.find(base, {"_id": 0, "updated_at": 1})
+        .sort("updated_at", -1).to_list(1),
+    )
     cats: dict[str, int] = {}
-    for p in await db.products.find(base, {"_id": 0, "category": 1}).to_list(50_000):
+    for p in category_rows:
         c = p.get("category") or "(sin categoría)"
         cats[c] = cats.get(c, 0) + 1
     by_cat = sorted([{"name": k, "count": v} for k, v in cats.items()],
                     key=lambda x: x["count"], reverse=True)
-    last = await db.products.find(base, {"_id": 0, "updated_at": 1}) \
-        .sort("updated_at", -1).to_list(1)
     return {
         "total": total, "active": active, "out_of_stock": out_of_stock,
         "by_category": by_cat,
@@ -9476,10 +9653,24 @@ async def list_appointments(
         q["assigned_to"] = assigned_to
 
     docs = await db.appointments.find(q, {"_id": 0}).sort("start_time", 1).to_list(1000)
-    
-    # Expand lead/contact
-    leads = {l["id"]: l for l in await db.leads.find({}, {"_id": 0}).to_list(1000)}
-    contacts = {c["id"]: c for c in await db.contacts.find({}, {"_id": 0}).to_list(1000)}
+
+    lead_ids = {item.get("lead_id") for item in docs if item.get("lead_id")}
+    lead_rows, team_rows = await asyncio.gather(
+        db.leads.find({"id": {"$in": list(lead_ids)}}, {"_id": 0}).to_list(1000)
+        if lead_ids else asyncio.sleep(0, result=[]),
+        _team_user_docs(user.organization_id, include_inactive=True),
+    )
+    leads = {lead["id"]: lead for lead in lead_rows}
+    contact_ids = {
+        item.get("contact_id") for item in docs if item.get("contact_id")
+    } | {
+        lead.get("contact_id") for lead in lead_rows if lead.get("contact_id")
+    }
+    contact_rows = await (
+        db.contacts.find({"id": {"$in": list(contact_ids)}}, {"_id": 0}).to_list(1000)
+        if contact_ids else asyncio.sleep(0, result=[])
+    )
+    contacts = {contact["id"]: contact for contact in contact_rows}
     members = {
         member["user_id"]: {
             "user_id": member["user_id"],
@@ -9487,7 +9678,7 @@ async def list_appointments(
             "picture": member.get("picture"),
             "role": _normalize_role(member.get("membership_role", member.get("role"))),
         }
-        for member in await _team_user_docs(user.organization_id, include_inactive=True)
+        for member in team_rows
         if member.get("user_id")
     }
     for d in docs:
@@ -10629,6 +10820,9 @@ async def _ensure_indexes() -> None:
             "organization_id", unique=True, name="ux_organizations_id",
         )
         await _raw_collection("organizations").create_index(
+            [("created_at", -1)], name="ix_organizations_created",
+        )
+        await _raw_collection("organizations").create_index(
             "webchat_public_key", unique=True, sparse=True,
             name="ux_organizations_webchat_public_key",
         )
@@ -10655,6 +10849,10 @@ async def _ensure_indexes() -> None:
         await _raw_collection("ai_billing_statements").create_index(
             [("organization_id", 1), ("created_at", -1)],
             name="ix_ai_statement_org_created",
+        )
+        await _raw_collection("ai_billing_statements").create_index(
+            [("status", 1), ("paid_at", -1)],
+            name="ix_ai_statement_status_paid",
         )
         await _raw_collection("ai_billing_statements").create_index(
             "provider_payment_id", unique=True, sparse=True,
@@ -10692,6 +10890,14 @@ async def _ensure_indexes() -> None:
         await db.contacts.create_index(
             [("organization_id", 1), ("whatsapp_id", 1)],
             sparse=True, name="ix_org_contacts_whatsapp_id",
+        )
+        await db.contacts.create_index(
+            [("organization_id", 1), ("id", 1)],
+            unique=True, name="ux_org_contacts_id",
+        )
+        await db.leads.create_index(
+            [("organization_id", 1), ("id", 1)],
+            unique=True, name="ux_org_leads_id",
         )
         await db.leads.create_index(
             [("organization_id", 1), ("contact_id", 1), ("updated_at", -1)],
@@ -10742,6 +10948,9 @@ async def _ensure_indexes() -> None:
             [("organization_id", 1), ("created_at", -1), ("status", 1)],
             name="ix_org_ai_usage_dt_status")
         await db.ai_usage_logs.create_index(
+            [("created_at", -1), ("organization_id", 1)],
+            name="ix_ai_usage_created_org")
+        await db.ai_usage_logs.create_index(
             [("organization_id", 1), ("model", 1)], name="ix_org_ai_usage_model")
         await db.ai_usage_logs.create_index(
             [("organization_id", 1), ("conversation_id", 1)],
@@ -10752,6 +10961,10 @@ async def _ensure_indexes() -> None:
             name="ux_org_products_sku",
             partialFilterExpression={"sku": {"$type": "string"}})
         await db.products.create_index([("organization_id", 1), ("name", 1)], name="ix_org_products_name")
+        await db.products.create_index(
+            [("organization_id", 1), ("deleted_at", 1), ("active", 1), ("name", 1)],
+            name="ix_org_products_listing",
+        )
         await db.products.create_index([("organization_id", 1), ("category", 1)], name="ix_org_products_category")
         await db.products.create_index([("organization_id", 1), ("tags", 1)], name="ix_org_products_tags")
         await db.sales.create_index(
@@ -10779,6 +10992,10 @@ async def _ensure_indexes() -> None:
         await db.appointments.create_index(
             [("organization_id", 1), ("assigned_to", 1), ("start_time", 1)],
             name="ix_org_appointments_assignee_start",
+        )
+        await db.appointments.create_index(
+            [("organization_id", 1), ("id", 1)],
+            unique=True, name="ux_org_appointments_id",
         )
         await db.appointments.create_index(
             [("organization_id", 1), ("start_time", 1)], name="ix_org_appointments_start")

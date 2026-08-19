@@ -134,8 +134,10 @@ def _now_iso() -> str:
 
 
 def _organization_document(*, organization_id: str, name: str, slug: str,
-                           billing_email: str, is_demo: bool) -> dict[str, Any]:
+                           billing_email: str, organization_kind: str) -> dict[str, Any]:
     now = datetime.now(timezone.utc).replace(microsecond=0)
+    is_demo = organization_kind == "demo"
+    billing_exempt = organization_kind in {"internal", "demo"}
     return {
         "organization_id": organization_id,
         "name": name,
@@ -151,6 +153,9 @@ def _organization_document(*, organization_id: str, name: str, slug: str,
         "billing_email": billing_email,
         "billing_cycle": "monthly",
         "billing_manual_override": True,
+        "organization_kind": organization_kind,
+        "billing_exempt": billing_exempt,
+        "automation_enabled": not is_demo,
         "ai_fee_percent": None,
         "ai_variable_billing": {
             "state": "simulation" if is_demo else "disabled",
@@ -217,14 +222,14 @@ def build_seed_documents(admin_doc: dict[str, Any]) -> dict[str, list[dict[str, 
         name="Latus CRM",
         slug="latus",
         billing_email=DEFAULT_ADMIN_EMAIL,
-        is_demo=False,
+        organization_kind="internal",
     )
     dealership = _organization_document(
         organization_id=DEMO_ORGANIZATION_ID,
         name="AutoNorte Concesionaria",
         slug="autonorte-demo",
         billing_email="demo@autonorte.com.ar",
-        is_demo=True,
+        organization_kind="demo",
     )
     dataset = build_dealership_demo_dataset()
 

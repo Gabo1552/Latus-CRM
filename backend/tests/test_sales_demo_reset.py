@@ -119,6 +119,13 @@ def test_reset_builds_empty_latus_tenant_and_isolated_dealership_tenant():
         }
 
     assert documents["bot_settings"][0]["_id"] == f"{DEMO_ORGANIZATION_ID}:default"
+    organizations = {row["organization_id"]: row for row in documents["organizations"]}
+    assert organizations[LATUS_ORGANIZATION_ID]["organization_kind"] == "internal"
+    assert organizations[LATUS_ORGANIZATION_ID]["billing_exempt"] is True
+    assert organizations[DEMO_ORGANIZATION_ID]["organization_kind"] == "demo"
+    assert organizations[DEMO_ORGANIZATION_ID]["billing_exempt"] is True
+    assert organizations[DEMO_ORGANIZATION_ID]["automation_enabled"] is False
+    assert any(item["title"] == "Entrega Toyota Yaris" for item in documents["appointments"])
     assert not any(
         row.get("organization_id") == LATUS_ORGANIZATION_ID
         for collection_name in ("contacts", "leads", "sales", "appointments")

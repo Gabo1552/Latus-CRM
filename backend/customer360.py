@@ -6,6 +6,7 @@ records or introducing a second source of truth.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -82,28 +83,22 @@ async def build_customer_360(
         lead_query["assigned_to"] = user_id
         sale_query["created_by"] = user_id
 
-    leads = await _find(db.leads, lead_query, sort="updated_at", limit=100)
+    conversation_query: dict[str, Any] = {"contact_id": contact_id}
+    if not inbox_all:
+        conversation_query["assigned_to"] = user_id
+    appointment_query: dict[str, Any] = {"contact_id": contact_id}
+    if not calendar_all:
+        appointment_query["assigned_to"] = user_id
+
+    leads, conversations, appointments, sales = await asyncio.gather(
+        _find(db.leads, lead_query, sort="updated_at", limit=100),
+        _find(db.conversations, conversation_query, sort="last_message_at", limit=100)
+        if inbox_visible else asyncio.sleep(0, result=[]),
+        _find(db.appointments, appointment_query, sort="start_time", direction=-1, limit=250)
+        if calendar_visible else asyncio.sleep(0, result=[]),
+        _find(db.sales, sale_query, sort="created_at", limit=250),
+    )
     lead_ids = [item["id"] for item in leads if item.get("id")]
-
-    conversations: list[dict] = []
-    if inbox_visible:
-        query: dict[str, Any] = {"contact_id": contact_id}
-        if not inbox_all:
-            query["assigned_to"] = user_id
-        conversations = await _find(
-            db.conversations, query, sort="last_message_at", limit=100,
-        )
-
-    appointments: list[dict] = []
-    if calendar_visible:
-        query = {"contact_id": contact_id}
-        if not calendar_all:
-            query["assigned_to"] = user_id
-        appointments = await _find(
-            db.appointments, query, sort="start_time", direction=-1, limit=250,
-        )
-
-    sales = await _find(db.sales, sale_query, sort="created_at", limit=250)
 
     tasks: list[dict] = []
     notes: list[dict] = []
@@ -111,26 +106,28 @@ async def build_customer_360(
         task_query: dict[str, Any] = {"lead_id": {"$in": lead_ids}}
         if not crm_all:
             task_query["assigned_to"] = user_id
-        tasks = await _find(db.tasks, task_query, sort="created_at", limit=250)
-        notes = await _find(
-            db.notes, {"lead_id": {"$in": lead_ids}}, sort="created_at", limit=250,
+        tasks, notes = await asyncio.gather(
+            _find(db.tasks, task_query, sort="created_at", limit=250),
+            _find(db.notes, {"lead_id": {"$in": lead_ids}}, sort="created_at", limit=250),
         )
 
     conversation_ids = [item["id"] for item in conversations if item.get("id")]
     messages: list[dict] = []
     bot_events: list[dict] = []
     if conversation_ids:
-        messages = await _find(
-            db.messages,
-            {"conversation_id": {"$in": conversation_ids}},
-            sort="created_at",
-            limit=max(activity_limit, 250),
-        )
-        bot_events = await _find(
-            db.bot_events,
-            {"conversation_id": {"$in": conversation_ids}},
-            sort="created_at",
-            limit=250,
+        messages, bot_events = await asyncio.gather(
+            _find(
+                db.messages,
+                {"conversation_id": {"$in": conversation_ids}},
+                sort="created_at",
+                limit=max(activity_limit, 250),
+            ),
+            _find(
+                db.bot_events,
+                {"conversation_id": {"$in": conversation_ids}},
+                sort="created_at",
+                limit=250,
+            ),
         )
 
     confirmed_sales = [item for item in sales if item.get("status") == "confirmed"]

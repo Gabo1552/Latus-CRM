@@ -52,7 +52,11 @@ class Cursor:
 
 
 class Organizations:
+    def __init__(self):
+        self.last_query = None
+
     def find(self, query, projection):
+        self.last_query = query
         return Cursor([{"organization_id": "org_a"}, {"organization_id": "org_b"}])
 
 
@@ -117,6 +121,7 @@ def test_running_cycle_renews_its_lease():
 def test_cycle_runs_every_job_for_each_tenant_and_restores_context():
     calls = []
     active_org = {"value": None}
+    organizations = Organizations()
 
     def set_org(organization_id):
         previous = active_org["value"]
@@ -131,7 +136,7 @@ def test_cycle_runs_every_job_for_each_tenant_and_restores_context():
         return result if result is not None else {"processed": 1}
 
     runtime = SimpleNamespace(
-        _raw_collection=lambda name: Organizations(),
+        _raw_collection=lambda name: organizations,
         set_organization_id=set_org,
         reset_organization_id=reset_org,
         db=object(),
@@ -154,6 +159,11 @@ def test_cycle_runs_every_job_for_each_tenant_and_restores_context():
     assert calls[-1] == (None, "ai_settlements")
     assert active_org["value"] is None
     assert result["ok"] is True
+    assert organizations.last_query == {
+        "status": "active",
+        "is_demo": {"$ne": True},
+        "automation_enabled": {"$ne": False},
+    }
 
 
 def test_worker_status_hides_cross_tenant_diagnostics_from_company_admin(monkeypatch):

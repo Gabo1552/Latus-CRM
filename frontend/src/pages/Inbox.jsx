@@ -89,6 +89,10 @@ export default function Inbox() {
     queryKey: ["work-areas"],
     queryFn: () => api.get("/admin/work-areas").then((r) => r.data).catch(() => []),
   });
+  const workAreaNames = useMemo(
+    () => Object.fromEntries(workAreas.map((area) => [area.id, area.name])),
+    [workAreas],
+  );
 
   const params = {};
   Object.entries(filters).forEach(([k, v]) => { if (v !== "all") params[k] = v; });
@@ -334,7 +338,8 @@ export default function Inbox() {
             ) : (
               filtered.map((c) => {
                 const isActive = activeId === c.id;
-                const priorityColor = statusMeta(PRIORITIES, c.priority).color;
+                const priorityMeta = statusMeta(PRIORITIES, c.priority);
+                const priorityColor = priorityMeta.color;
                 const timeStr = c.last_message_at ? formatMessageTime(c.last_message_at) : "";
 
                 return (
@@ -370,7 +375,7 @@ export default function Inbox() {
                           <span
                             className="h-2 w-2 rounded-full shrink-0"
                             style={{ backgroundColor: priorityColor }}
-                            title={`Prioridad: ${c.priority}`}
+                            title={`Prioridad: ${priorityMeta.label}`}
                           />
                         </div>
                       </div>
@@ -393,7 +398,7 @@ export default function Inbox() {
 
                         {c.assigned_work_area && (
                           <span className="inline-flex items-center text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded-sm px-1.5 py-0.5 leading-none uppercase">
-                            {c.assigned_work_area.replace("_", " ")}
+                            {workAreaNames[c.assigned_work_area] || c.assigned_work_area.replaceAll("_", " ")}
                           </span>
                         )}
                       </div>
