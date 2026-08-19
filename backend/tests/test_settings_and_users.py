@@ -125,6 +125,10 @@ class _Coll:
     async def insert_one(self, doc):
         self.docs.append(dict(doc))
 
+    async def insert_many(self, docs, ordered=True):
+        for doc in docs:
+            await self.insert_one(doc)
+
     async def update_one(self, query, update, upsert=False):
         for d in self.docs:
             if _query_matches(d, query):

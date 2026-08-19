@@ -3455,15 +3455,20 @@ async def platform_reset_demo_organization(
     documents = _build_demo_refresh_documents(organization_id)
     deleted: dict[str, int] = {}
     inserted: dict[str, int] = {}
-    for collection_name in sorted(DEMO_REFRESH_CLEANUP_COLLECTIONS):
-        result = await _raw_collection(collection_name).delete_many(
-            {"organization_id": organization_id},
-        )
+    cleanup_names = sorted(DEMO_REFRESH_CLEANUP_COLLECTIONS)
+    delete_results = await asyncio.gather(*(
+        _raw_collection(collection_name).delete_many({"organization_id": organization_id})
+        for collection_name in cleanup_names
+    ))
+    for collection_name, result in zip(cleanup_names, delete_results):
         deleted[collection_name] = int(getattr(result, "deleted_count", 0) or 0)
-    for collection_name, rows in documents.items():
-        collection = _raw_collection(collection_name)
-        for row in rows:
-            await collection.insert_one(row)
+
+    populated = [(collection_name, rows) for collection_name, rows in documents.items() if rows]
+    await asyncio.gather(*(
+        _raw_collection(collection_name).insert_many(rows, ordered=True)
+        for collection_name, rows in populated
+    ))
+    for collection_name, rows in populated:
         inserted[collection_name] = len(rows)
 
     refreshed_at = now_iso()
